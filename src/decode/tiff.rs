@@ -6,12 +6,13 @@
 //!   tiny JPEG, so a few KB of input can force gigabytes of allocation.
 //! - Tiles much larger than the image (and the memory limit).
 
+use std::io::Cursor;
+
 use image::{DynamicImage, ImageDecoder};
 use tiff::tags::Tag;
 
 use super::{Header, InputFormat};
 use crate::error::{Error, Result};
-use crate::interrupt::{Interrupt, InterruptibleReader};
 use crate::limits::Limits;
 
 fn map_err(err: tiff::TiffError) -> Error {
@@ -24,8 +25,8 @@ fn map_err(err: tiff::TiffError) -> Error {
 /// Old-style (6) and new-style (7) JPEG compression.
 const JPEG_COMPRESSION: [u16; 2] = [6, 7];
 
-fn prescan(input: &[u8], limits: &Limits, interrupt: &Interrupt) -> Result<()> {
-    let mut decoder = tiff::decoder::Decoder::new(InterruptibleReader::new(input, interrupt))
+fn prescan(input: &[u8], limits: &Limits) -> Result<()> {
+    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(input))
         .map_err(map_err)?
         .with_limits(tiff_limits(limits));
     let (width, height) = decoder.dimensions().map_err(map_err)?;
@@ -67,13 +68,11 @@ fn tiff_limits(limits: &Limits) -> tiff::decoder::Limits {
 pub fn decode(
     input: &[u8],
     limits: &Limits,
-    interrupt: &Interrupt,
     pixels: bool,
 ) -> Result<(Header, Option<DynamicImage>)> {
-    prescan(input, limits, interrupt)?;
+    prescan(input, limits)?;
 
-    let mut decoder =
-        image::codecs::tiff::TiffDecoder::new(InterruptibleReader::new(input, interrupt))?;
+    let mut decoder = image::codecs::tiff::TiffDecoder::new(Cursor::new(input))?;
     decoder.set_limits(limits.image_limits())?;
     let (width, height) = decoder.dimensions();
     limits.check_input(width, height)?;

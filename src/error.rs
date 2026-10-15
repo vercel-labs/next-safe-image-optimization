@@ -9,8 +9,6 @@ pub enum Error {
     LimitExceeded(String),
     Decode(String),
     Encode(String),
-    Timeout,
-    Aborted,
     /// A panic was caught. This should never happen, but decoders are fed untrusted input, and an
     /// uncaught panic on a libuv thread would abort the process.
     Internal(String),
@@ -25,8 +23,6 @@ impl Error {
             Error::LimitExceeded(_) => "ERR_LIMIT_EXCEEDED",
             Error::Decode(_) => "ERR_DECODE_FAILED",
             Error::Encode(_) => "ERR_ENCODE_FAILED",
-            Error::Timeout => "ERR_TIMEOUT",
-            Error::Aborted => "ERR_ABORTED",
             Error::Internal(_) => "ERR_INTERNAL",
         }
     }
@@ -39,8 +35,6 @@ impl fmt::Display for Error {
             Error::LimitExceeded(msg) => write!(f, "Limit exceeded: {msg}"),
             Error::Decode(msg) => write!(f, "Failed to decode image: {msg}"),
             Error::Encode(msg) => write!(f, "Failed to encode image: {msg}"),
-            Error::Timeout => write!(f, "Processing timed out"),
-            Error::Aborted => write!(f, "Processing was aborted"),
             Error::Internal(msg) => write!(f, "Internal error: {msg}"),
         }
     }

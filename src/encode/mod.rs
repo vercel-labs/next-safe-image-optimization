@@ -13,7 +13,6 @@ pub use self::jpeg::{JpegSpec, QuantizationTable};
 pub use self::png::PngSpec;
 pub use self::webp::WebpSpec;
 use crate::error::{Error, Result};
-use crate::interrupt::Interrupt;
 use crate::limits::Limits;
 
 #[derive(Clone, Debug)]
@@ -72,19 +71,14 @@ fn bytes_per_pixel(img: &DynamicImage, spec: &OutputSpec) -> u64 {
     }
 }
 
-pub fn encode(
-    img: DynamicImage,
-    spec: &OutputSpec,
-    limits: &Limits,
-    interrupt: &Interrupt,
-) -> Result<Encoded> {
+pub fn encode(img: DynamicImage, spec: &OutputSpec, limits: &Limits) -> Result<Encoded> {
     let (width, height) = (img.width(), img.height());
     let pixels = u64::from(width) * u64::from(height);
     limits.check_alloc(pixels.saturating_mul(bytes_per_pixel(&img, spec)))?;
     let (data, channels) = match spec {
         OutputSpec::Jpeg(spec) => jpeg::encode(img, spec)?,
-        OutputSpec::Png(spec) => png::encode(&img, spec, interrupt)?,
-        OutputSpec::Webp(spec) => webp::encode(img, spec, interrupt)?,
+        OutputSpec::Png(spec) => png::encode(&img, spec)?,
+        OutputSpec::Webp(spec) => webp::encode(img, spec)?,
         OutputSpec::Gif(spec) => gif::encode(img, spec)?,
     };
     Ok(Encoded {

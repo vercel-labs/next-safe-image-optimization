@@ -64,7 +64,6 @@ describe('argument validation', () => {
     ['webp effort', (p) => p.webp({ effort: 7 })],
     ['gif effort', (p) => p.gif({ effort: 0 })],
     ['toFormat avif', (p) => p.toFormat('avif' as never)],
-    ['timeout', (p) => p.timeout({ seconds: -1 })],
   ]
   for (const [name, call] of cases) {
     test(name, async () => {

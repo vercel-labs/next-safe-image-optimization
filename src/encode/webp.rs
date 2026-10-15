@@ -8,7 +8,6 @@ use libwebp_sys as sys;
 
 use super::check_dimensions;
 use crate::error::{Error, Result};
-use crate::interrupt::Interrupt;
 
 #[derive(Clone, Debug)]
 pub struct WebpSpec {
@@ -53,14 +52,7 @@ impl Drop for MemoryWriter {
     }
 }
 
-/// Returning 0 aborts encoding.
-unsafe extern "C" fn progress_hook(_percent: c_int, picture: *const sys::WebPPicture) -> c_int {
-    // SAFETY: `user_data` is set to a `&Interrupt` that outlives `WebPEncode`.
-    let interrupt = unsafe { &*((*picture).user_data as *const Interrupt) };
-    c_int::from(interrupt.check().is_ok())
-}
-
-pub fn encode(img: DynamicImage, spec: &WebpSpec, interrupt: &Interrupt) -> Result<(Vec<u8>, u8)> {
+pub fn encode(img: DynamicImage, spec: &WebpSpec) -> Result<(Vec<u8>, u8)> {
     check_dimensions(&img, sys::WEBP_MAX_DIMENSION, "WebP")?;
     let img = match img {
         DynamicImage::ImageLuma8(_) => DynamicImage::ImageRgb8(img.to_rgb8()),
@@ -140,18 +132,11 @@ pub fn encode(img: DynamicImage, spec: &WebpSpec, interrupt: &Interrupt) -> Resu
     });
     picture.0.writer = Some(sys::WebPMemoryWrite);
     picture.0.custom_ptr = &mut writer.0 as *mut sys::WebPMemoryWriter as *mut c_void;
-    picture.0.progress_hook = Some(progress_hook);
-    picture.0.user_data = interrupt as *const Interrupt as *mut c_void;
 
-    // SAFETY: `config` was validated, `picture` was initialized and imported, and `writer` and
-    // `interrupt` outlive this call.
+    // SAFETY: `config` was validated, `picture` was initialized and imported, and `writer` outlives
+    // this call.
     if unsafe { sys::WebPEncode(&config, &mut picture.0) } == 0 {
-        return Err(match picture.0.error_code {
-            sys::WebPEncodingError::VP8_ENC_ERROR_USER_ABORT => {
-                interrupt.check_after_error(fail("aborted"))
-            }
-            code => fail(&format!("{code:?}")),
-        });
+        return Err(fail(&format!("{:?}", picture.0.error_code)));
     }
     let data = if writer.0.size == 0 {
         Vec::new()

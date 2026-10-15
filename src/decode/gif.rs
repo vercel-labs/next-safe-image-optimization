@@ -7,55 +7,15 @@ use image::DynamicImage;
 
 use super::{Header, InputFormat, alloc, from_raw_u8};
 use crate::error::{Error, Result};
-use crate::interrupt::{Interrupt, InterruptibleReader};
 use crate::limits::Limits;
 
 fn map_err(err: gif::DecodingError) -> Error {
     Error::Decode(err.to_string())
 }
 
-const ROWS_PER_CHECK: usize = 64;
-
-/// Like `Decoder::read_into_buffer`, but checks for interrupts between batches of rows. LZW data can
-/// expand enormously, so checking on input reads alone isn't enough.
-fn read_frame<R: std::io::Read>(
-    decoder: &mut gif::Decoder<R>,
-    buf: &mut [u8],
-    row_len: usize,
-    interlaced: bool,
-    interrupt: &Interrupt,
-) -> Result<()> {
-    let truncated = || Error::Decode("GIF image data is truncated".into());
-    if interlaced {
-        let height = buf.len() / row_len;
-        let mut rows = 0;
-        for (start, step) in [(0, 8), (4, 8), (2, 4), (1, 2)] {
-            for y in (start..height).step_by(step) {
-                if rows % ROWS_PER_CHECK == 0 {
-                    interrupt.check()?;
-                }
-                rows += 1;
-                let row = &mut buf[y * row_len..(y + 1) * row_len];
-                if !decoder.fill_buffer(row).map_err(map_err)? {
-                    return Err(truncated());
-                }
-            }
-        }
-    } else {
-        for rows in buf.chunks_mut(row_len * ROWS_PER_CHECK) {
-            interrupt.check()?;
-            if !decoder.fill_buffer(rows).map_err(map_err)? {
-                return Err(truncated());
-            }
-        }
-    }
-    Ok(())
-}
-
 pub fn decode(
     input: &[u8],
     limits: &Limits,
-    interrupt: &Interrupt,
     pixels: bool,
 ) -> Result<(Header, Option<DynamicImage>)> {
     let mut options = gif::DecodeOptions::new();
@@ -64,9 +24,7 @@ pub fn decode(
     options.set_memory_limit(gif::MemoryLimit::Bytes(
         NonZeroU64::new(limits.memory.max(1)).expect("non-zero"),
     ));
-    let mut decoder = options
-        .read_info(InterruptibleReader::new(input, interrupt))
-        .map_err(map_err)?;
+    let mut decoder = options.read_info(input).map_err(map_err)?;
     let (width, height) = (u32::from(decoder.width()), u32::from(decoder.height()));
     limits.check_input(width, height)?;
 
@@ -76,7 +34,6 @@ pub fn decode(
         .ok_or_else(|| Error::Decode("GIF has no frames".into()))?;
     let (left, top) = (usize::from(frame.left), usize::from(frame.top));
     let (frame_width, frame_height) = (usize::from(frame.width), usize::from(frame.height));
-    let interlaced = frame.interlaced;
     let covers_screen = (frame_width, frame_height) == (width as usize, height as usize);
     // Pixels outside of the first frame are transparent.
     let opaque = frame.transparent.is_none() && covers_screen;
@@ -94,13 +51,7 @@ pub fn decode(
     }
 
     let mut frame_buf = alloc(limits, decoder.buffer_size())?;
-    read_frame(
-        &mut decoder,
-        &mut frame_buf,
-        frame_width * 4,
-        interlaced,
-        interrupt,
-    )?;
+    decoder.read_into_buffer(&mut frame_buf).map_err(map_err)?;
 
     let canvas = if covers_screen {
         frame_buf

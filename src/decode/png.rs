@@ -1,12 +1,13 @@
 //! PNG via the png crate directly. `image` uses the full allocation budget as png's metadata limit
 //! (allowing a ~0.5 MB iCCP chunk to inflate to 512 MiB) and forces text chunk decoding.
 
+use std::io::Cursor;
+
 use image::DynamicImage;
 use png::{ColorType, Transformations};
 
 use super::{Header, InputFormat, alloc, from_raw_u8, orientation_from_exif};
 use crate::error::{Error, Result};
-use crate::interrupt::{Interrupt, InterruptibleReader};
 use crate::limits::Limits;
 
 fn map_err(err: png::DecodingError) -> Error {
@@ -21,14 +22,12 @@ fn map_err(err: png::DecodingError) -> Error {
 pub fn decode(
     input: &[u8],
     limits: &Limits,
-    interrupt: &Interrupt,
     pixels: bool,
 ) -> Result<(Header, Option<DynamicImage>)> {
     let mut options = png::DecodeOptions::default();
     // We don't use text chunks, and zTXt/iTXt are compressed.
     options.set_ignore_text_chunk(true);
-    let mut decoder =
-        png::Decoder::new_with_options(InterruptibleReader::new(input, interrupt), options);
+    let mut decoder = png::Decoder::new_with_options(Cursor::new(input), options);
     // This bounds buffered ancillary chunks (including the inflated iCCP profile), not image data.
     decoder.set_limits(png::Limits {
         bytes: limits.metadata_bytes() as usize,

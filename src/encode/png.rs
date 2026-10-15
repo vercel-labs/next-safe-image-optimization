@@ -2,7 +2,6 @@ use image::DynamicImage;
 use png::{BitDepth, ColorType, DeflateCompression, Encoder, Filter};
 
 use crate::error::{Error, Result};
-use crate::interrupt::Interrupt;
 
 #[derive(Clone, Debug)]
 pub struct PngSpec {
@@ -23,14 +22,11 @@ impl Default for PngSpec {
     }
 }
 
-/// Rows written between interrupt checks.
-const ROWS_PER_CHECK: usize = 64;
-
 fn map_err(err: impl std::fmt::Display) -> Error {
     Error::Encode(err.to_string())
 }
 
-pub fn encode(img: &DynamicImage, spec: &PngSpec, interrupt: &Interrupt) -> Result<(Vec<u8>, u8)> {
+pub fn encode(img: &DynamicImage, spec: &PngSpec) -> Result<(Vec<u8>, u8)> {
     let (color_type, channels) = match img {
         DynamicImage::ImageLuma8(_) => (ColorType::Grayscale, 1),
         DynamicImage::ImageLumaA8(_) => (ColorType::GrayscaleAlpha, 2),
@@ -54,11 +50,7 @@ pub fn encode(img: &DynamicImage, spec: &PngSpec, interrupt: &Interrupt) -> Resu
     let mut writer = encoder.write_header().map_err(map_err)?;
     {
         let mut stream = writer.stream_writer().map_err(map_err)?;
-        let row_len = img.width() as usize * channels as usize;
-        for rows in img.as_bytes().chunks(row_len * ROWS_PER_CHECK) {
-            interrupt.check()?;
-            std::io::Write::write_all(&mut stream, rows).map_err(map_err)?;
-        }
+        std::io::Write::write_all(&mut stream, img.as_bytes()).map_err(map_err)?;
         stream.finish().map_err(map_err)?;
     }
     writer.finish().map_err(map_err)?;

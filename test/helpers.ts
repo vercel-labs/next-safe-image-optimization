@@ -32,20 +32,6 @@ export function pattern(width: number, height: number, channels: 3 | 4 = 3): Raw
   return { data, width, height, channels }
 }
 
-/**
- * `pattern` with deterministic noise, so it compresses like a photo. Highly compressible images
- * are decoded with few input reads, so they're interrupted less precisely.
- */
-export function noisy(width: number, height: number): RawImage {
-  const img = pattern(width, height)
-  let seed = 1
-  for (let i = 0; i < img.data.length; i++) {
-    seed = (Math.imul(seed, 1103515245) + 12345) >>> 0
-    img.data[i] = Math.max(0, Math.min(255, img.data[i] + ((seed >>> 24) % 32) - 16))
-  }
-  return img
-}
-
 export function fromRaw(raw: RawImage) {
   return sharp(raw.data, {
     raw: { width: raw.width, height: raw.height, channels: raw.channels as 3 | 4 },

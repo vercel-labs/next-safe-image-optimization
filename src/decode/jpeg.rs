@@ -3,12 +3,12 @@
 
 use image::DynamicImage;
 use zune_jpeg::JpegDecoder;
+use zune_jpeg::zune_core::bytestream::ZCursor;
 use zune_jpeg::zune_core::colorspace::ColorSpace;
 use zune_jpeg::zune_core::options::DecoderOptions;
 
 use super::{Header, InputFormat, alloc, from_raw_u8, orientation_from_exif};
 use crate::error::{Error, Result};
-use crate::interrupt::{Interrupt, InterruptibleReader};
 use crate::limits::Limits;
 
 /// Every progressive scan is a pass over the whole image, even if the scan contains no data, so a
@@ -53,7 +53,6 @@ fn map_err(err: zune_jpeg::errors::DecodeErrors) -> Error {
 pub fn decode(
     input: &[u8],
     limits: &Limits,
-    interrupt: &Interrupt,
     pixels: bool,
 ) -> Result<(Header, Option<DynamicImage>)> {
     let scan = prescan(input)?;
@@ -66,8 +65,7 @@ pub fn decode(
         .set_max_height(max_dim)
         .set_strict_mode(false)
         .jpeg_set_max_scans(MAX_SCANS);
-    let mut decoder =
-        JpegDecoder::new_with_options(InterruptibleReader::new(input, interrupt), options);
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(input), options);
     decoder.decode_headers().map_err(map_err)?;
     let info = decoder
         .info()

@@ -7,7 +7,6 @@ mod color;
 mod decode;
 mod encode;
 mod error;
-mod interrupt;
 mod limits;
 mod ops;
 mod orientation;

@@ -5,7 +5,6 @@ use fast_image_resize::{self as fir, PixelType};
 use image::{DynamicImage, GrayAlphaImage, GrayImage, RgbImage, RgbaImage};
 
 use crate::error::{Error, Result};
-use crate::interrupt::Interrupt;
 use crate::limits::Limits;
 use crate::orientation::Transform;
 
@@ -387,12 +386,7 @@ fn gaussian_kernel(sigma: f64) -> Vec<u32> {
 /// A Gaussian blur. For large `sigma`, approximates it with three box blurs so that the cost is
 /// independent of `sigma`. With `sigma == None`, performs a single 3x3 box blur, like sharp's
 /// `blur()` without arguments.
-pub fn blur(
-    img: DynamicImage,
-    sigma: Option<f64>,
-    limits: &Limits,
-    interrupt: &Interrupt,
-) -> Result<DynamicImage> {
+pub fn blur(img: DynamicImage, sigma: Option<f64>, limits: &Limits) -> Result<DynamicImage> {
     let passes: Vec<BlurPass> = match sigma {
         None => vec![BlurPass::Box { radius: 1 }],
         Some(sigma) if sigma < MIN_BOX_SIGMA => vec![BlurPass::Kernel(gaussian_kernel(sigma))],
@@ -428,7 +422,6 @@ pub fn blur(
     limits.check_alloc(buf.len() as u64 + (width * channels * 4) as u64)?;
     let mut tmp = vec![0u8; buf.len()];
     for pass in passes {
-        interrupt.check()?;
         match pass {
             BlurPass::Box { radius } => {
                 box_blur_horizontal(&buf, &mut tmp, width, channels, radius);
@@ -600,7 +593,7 @@ mod tests {
             image::Luma([if (x, y) == (2, 2) { 255 } else { 0 }])
         })
         .into();
-        let out = blur(img, Some(0.5), &Limits::default(), &Interrupt::default()).unwrap();
+        let out = blur(img, Some(0.5), &Limits::default()).unwrap();
         let center = out.as_bytes()[12];
         assert!(center < 255 && center > 100, "{center}");
         assert!(out.as_bytes()[11] > 0);
@@ -609,20 +602,14 @@ mod tests {
     #[test]
     fn blur_preserves_constant_image() {
         let img: DynamicImage = RgbImage::from_pixel(17, 9, image::Rgb([10, 200, 30])).into();
-        let out = blur(
-            img.clone(),
-            Some(4.0),
-            &Limits::default(),
-            &Interrupt::default(),
-        )
-        .unwrap();
+        let out = blur(img.clone(), Some(4.0), &Limits::default()).unwrap();
         assert_eq!(out.as_bytes(), img.as_bytes());
     }
 
     #[test]
     fn blur_large_radius() {
         let img: DynamicImage = GrayImage::from_fn(5, 3, |x, _| image::Luma([x as u8 * 50])).into();
-        let out = blur(img, Some(1000.0), &Limits::default(), &Interrupt::default()).unwrap();
+        let out = blur(img, Some(1000.0), &Limits::default()).unwrap();
         assert_eq!(out.width(), 5);
     }
 

@@ -2,13 +2,12 @@
 
 A safer image optimization library for Node.js, intended to replace [sharp](https://sharp.pixelplumbing.com/) in Next.js's image optimizer. The API is similar to sharp's, but much smaller.
 
-sharp (libvips) decodes untrusted images with C libraries. This library decodes with memory-safe Rust decoders from the [image-rs](https://github.com/image-rs) ecosystem, configured with explicit memory and CPU limits.
+sharp (libvips) decodes untrusted images with C libraries. This library decodes with memory-safe Rust decoders from the [image-rs](https://github.com/image-rs) ecosystem, configured with explicit memory limits.
 
 ```js
 const { blunt } = require('blunt-image-optimization')
 
 const output = await blunt(input, { limitInputPixels: 268402689 })
-  .timeout({ seconds: 7 })
   .rotate() // auto-orient using EXIF
   .resize(640, null, { withoutEnlargement: true })
   .webp({ quality: 75 })
@@ -21,7 +20,7 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 - **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp).
 - **Operations:** auto-orient, rotate (multiples of 90°), resize (all of sharp's `fit` modes, gravity, kernels), blur.
 - `metadata()` reads the header without decoding pixels.
-- `toBuffer({ signal })` accepts an `AbortSignal`. Errors are `BluntError`s with a stable `code`.
+- Errors are `BluntError`s with a stable `code`.
 - TypeScript types are included.
 
 ## Safety model
@@ -30,7 +29,7 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 | --- | --- |
 | Memory-safe decoders | `zune-jpeg`, `png`, `image-webp`, `gif`, `tiff` (via `image`). |
 | Memory limits | `limitInputPixels` (default 268402689, like sharp), and `limitMemory` (default 512 MiB), which bounds the estimated memory of each stage (decode, resize, blur, encode) and is passed to decoders as their allocation budget. Decoder metadata buffers (ICC, EXIF) have a separate, smaller cap. Frames must match (or fit inside) the declared canvas. |
-| CPU limits | `timeout()` and `AbortSignal` are checked while decoding (except lossy WebP), between stages, and while encoding PNG and WebP. Decoders are checked as they consume input, so highly compressible images can overrun the deadline, but their work is still bounded by the pixel limit. JPEG and GIF encoding can't be interrupted, but are bounded by the output size. Format-specific bounds: at most 32 progressive JPEG scans, and at most 4096 JPEG APP1 segments. JPEG-compressed TIFFs are rejected. Blur cost is bounded regardless of sigma. |
+| CPU limits | There are no timeouts, and processing can't be cancelled. Work is bounded by the pixel and memory limits, plus format-specific bounds: at most 32 progressive JPEG scans, and at most 4096 JPEG APP1 segments. JPEG-compressed TIFFs are rejected. Blur cost is bounded regardless of sigma. |
 | Crash safety | Panics are caught and reported as `ERR_INTERNAL`. The input is copied before processing, so JS can't mutate it mid-decode. |
 | Encoders | Not sandboxed: they only see pixels we produced. Lossy WebP uses libwebp (C), because `image-webp` only encodes lossless. |
 | wasm | The `wasm32-wasip1-threads` build has no WASI filesystem or environment access. This is defense in depth, not a sandbox: a compromised module can still reach JS globals through napi. |
@@ -46,7 +45,7 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 - JPEG uses `jpeg-encoder`, not mozjpeg. `mozjpeg: true` approximates mozjpeg's settings, but without trellis quantization, so files are somewhat larger.
 - `blur(sigma)` uses a Gaussian kernel for σ < 3, and a three-pass box blur above that.
 - CMYK JPEGs are converted to RGB naively, ignoring their ICC profile.
-- `timeout()` accepts fractional seconds and only counts processing time, not time spent queued.
+- No `timeout()`.
 - `limitInputPixels` also applies to `metadata()`.
 
 ## Development
@@ -73,5 +72,4 @@ Processing runs on the libuv thread pool, so concurrency is bounded by `UV_THREA
 - wasm2c-sandboxed decoders for formats without a trustworthy Rust implementation (SVG, HEIF/AVIF).
 - A per-thread allocation limit (via the global allocator) to bound decoder memory that isn't covered by decoder options, such as lossless WebP's Huffman tables.
 - seccomp-based process isolation on Linux.
-- Cancellation tokens for decoders that support them (e.g. librsvg).
 - AVIF output, PNG palette quantization, and ICC-aware CMYK conversion.

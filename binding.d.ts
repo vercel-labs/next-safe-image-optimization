@@ -9,20 +9,11 @@
  */
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
-/**
- * Cooperative cancellation for in-flight work. The JS wrapper calls `cancel()` from an
- * `AbortSignal`'s `abort` event.
- */
-export declare class CancelToken {
-  constructor()
-  cancel(): void
-}
-
 export type Fit = 'cover' | 'contain' | 'fill' | 'inside' | 'outside'
 
 export type Kernel = 'nearest' | 'linear' | 'cubic' | 'mitchell' | 'lanczos2' | 'lanczos3'
 
-export declare function metadata(input: Uint8Array, limits?: NativeLimitOptions | undefined | null, token?: CancelToken | undefined | null): Promise<NativeMetadataResult>
+export declare function metadata(input: Uint8Array, limits?: NativeLimitOptions | undefined | null): Promise<NativeMetadataResult>
 
 export interface NativeBlurOptions {
   /** Omit for a mild 3x3 box blur. */
@@ -61,8 +52,6 @@ export interface NativeLimitOptions {
   /** 0 disables the limit. */
   limitInputPixels?: number
   limitMemory?: number
-  /** 0 disables the timeout. */
-  timeoutMs?: number
 }
 
 export interface NativeMetadata {
@@ -146,4 +135,4 @@ export type OutputFormat = 'jpeg' | 'png' | 'webp' | 'gif'
  * `input` is copied before this returns, so the caller may reuse the buffer immediately. (Reading
  * from memory that JS can concurrently mutate would be a data race.)
  */
-export declare function transform(input: Uint8Array, options: NativeTransformOptions, token?: CancelToken | undefined | null): Promise<NativeTransformResult>
+export declare function transform(input: Uint8Array, options: NativeTransformOptions): Promise<NativeTransformResult>

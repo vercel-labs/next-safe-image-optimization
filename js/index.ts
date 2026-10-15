@@ -1,4 +1,4 @@
-import { CancelToken, metadata as nativeMetadata, transform as nativeTransform } from '../binding.js'
+import { metadata as nativeMetadata, transform as nativeTransform } from '../binding.js'
 import type {
   NativeError,
   NativeLimitOptions,
@@ -124,11 +124,6 @@ export interface GifOptions {
 
 export type FormatOptions = JpegOptions | PngOptions | WebpOptions | GifOptions
 
-export interface TimeoutOptions {
-  /** Processing time (not including time spent queued) after which to fail. 0 disables. */
-  seconds: number
-}
-
 export interface OutputInfo {
   format: OutputFormat
   width: number
@@ -152,12 +147,7 @@ export interface Metadata {
   autoOrient: { width: number; height: number }
 }
 
-export interface ProcessOptions {
-  /** Aborting rejects with `signal.reason` and stops processing at the next checkpoint. */
-  signal?: AbortSignal
-}
-
-export interface ToBufferOptions extends ProcessOptions {
+export interface ToBufferOptions {
   resolveWithObject?: boolean
 }
 
@@ -166,8 +156,6 @@ export type ErrorCode =
   | 'ERR_LIMIT_EXCEEDED'
   | 'ERR_DECODE_FAILED'
   | 'ERR_ENCODE_FAILED'
-  | 'ERR_TIMEOUT'
-  | 'ERR_ABORTED'
   | 'ERR_INTERNAL'
 
 /** Errors from processing an image. Invalid arguments throw a `TypeError` instead. */
@@ -259,23 +247,8 @@ function toUint8Array(input: Input): Uint8Array {
   throw invalid('input', 'Buffer, Uint8Array, ArrayBuffer, or ArrayBufferView', input)
 }
 
-function toError(error: NativeError, signal: AbortSignal | undefined): unknown {
-  if (error.code === 'ERR_ABORTED' && signal?.aborted) {
-    return signal.reason
-  }
+function toError(error: NativeError): BluntError {
   return new BluntError(error.code as ErrorCode, error.message)
-}
-
-async function withCancelToken<T>(signal: AbortSignal | undefined, run: (token: CancelToken) => Promise<T>) {
-  signal?.throwIfAborted()
-  const token = new CancelToken()
-  const onAbort = () => token.cancel()
-  signal?.addEventListener('abort', onAbort, { once: true })
-  try {
-    return await run(token)
-  } finally {
-    signal?.removeEventListener('abort', onAbort)
-  }
 }
 
 /**
@@ -473,17 +446,10 @@ export class Pipeline {
     }
   }
 
-  timeout({ seconds }: TimeoutOptions): this {
-    // Round up, because 0 disables the timeout.
-    this.#limits.timeoutMs = Math.ceil(checkNumber('seconds', seconds, 0, 3600) * 1000)
-    return this
-  }
-
   /** Processes the image. Without an explicit output format, uses the input format. */
   toBuffer(options?: ToBufferOptions & { resolveWithObject?: false }): Promise<Buffer>
   toBuffer(options: ToBufferOptions & { resolveWithObject: true }): Promise<{ data: Buffer; info: OutputInfo }>
   async toBuffer(options: ToBufferOptions = {}): Promise<Buffer | { data: Buffer; info: OutputInfo }> {
-    const { signal, resolveWithObject } = options
     const nativeOptions: NativeTransformOptions = {
       limits: this.#limits,
       autoOrient: this.#autoOrient,
@@ -492,21 +458,20 @@ export class Pipeline {
       blur: this.#blur,
       ...this.#output,
     }
-    const result = await withCancelToken(signal, (token) => nativeTransform(this.#input, nativeOptions, token))
+    const result = await nativeTransform(this.#input, nativeOptions)
     if (result.error) {
-      throw toError(result.error, signal)
+      throw toError(result.error)
     }
     const data = result.data!
     const info = result.info as OutputInfo
-    return resolveWithObject ? { data, info } : data
+    return options.resolveWithObject ? { data, info } : data
   }
 
   /** Reads the image header without decoding pixels. Ignores all operations. */
-  async metadata(options: ProcessOptions = {}): Promise<Metadata> {
-    const { signal } = options
-    const result = await withCancelToken(signal, (token) => nativeMetadata(this.#input, this.#limits, token))
+  async metadata(): Promise<Metadata> {
+    const result = await nativeMetadata(this.#input, this.#limits)
     if (result.error) {
-      throw toError(result.error, signal)
+      throw toError(result.error)
     }
     const metadata = result.metadata!
     const swap = metadata.orientation >= 5

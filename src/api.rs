@@ -3,16 +3,12 @@
 //! security boundary.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use crate::encode::{GifSpec, JpegSpec, OutputSpec, PngSpec, QuantizationTable, WebpSpec};
 use crate::error::Error;
-use crate::interrupt::Interrupt;
 use crate::limits::Limits;
 use crate::ops::{self, ResizeSpec};
 use crate::pipeline::{self, Pipeline};
@@ -112,8 +108,6 @@ pub struct NativeLimitOptions {
     /// 0 disables the limit.
     pub limit_input_pixels: Option<f64>,
     pub limit_memory: Option<f64>,
-    /// 0 disables the timeout.
-    pub timeout_ms: Option<f64>,
 }
 
 #[napi(object)]
@@ -174,29 +168,6 @@ pub struct NativeMetadataResult {
     pub error: Option<NativeError>,
 }
 
-/// Cooperative cancellation for in-flight work. The JS wrapper calls `cancel()` from an
-/// `AbortSignal`'s `abort` event.
-#[napi]
-pub struct CancelToken {
-    cancelled: Arc<AtomicBool>,
-}
-
-#[napi]
-impl CancelToken {
-    #[allow(clippy::new_without_default)]
-    #[napi(constructor)]
-    pub fn new() -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    #[napi]
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
-    }
-}
-
 fn invalid(message: String) -> napi::Error {
     napi::Error::new(Status::InvalidArg, message)
 }
@@ -221,9 +192,8 @@ fn number(name: &str, value: f64, min: f64, max: f64) -> napi::Result<f64> {
 
 const MAX_SAFE_INTEGER: f64 = 9007199254740991.0;
 
-fn parse_limits(options: Option<NativeLimitOptions>) -> napi::Result<(Limits, Option<Duration>)> {
+fn parse_limits(options: Option<NativeLimitOptions>) -> napi::Result<Limits> {
     let mut limits = Limits::default();
-    let mut timeout = None;
     if let Some(options) = options {
         if let Some(pixels) = options.limit_input_pixels {
             let pixels = int("limitInputPixels", pixels, 0.0, MAX_SAFE_INTEGER)? as u64;
@@ -232,12 +202,8 @@ fn parse_limits(options: Option<NativeLimitOptions>) -> napi::Result<(Limits, Op
         if let Some(memory) = options.limit_memory {
             limits.memory = int("limitMemory", memory, 1.0, MAX_SAFE_INTEGER)? as u64;
         }
-        if let Some(ms) = options.timeout_ms {
-            let ms = int("timeout", ms, 0.0, MAX_SAFE_INTEGER)? as u64;
-            timeout = (ms > 0).then(|| Duration::from_millis(ms));
-        }
     }
-    Ok((limits, timeout))
+    Ok(limits)
 }
 
 fn parse_resize(options: NativeResizeOptions) -> napi::Result<ResizeSpec> {
@@ -350,7 +316,7 @@ fn parse_output(options: &mut NativeTransformOptions) -> napi::Result<Option<Out
 }
 
 fn parse_pipeline(mut options: NativeTransformOptions) -> napi::Result<Pipeline> {
-    let (limits, timeout) = parse_limits(options.limits.take())?;
+    let limits = parse_limits(options.limits.take())?;
     let rotate = match options.rotate {
         None => 0,
         Some(angle) => {
@@ -371,7 +337,6 @@ fn parse_pipeline(mut options: NativeTransformOptions) -> napi::Result<Pipeline>
     let output = parse_output(&mut options)?;
     Ok(Pipeline {
         limits,
-        timeout,
         auto_orient: options.auto_orient.unwrap_or(false),
         rotate,
         resize: options.resize.take().map(parse_resize).transpose()?,
@@ -405,7 +370,6 @@ fn catch_panics<T>(f: impl FnOnce() -> crate::error::Result<T>) -> crate::error:
 pub struct TransformTask {
     input: Vec<u8>,
     pipeline: Pipeline,
-    cancelled: Option<Arc<AtomicBool>>,
 }
 
 impl Task for TransformTask {
@@ -414,10 +378,7 @@ impl Task for TransformTask {
 
     fn compute(&mut self) -> napi::Result<Self::Output> {
         let input = std::mem::take(&mut self.input);
-        Ok(catch_panics(|| {
-            let interrupt = Interrupt::new(self.cancelled.clone(), self.pipeline.timeout);
-            pipeline::run(input, &self.pipeline, &interrupt)
-        }))
+        Ok(catch_panics(|| pipeline::run(input, &self.pipeline)))
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> napi::Result<Self::JsValue> {
@@ -451,20 +412,16 @@ impl Task for TransformTask {
 pub fn transform(
     input: &[u8],
     options: NativeTransformOptions,
-    token: Option<&CancelToken>,
 ) -> napi::Result<AsyncTask<TransformTask>> {
     Ok(AsyncTask::new(TransformTask {
         input: input.to_vec(),
         pipeline: parse_pipeline(options)?,
-        cancelled: token.map(|t| t.cancelled.clone()),
     }))
 }
 
 pub struct MetadataTask {
     input: Vec<u8>,
     limits: Limits,
-    timeout: Option<Duration>,
-    cancelled: Option<Arc<AtomicBool>>,
 }
 
 impl Task for MetadataTask {
@@ -473,8 +430,7 @@ impl Task for MetadataTask {
 
     fn compute(&mut self) -> napi::Result<Self::Output> {
         Ok(catch_panics(|| {
-            let interrupt = Interrupt::new(self.cancelled.clone(), self.timeout);
-            pipeline::metadata(&self.input, &self.limits, &interrupt)
+            pipeline::metadata(&self.input, &self.limits)
         }))
     }
 
@@ -503,13 +459,9 @@ impl Task for MetadataTask {
 pub fn metadata(
     input: &[u8],
     limits: Option<NativeLimitOptions>,
-    token: Option<&CancelToken>,
 ) -> napi::Result<AsyncTask<MetadataTask>> {
-    let (limits, timeout) = parse_limits(limits)?;
     Ok(AsyncTask::new(MetadataTask {
         input: input.to_vec(),
-        limits,
-        timeout,
-        cancelled: token.map(|t| t.cancelled.clone()),
+        limits: parse_limits(limits)?,
     }))
 }

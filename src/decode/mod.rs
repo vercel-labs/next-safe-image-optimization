@@ -11,7 +11,6 @@ use image::DynamicImage;
 use image::metadata::Orientation;
 
 use crate::error::{Error, Result};
-use crate::interrupt::Interrupt;
 use crate::limits::Limits;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,31 +78,24 @@ pub fn detect(input: &[u8]) -> Result<InputFormat> {
     }
 }
 
-pub fn header(input: &[u8], limits: &Limits, interrupt: &Interrupt) -> Result<Header> {
-    Ok(run(input, limits, interrupt, false)?.0)
+pub fn header(input: &[u8], limits: &Limits) -> Result<Header> {
+    Ok(run(input, limits, false)?.0)
 }
 
-pub fn decode(input: &[u8], limits: &Limits, interrupt: &Interrupt) -> Result<Decoded> {
-    let (header, image) = run(input, limits, interrupt, true)?;
+pub fn decode(input: &[u8], limits: &Limits) -> Result<Decoded> {
+    let (header, image) = run(input, limits, true)?;
     let image = normalize(image.expect("pixels were requested"));
     Ok(Decoded { header, image })
 }
 
-fn run(
-    input: &[u8],
-    limits: &Limits,
-    interrupt: &Interrupt,
-    pixels: bool,
-) -> Result<(Header, Option<DynamicImage>)> {
-    let result = match detect(input)? {
-        InputFormat::Jpeg => jpeg::decode(input, limits, interrupt, pixels),
-        InputFormat::Png => png::decode(input, limits, interrupt, pixels),
-        InputFormat::Webp => webp::decode(input, limits, interrupt, pixels),
-        InputFormat::Gif => gif::decode(input, limits, interrupt, pixels),
-        InputFormat::Tiff => tiff::decode(input, limits, interrupt, pixels),
-    };
-    // Decoders report our interrupt as a generic I/O error.
-    result.map_err(|err| interrupt.check_after_error(err))
+fn run(input: &[u8], limits: &Limits, pixels: bool) -> Result<(Header, Option<DynamicImage>)> {
+    match detect(input)? {
+        InputFormat::Jpeg => jpeg::decode(input, limits, pixels),
+        InputFormat::Png => png::decode(input, limits, pixels),
+        InputFormat::Webp => webp::decode(input, limits, pixels),
+        InputFormat::Gif => gif::decode(input, limits, pixels),
+        InputFormat::Tiff => tiff::decode(input, limits, pixels),
+    }
 }
 
 /// Converts to 8 bits per channel. Nothing downstream needs more precision for web output, and it

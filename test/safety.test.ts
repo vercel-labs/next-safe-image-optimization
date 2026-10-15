@@ -5,7 +5,7 @@ import { crc32, deflateSync } from 'node:zlib'
 import sharp from 'sharp'
 
 import { BluntError, blunt } from '../dist/index.js'
-import { assertRejectsWithCode, fromRaw, noisy, pattern } from './helpers.ts'
+import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
 function pngChunk(type: string, data: Buffer): Buffer {
   const length = Buffer.alloc(4)
@@ -233,68 +233,6 @@ describe('malformed input never crashes or panics', () => {
       }
     })
   }
-})
-
-describe('timeouts and cancellation', () => {
-  const large = () => fromRaw(pattern(4000, 4000)).png({ compressionLevel: 1 }).toBuffer()
-
-  test('timeout', async () => {
-    const input = await large()
-    await assertRejectsWithCode(blunt(input).timeout({ seconds: 0.001 }).blur(20).toBuffer(), 'ERR_TIMEOUT')
-  })
-
-  // Lossy WebP is missing: image-webp reads the whole VP8 chunk before decoding it.
-  const photo = noisy(2000, 2000)
-  const decoders = {
-    'baseline jpeg': () => fromRaw(photo).jpeg().toBuffer(),
-    // zune-jpeg still runs its final IDCT pass after an error, so this is less precise.
-    'progressive jpeg': () => fromRaw(photo).jpeg({ progressive: true }).toBuffer(),
-    png: () => fromRaw(photo).png({ compressionLevel: 1 }).toBuffer(),
-    'lossless webp': () => fromRaw(photo).webp({ lossless: true, effort: 0 }).toBuffer(),
-    gif: () => fromRaw(photo).gif({ effort: 1 }).toBuffer(),
-    tiff: () => fromRaw(photo).tiff({ compression: 'lzw' }).toBuffer(),
-  }
-  for (const [name, make] of Object.entries(decoders)) {
-    test(`timeout interrupts ${name} decoding`, async () => {
-      const input = await make()
-      // Resize to a tiny output, so that decoding dominates.
-      const pipeline = () => blunt(input).resize(8).png()
-      let start = performance.now()
-      await pipeline().toBuffer()
-      const full = performance.now() - start
-      start = performance.now()
-      await assertRejectsWithCode(pipeline().timeout({ seconds: 0.001 }).toBuffer(), 'ERR_TIMEOUT')
-      const interrupted = performance.now() - start
-      assert.ok(interrupted < full / 2, `interrupted after ${interrupted}ms, full run took ${full}ms`)
-    })
-  }
-
-  test('already aborted signal', async () => {
-    const input = await fromRaw(pattern(8, 8)).png().toBuffer()
-    const reason = new Error('stop')
-    await assert.rejects(blunt(input).toBuffer({ signal: AbortSignal.abort(reason) }), (error) => error === reason)
-  })
-
-  test('aborting in-flight work stops it early', async () => {
-    const input = await large()
-    const pipeline = () => blunt(input).blur(20).webp({ effort: 6 })
-    const start = performance.now()
-    await pipeline().toBuffer()
-    const duration = performance.now() - start
-
-    const controller = new AbortController()
-    const abortedStart = performance.now()
-    const promise = pipeline().toBuffer({ signal: controller.signal })
-    setTimeout(() => controller.abort(), duration / 10)
-    await assert.rejects(promise, (error: Error) => error.name === 'AbortError')
-    const abortedDuration = performance.now() - abortedStart
-    assert.ok(abortedDuration < duration * 0.75, `aborted after ${abortedDuration}ms, full run took ${duration}ms`)
-  })
-
-  test('a signal that never aborts has no effect', async () => {
-    const input = await fromRaw(pattern(8, 8)).png().toBuffer()
-    await blunt(input).toBuffer({ signal: new AbortController().signal })
-  })
 })
 
 describe('concurrency', () => {

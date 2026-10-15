@@ -1,0 +1,337 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DEBUG: napi:*
+  CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: always
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+  MACOSX_DEPLOYMENT_TARGET: '10.13'
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      # Uses the version and components from rust-toolchain.toml.
+      - run: rustup toolchain install
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: lint-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: pnpm build:js
+      - run: pnpm typecheck
+
+  build:
+    name: Build ${{ matrix.settings.target }}
+    runs-on: ${{ matrix.settings.host }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-latest
+            target: aarch64-apple-darwin
+          - host: macos-latest
+            target: x86_64-apple-darwin
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+          - host: windows-latest
+            target: aarch64-pc-windows-msvc
+          # Linux targets use cargo-zigbuild. For gnu targets, zig 0.14 defaults to glibc 2.28, the
+          # same as official Node.js binaries (zig 0.15 defaults to 2.31, and napi can't pass
+          # cargo-zigbuild a `.2.28` target suffix). napi's `--use-napi-cross` toolchain is GCC 4.8,
+          # which is too old for mimalloc.
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            flags: -x
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            flags: -x
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            flags: -x
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            flags: -x
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: corepack enable
+      - name: Install Rust
+        shell: bash
+        env:
+          TARGET: ${{ matrix.settings.target }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: build-${{ matrix.settings.target }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Install zig and cargo-zigbuild
+        if: ${{ matrix.settings.flags == '-x' }}
+        env:
+          ZIG_VERSION: 0.14.1
+          ZIG_SHA256: 24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c
+          CARGO_ZIGBUILD_VERSION: 0.23.4
+          CARGO_ZIGBUILD_SHA256: 9e3cf73485edbd45905c8aadbc0fdf869c7ddc3848f0c898229f2680db52e44b
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/zig"
+          mkdir -p "$dir/bin"
+          curl --retry 3 -fsSL -o "$dir/zig.tar.xz" \
+            "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz"
+          echo "$ZIG_SHA256  $dir/zig.tar.xz" | sha256sum -c -
+          tar -xJf "$dir/zig.tar.xz" -C "$dir" --strip-components=1
+          curl --retry 3 -fsSL -o "$dir/cargo-zigbuild.tar.xz" \
+            "https://github.com/rust-cross/cargo-zigbuild/releases/download/v$CARGO_ZIGBUILD_VERSION/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz"
+          echo "$CARGO_ZIGBUILD_SHA256  $dir/cargo-zigbuild.tar.xz" | sha256sum -c -
+          tar -xJf "$dir/cargo-zigbuild.tar.xz" -C "$dir/bin" --strip-components=1
+          chmod +x "$dir/bin/cargo-zigbuild"
+          echo "$dir" >> "$GITHUB_PATH"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+      - run: pnpm install --frozen-lockfile
+      - name: Build
+        shell: bash
+        env:
+          TARGET: ${{ matrix.settings.target }}
+          FLAGS: ${{ matrix.settings.flags }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086 # FLAGS is intentionally word-split.
+          pnpm build:native --release --target "$TARGET" $FLAGS
+      - name: Check that generated bindings are up to date
+        shell: bash
+        run: git diff --exit-code -- binding.js binding.d.ts
+      - name: Check glibc compatibility
+        if: ${{ endsWith(matrix.settings.target, '-gnu') }}
+        run: |
+          set -euo pipefail
+          newest=$(objdump -T blunt-image-optimization.*.node | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "Requires $newest"
+          if [ "$(printf '%s\nGLIBC_2.28\n' "$newest" | sort -V | tail -1)" != "GLIBC_2.28" ]; then
+            echo "::error::Requires $newest, but must support glibc 2.28"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: blunt-image-optimization.*.node
+          if-no-files-found: error
+
+  build-wasm:
+    name: Build wasm32-wasip1-threads
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      WASI_SDK_VERSION: '34'
+      WASI_SDK_SHA256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: corepack enable
+      - name: Install Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          rustup target add wasm32-wasip1-threads
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: build-wasm32-wasip1-threads-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      # Used to compile libwebp (C). See scripts/build-wasm.mjs.
+      - name: Install wasi-sdk
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/wasi-sdk"
+          mkdir -p "$dir"
+          curl --retry 3 -fsSL -o "$dir/wasi-sdk.tar.gz" \
+            "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-$WASI_SDK_VERSION/wasi-sdk-$WASI_SDK_VERSION.0-x86_64-linux.tar.gz"
+          echo "$WASI_SDK_SHA256  $dir/wasi-sdk.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/wasi-sdk.tar.gz" -C "$dir" --strip-components=1
+          echo "WASI_SDK_PATH=$dir" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:wasm
+      - name: Check that generated bindings are up to date
+        run: git diff --exit-code -- binding.js binding.d.ts blunt-image-optimization.wasi.cjs wasi-worker.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bindings-wasm32-wasip1-threads
+          path: |
+            blunt-image-optimization.wasm32-wasi.wasm
+            blunt-image-optimization.wasi.cjs
+            wasi-worker.mjs
+          if-no-files-found: error
+
+  test:
+    name: Test ${{ matrix.settings.target }} - node@${{ matrix.node }}
+    needs: build
+    runs-on: ${{ matrix.settings.host }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-latest
+            target: aarch64-apple-darwin
+            architecture: arm64
+          # Runs under Rosetta.
+          - host: macos-latest
+            target: x86_64-apple-darwin
+            architecture: x64
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            architecture: x64
+          - host: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            architecture: arm64
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            architecture: x64
+          - host: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            architecture: arm64
+        node:
+          - '22'
+          - '24'
+          - '26'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Install with node 24, which still bundles corepack.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          architecture: ${{ matrix.settings.architecture }}
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:js
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: .
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          architecture: ${{ matrix.settings.architecture }}
+      - run: node --run test
+
+  test-musl:
+    name: Test ${{ matrix.target }} - node@${{ matrix.node }}
+    needs: build
+    runs-on: ${{ startsWith(matrix.target, 'aarch64') && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+        node:
+          - '22'
+          - '24'
+          - '26'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: corepack enable
+      # Install sharp's musl binaries (used to generate test images) for the Alpine container.
+      - run: pnpm install --frozen-lockfile --libc glibc --libc musl
+      - run: pnpm build:js
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bindings-${{ matrix.target }}
+          path: .
+      - name: Test in Alpine
+        env:
+          NODE_VERSION: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" \
+            "node:$NODE_VERSION-alpine" node --run test
+
+  test-wasi:
+    name: Test wasm32-wasip1-threads - node@${{ matrix.node }}
+    needs: build-wasm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - '22'
+          - '24'
+          - '26'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:js
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bindings-wasm32-wasip1-threads
+          path: .
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --run test
+        env:
+          NAPI_RS_FORCE_WASI: error

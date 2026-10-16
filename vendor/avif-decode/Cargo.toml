@@ -26,12 +26,7 @@ quick-error = "2.0.1"
 rgb = { version = "0.8.53", default-features = false, features = ["bytemuck"] }
 yuv = "0.8.19"
 
-[target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dependencies]
-rav1d = "1.1.0"
-
-# rav1d failed to bundle required aarch64 asm headers
-# https://github.com/memorysafety/rav1d/issues/1449
-[target.'cfg(not(any(target_arch = "x86", target_arch = "x86_64")))'.dependencies]
+# blunt-image-optimization: asm is disabled on all targets, so that decoding is entirely Rust.
 rav1d = { version = "1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 
 [features]

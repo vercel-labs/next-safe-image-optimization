@@ -27,7 +27,7 @@ function fail(message) {
 }
 
 /** Runs `napi build` with extra `args`, and returns the directory containing the outputs. */
-export function build(args, { env = process.env } = {}) {
+export function build(args) {
   const dir = join(root, outputDir)
   // Otherwise outputs from earlier builds (e.g. for other targets) would be installed too.
   rmSync(dir, { recursive: true, force: true })
@@ -52,7 +52,7 @@ export function build(args, { env = process.env } = {}) {
       'binding.d.ts',
       ...args,
     ],
-    { cwd: root, env, stdio: 'inherit', shell: process.platform === 'win32' },
+    { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' },
   )
   if (napi.status !== 0) {
     process.exit(napi.status ?? 1)

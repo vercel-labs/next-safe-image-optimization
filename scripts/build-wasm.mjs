@@ -3,21 +3,11 @@
 // against an allowlist.
 //
 // Usage: WASI_SDK_PATH=/path/to/wasi-sdk node scripts/build-wasm.mjs [extra napi build args]
-//
-// libwebp (C) is compiled with wasi-sdk's clang, but we deliberately hide `WASI_SDK_PATH` from the
-// napi CLI. If napi sees it, it links against wasi-sdk's wasi-libc, which is ABI-incompatible with
-// the wasi-libc and crt objects that Rust's `wasm32-wasip1-threads` target ships (wasi-sdk 34
-// changed the futex ABI and removed `__wasi_init_tp`). Linking with rust-lld against Rust's own
-// wasi-libc avoids the mismatch; libwebp only needs the C standard library's basic functions. See
-// https://github.com/napi-rs/napi-rs/issues/3491 (fixed in Rust 1.100).
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { build, install } from './napi-build.mjs'
-
-const target = 'wasm32-wasip1-threads'
-const targetEnv = target.replaceAll('-', '_')
 
 const wasiSdk = process.env.WASI_SDK_PATH
 if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
@@ -25,13 +15,7 @@ if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
   process.exit(1)
 }
 
-const env = { ...process.env }
-delete env.WASI_SDK_PATH
-env[`CC_${targetEnv}`] = join(wasiSdk, 'bin', 'clang')
-env[`AR_${targetEnv}`] = join(wasiSdk, 'bin', 'llvm-ar')
-env[`CFLAGS_${targetEnv}`] = [`--target=${target}`, `--sysroot=${join(wasiSdk, 'share', 'wasi-sysroot')}`, '-pthread'].join(' ')
-
-const dir = build(['--release', '--target', target, ...process.argv.slice(2)], { env })
+const dir = build(['--release', '--target', 'wasm32-wasip1-threads', ...process.argv.slice(2)])
 
 // The functions the module may import, by import module (`null` allows any). There are no WASI
 // filesystem functions, so the module can't use the filesystem even if a loader grants it access.

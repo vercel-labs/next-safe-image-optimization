@@ -49,7 +49,7 @@ WASI_SDK_PATH=... pnpm build:wasm && pnpm test:wasi
 
 ## Gotchas
 
-- **wasm:** wasi-sdk is used only as the C compiler for libwebp. `scripts/build-wasm.mjs` hides `WASI_SDK_PATH` from napi, because linking against wasi-sdk 34's libc breaks Rust's crt (futex ABI change, missing `__wasi_init_tp`).
+- **wasm:** napi uses wasi-sdk to compile libwebp and to link. wasi-sdk 34 changed wasi-libc's ABI (futex signatures, removed `__wasi_init_tp`), so it needs Rust 1.100 or later, whose bundled wasi-libc and crt match. Older Rust fails to link or instantiate.
 - **WASI loaders:** napi's templates grant the host filesystem and `process.env`, and `scripts/napi-build.mjs` patches them out. Never run `napi build` directly in the repo root, which can regenerate them unpatched (if a `.wasi.d.cts` is left over from a wasm build). On its own, a native build also keeps the loaders' old export list.
 - **emnapi:** pinned to `2.0.0-alpha.6`. emnapi 1.x lacks the needed archives, and `2.0.0-beta.1` is incompatible with `@napi-rs/wasm-runtime` 1.2.5.
 - **Linux CI:** builds use cargo-zigbuild (glibc 2.28, matching Node). `--use-napi-cross` ships GCC 4.8, which can't build mimalloc.

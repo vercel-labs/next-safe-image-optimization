@@ -18,6 +18,7 @@ A safer replacement for sharp in Next.js: decode (untrusted) → auto-orient/rot
 
 - Never decode with C libraries. libwebp is only for encoding.
 - Disable `default-features` and enable exact features for dependencies.
+- Import with `crate::` paths, not `super::`. The only exception is `use super::*;` in `mod tests`.
 - Images are always 8-bit `Luma8`/`LumaA8`/`Rgb8`/`Rgba8` after `decode::normalize`.
 - Every allocation sized by input must be checked against `Limits` first.
 - No timeouts or cancellation: cooperative checks couldn't reliably interrupt decoders. Bound CPU work with input-proportional limits instead (like `max_scans`).

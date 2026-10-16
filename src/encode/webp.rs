@@ -6,7 +6,7 @@ use std::mem::MaybeUninit;
 use image::DynamicImage;
 use libwebp_sys as sys;
 
-use super::check_dimensions;
+use crate::encode::check_dimensions;
 use crate::error::{Error, Result};
 
 #[derive(Clone, Debug)]

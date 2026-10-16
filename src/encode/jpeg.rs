@@ -3,7 +3,7 @@ use jpeg_encoder::{
     ChromaSubsamplingMethod, ColorType, Encoder, QuantizationTableType, SamplingFactor,
 };
 
-use super::{check_dimensions, flatten};
+use crate::encode::{check_dimensions, flatten};
 use crate::error::{Error, Result};
 
 /// Quantization table indices, matching mozjpeg (and therefore sharp's `quantisationTable`).

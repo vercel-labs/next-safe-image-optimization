@@ -7,7 +7,7 @@ use zune_jpeg::zune_core::bytestream::ZCursor;
 use zune_jpeg::zune_core::colorspace::ColorSpace;
 use zune_jpeg::zune_core::options::DecoderOptions;
 
-use super::{Header, InputFormat, alloc, from_raw_u8, orientation_from_exif};
+use crate::decode::{Header, InputFormat, alloc, from_raw_u8, orientation_from_exif};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 

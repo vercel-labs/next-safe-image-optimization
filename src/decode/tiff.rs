@@ -11,7 +11,7 @@ use std::io::Cursor;
 use image::{DynamicImage, ImageDecoder};
 use tiff::tags::Tag;
 
-use super::{Header, InputFormat};
+use crate::decode::{Header, InputFormat};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 

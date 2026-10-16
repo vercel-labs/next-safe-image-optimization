@@ -1,6 +1,6 @@
 use image::DynamicImage;
 
-use super::check_dimensions;
+use crate::encode::check_dimensions;
 use crate::error::{Error, Result};
 
 #[derive(Clone, Debug)]

@@ -5,7 +5,7 @@ use std::num::NonZeroU64;
 
 use image::DynamicImage;
 
-use super::{Header, InputFormat, alloc, from_raw_u8};
+use crate::decode::{Header, InputFormat, alloc, from_raw_u8};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 

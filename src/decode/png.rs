@@ -6,7 +6,7 @@ use std::io::Cursor;
 use image::DynamicImage;
 use png::{ColorType, Transformations};
 
-use super::{Header, InputFormat, alloc, from_raw_u8, orientation_from_exif};
+use crate::decode::{Header, InputFormat, alloc, from_raw_u8, orientation_from_exif};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 

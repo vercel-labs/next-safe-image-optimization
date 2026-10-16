@@ -32,7 +32,7 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 | CPU limits | There are no timeouts, and processing can't be cancelled. Work is bounded by the pixel and memory limits, plus format-specific bounds: at most 32 progressive JPEG scans, and at most 4096 JPEG APP1 segments. JPEG-compressed TIFFs are rejected. Blur cost is bounded regardless of sigma. |
 | Crash safety | Panics are caught and reported as `ERR_INTERNAL`. The input is copied before processing, so JS can't mutate it mid-decode. |
 | Encoders | Not sandboxed: they only see pixels we produced. Lossy WebP uses libwebp (C), because `image-webp` only encodes lossless. |
-| wasm | The `wasm32-wasip1-threads` build has no WASI filesystem or environment access. This is defense in depth, not a sandbox: a compromised module can still reach JS globals through napi. |
+| wasm | The `wasm32-wasip1-threads` build has no WASI filesystem or environment access. The build also fails if the module imports WASI functions outside an allowlist (which has no filesystem functions). This is defense in depth, not a sandbox: a compromised module can still reach JS globals through napi. |
 
 See [AGENTS.md](AGENTS.md) for per-decoder details.
 

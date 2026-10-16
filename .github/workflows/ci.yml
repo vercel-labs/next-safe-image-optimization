@@ -139,7 +139,7 @@ jobs:
           pnpm build:native --release --target "$TARGET" $FLAGS
       - name: Check that generated bindings are up to date
         shell: bash
-        run: git diff --exit-code -- binding.js binding.d.ts
+        run: git diff --exit-code -- binding.js binding.d.ts blunt-image-optimization.wasi.cjs wasi-worker.mjs
       - name: Check glibc compatibility
         if: ${{ endsWith(matrix.settings.target, '-gnu') }}
         run: |

@@ -5,10 +5,3 @@
 *.node
 *.wasm
 *.tgz
-
-# napi also generates browser loaders for the wasm binding, but this package is server-only. The
-# wasi loader's types are unused, because it's only loaded by `binding.js`.
-/browser.js
-/blunt-image-optimization.wasi-browser.js
-/wasi-worker-browser.mjs
-/blunt-image-optimization.wasi.d.cts

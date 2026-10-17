@@ -24,8 +24,8 @@ quick_error! {
             display("{}", err)
             from()
         }
-        Rav1d(errno: u32) {
-            display("rav1d error ({})", errno)
+        Rav1d(err: ::rav1d::Rav1dError) {
+            display("rav1d error ({})", err)
         }
         Avif(err: avif_parse::Error) {
             display("{}", err)
@@ -62,9 +62,20 @@ pub enum Image {
 }
 
 
+/// Decoder settings
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct Options {
+    /// Decoding threads. `None` uses the available parallelism (up to 32). With `Some(1)`,
+    /// decoding happens on the calling thread.
+    pub threads: Option<usize>,
+    /// Maximum `width * height` of each AV1 frame. 0 means unlimited.
+    pub frame_size_limit: u32,
+}
+
 /// AVIF decoder + converter
 pub struct Decoder {
-    decoder: Rav1dDecoder,
+    options: Options,
     avif: avif_parse::AvifData,
 }
 
@@ -76,20 +87,46 @@ impl Decoder {
 
     #[inline]
     pub fn from_reader<R: io::Read + ?Sized>(avif_file_data_reader: &mut R) -> Result<Self> {
+        Self::from_reader_with_options(avif_file_data_reader, Options::default())
+    }
+
+    /// Parses the file, but doesn't start decoding until [`Decoder::to_image`]
+    #[inline]
+    pub fn from_reader_with_options<R: io::Read + ?Sized>(avif_file_data_reader: &mut R, options: Options) -> Result<Self> {
         let avif = avif_parse::read_avif(avif_file_data_reader)?;
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(32);
-        Ok(Self {
-            avif,
-            decoder: Rav1dDecoder::new(threads)?,
-        })
+        Ok(Self { avif, options })
+    }
+
+    /// The parsed container, e.g. for reading the AV1 sequence header before decoding
+    #[inline]
+    #[must_use]
+    pub fn avif_data(&self) -> &avif_parse::AvifData {
+        &self.avif
+    }
+
+    /// Options can be changed after parsing, e.g. to limit the frame size based on the sequence header
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut Options {
+        &mut self.options
     }
 
     #[inline(never)]
     pub fn to_image(mut self) -> Result<Image> {
-        // The decoder recycles buffers, so can't have both color and alpha without copying,
-        // therefore conversion will put placeholders and then update alpha
+        let threads = self.options.threads
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()).min(32));
+        let mut decoder = Rav1dDecoder::new(threads, self.options.frame_size_limit)?;
+        // rav1d reports some invalid input by panicking. Catch it here so that the decoder isn't
+        // dropped while unwinding: if closing it panicked too, the process would abort.
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.decode_with(&mut decoder)));
+        drop(decoder);
+        res.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    }
+
+    fn decode_with(&mut self, decoder: &mut Rav1dDecoder) -> Result<Image> {
+        // Conversion puts placeholders in the alpha channel, and then updates alpha, so that the
+        // color frame can be freed before decoding alpha
         let has_alpha = self.avif.alpha_item.is_some();
-        let color = self.decoder.decode_frame(&std::mem::take(&mut self.avif.primary_item))?;
+        let color = decoder.decode_frame(&std::mem::take(&mut self.avif.primary_item))?;
         let mut img = match color.planes()? {
             Planes::YuvPlanes8 { y, u, v, chroma_sampling } => {
                 color.yuv_to_rgb8(y, u, v, chroma_sampling, has_alpha)?
@@ -101,9 +138,10 @@ impl Decoder {
             },
         };
         let color_mc = color.matrix_coefficients().unwrap_or(MatrixCoefficients::Identity);
+        drop(color);
 
         if let Some(alpha_av1) = self.avif.alpha_item.take() {
-            let alpha = self.decoder.decode_frame(&alpha_av1)?;
+            let alpha = decoder.decode_frame(&alpha_av1)?;
             drop(alpha_av1);
             let range = alpha.range();
             if let Some(alpha_mc) = alpha.matrix_coefficients().filter(|&mc| mc != MatrixCoefficients::Identity)

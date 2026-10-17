@@ -34,6 +34,13 @@ const inputs: Record<string, () => Promise<Buffer>> = {
   // A single tile that's larger than the image.
   'tiled tiff': () =>
     fromRaw(rgb).tiff({ compression: 'none', tile: true, tileWidth: 256, tileHeight: 256 }).toBuffer(),
+  avif: () => fromRaw(rgb).avif({ quality: 90 }).toBuffer(),
+  '4:2:0 avif': () => fromRaw(rgb).avif({ quality: 90, chromaSubsampling: '4:2:0' }).toBuffer(),
+  'avif with alpha': () => fromRaw(rgba).avif({ quality: 90 }).toBuffer(),
+  'lossless avif': () => fromRaw(rgb).avif({ lossless: true }).toBuffer(),
+  '10-bit avif': () => fromRaw(rgb).avif({ quality: 90, bitdepth: 10 }).toBuffer(),
+  '12-bit avif with alpha': () => fromRaw(rgba).avif({ quality: 90, bitdepth: 12 }).toBuffer(),
+  'grayscale avif': () => fromRaw(rgb).toColourspace('b-w').avif({ quality: 90 }).toBuffer(),
 }
 
 const outputs: OutputFormat[] = ['jpeg', 'png', 'webp', 'gif']
@@ -69,9 +76,11 @@ describe('output format defaults to the input format', () => {
     })
   }
 
-  test('tiff has no default output format', async () => {
-    await assertRejectsWithCode(blunt(await inputs.tiff()).toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
-  })
+  for (const name of ['tiff', 'avif'] as const) {
+    test(`${name} has no default output format`, async () => {
+      await assertRejectsWithCode(blunt(await inputs[name]()).toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
+    })
+  }
 })
 
 describe('alpha', () => {
@@ -89,6 +98,27 @@ describe('alpha', () => {
     const { data, info } = await blunt(input).jpeg({ quality: 95 }).toBuffer({ resolveWithObject: true })
     assert.equal(info.channels, 3)
     await assertSimilar(data, await sharp(input).jpeg({ quality: 95 }).toBuffer(), 3)
+  })
+})
+
+describe('avif', () => {
+  test('metadata', async () => {
+    const meta = await blunt(await inputs['avif with alpha']()).metadata()
+    assert.deepEqual([meta.format, meta.width, meta.height, meta.hasAlpha], ['avif', rgb.width, rgb.height, true])
+  })
+
+  test('odd dimensions with chroma subsampling', async () => {
+    const input = await fromRaw(pattern(97, 65)).avif({ quality: 90, chromaSubsampling: '4:2:0' }).toBuffer()
+    const { data, info } = await blunt(input).png().toBuffer({ resolveWithObject: true })
+    assert.deepEqual([info.width, info.height], [97, 65])
+    await assertSimilar(data, input, 8)
+  })
+
+  test('alpha is preserved', async () => {
+    const input = await inputs['avif with alpha']()
+    const { data, info } = await blunt(input).png().toBuffer({ resolveWithObject: true })
+    assert.equal(info.channels, 4)
+    await assertSimilar(data, input, 8, 4)
   })
 })
 

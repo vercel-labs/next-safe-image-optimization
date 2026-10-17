@@ -6,7 +6,7 @@ import type {
   NativeTransformOptions,
 } from '../binding.js'
 
-export type InputFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'tiff'
+export type InputFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'tiff' | 'avif'
 export type OutputFormat = 'jpeg' | 'png' | 'webp' | 'gif'
 export type Fit = 'cover' | 'contain' | 'fill' | 'inside' | 'outside'
 export type Kernel = 'nearest' | 'linear' | 'cubic' | 'mitchell' | 'lanczos2' | 'lanczos3'

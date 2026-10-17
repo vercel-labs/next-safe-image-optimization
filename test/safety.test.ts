@@ -179,6 +179,20 @@ describe('limits', () => {
     }
   })
 
+  test('AVIF limitInputPixels is checked before decoding', async () => {
+    const input = await fromRaw(pattern(100, 100)).avif().toBuffer()
+    await assertRejectsWithCode(blunt(input, { limitInputPixels: 9999 }).metadata(), 'ERR_LIMIT_EXCEEDED')
+    await assertRejectsWithCode(blunt(input, { limitInputPixels: 9999 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await blunt(input, { limitInputPixels: 10000 }).png().toBuffer()
+  })
+
+  test('AVIF decoder memory counts against the memory limit', async () => {
+    // 4:4:4 frames are 3 bytes per pixel, counted twice for film grain, plus the RGB output.
+    const input = await fromRaw(pattern(256, 256)).avif().toBuffer()
+    await assertRejectsWithCode(blunt(input, { limitMemory: 400_000 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await blunt(input, { limitMemory: 1024 * 1024 }).png().toBuffer()
+  })
+
   test('JPEG-compressed TIFFs are rejected', async () => {
     const input = await fromRaw(pattern(64, 64)).tiff({ compression: 'jpeg' }).toBuffer()
     await assertRejectsWithCode(blunt(input).png().toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
@@ -202,6 +216,7 @@ describe('malformed input never crashes or panics', () => {
     'lossless webp': () => fromRaw(pattern(64, 48)).webp({ lossless: true }).toBuffer(),
     gif: () => fromRaw(pattern(64, 48)).gif().toBuffer(),
     tiff: () => fromRaw(pattern(64, 48)).tiff({ compression: 'lzw' }).toBuffer(),
+    avif: () => fromRaw(pattern(64, 48, 4)).avif().toBuffer(),
   }
   const allowed = new Set(['ERR_DECODE_FAILED', 'ERR_LIMIT_EXCEEDED', 'ERR_UNSUPPORTED_FORMAT'])
 

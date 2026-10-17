@@ -19,6 +19,12 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 zune-jpeg = { version = "0.5.15", default-features = false, features = ["std", "x86", "neon"] }
 image-webp = { version = "0.2.4", default-features = false }
 tiff = { version = "0.11.3", default-features = false }
+# Vendored as a git subtree to disable rav1d's asm (see vendor/avif-decode/Cargo.toml).
+avif-decode = { path = "vendor/avif-decode", default-features = false }
+# Same version as avif-decode uses, to match on its errors.
+avif-parse = { version = "2.1.0", default-features = false }
+# Reuses avif-decode's output buffers.
+bytemuck = { version = "1.25.2", default-features = false, features = ["extern_crate_alloc"] }
 # ICC profile -> sRGB conversion. Same major version as `image` uses.
 moxcms = { version = "0.8.1", default-features = false, features = ["lut", "neon_shaper_paths", "sse_shaper_paths", "avx_shaper_paths"] }
 
@@ -45,6 +51,19 @@ mimalloc = { version = "0.1.52", default-features = false, features = ["local_dy
 
 [build-dependencies]
 napi-build = "2.6.0"
+
+# These debug-assert on malformed input, instead of returning the error that release builds do.
+# rav1d and yuv are also very slow without optimizations. Same as avif-decode's own profile.
+[profile.dev.package.avif-parse]
+debug-assertions = false
+
+[profile.dev.package.rav1d]
+opt-level = 2
+debug-assertions = false
+
+[profile.dev.package.yuv]
+opt-level = 2
+debug-assertions = false
 
 [profile.release]
 lto = true

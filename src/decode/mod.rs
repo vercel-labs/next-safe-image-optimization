@@ -1,6 +1,7 @@
 //! Decoders. Each format calls its decoder crate directly (except TIFF) so that we can configure
 //! safety options that `image` doesn't expose. See `AGENTS.md` for the rationale per format.
 
+mod avif;
 mod gif;
 mod jpeg;
 mod png;
@@ -20,6 +21,7 @@ pub enum InputFormat {
     Webp,
     Gif,
     Tiff,
+    Avif,
 }
 
 impl InputFormat {
@@ -30,6 +32,7 @@ impl InputFormat {
             InputFormat::Webp => "webp",
             InputFormat::Gif => "gif",
             InputFormat::Tiff => "tiff",
+            InputFormat::Avif => "avif",
         }
     }
 }
@@ -72,8 +75,25 @@ pub fn detect(input: &[u8]) -> Result<InputFormat> {
         ] => Ok(InputFormat::Webp),
         // Classic TIFF and BigTIFF, in both byte orders.
         [b'I', b'I', 42 | 43, 0, ..] | [b'M', b'M', 0, 42 | 43, ..] => Ok(InputFormat::Tiff),
+        // An ISOBMFF `ftyp` box with the still image (`avif`) or sequence (`avis`) major brand.
+        // avif-parse rejects sequences with a clearer error than ours.
+        [
+            _,
+            _,
+            _,
+            _,
+            b'f',
+            b't',
+            b'y',
+            b'p',
+            b'a',
+            b'v',
+            b'i',
+            b'f' | b's',
+            ..,
+        ] => Ok(InputFormat::Avif),
         _ => Err(Error::UnsupportedFormat(
-            "input is not a JPEG, PNG, WebP, GIF, or TIFF image".into(),
+            "input is not a JPEG, PNG, WebP, GIF, TIFF, or AVIF image".into(),
         )),
     }
 }
@@ -95,6 +115,7 @@ fn run(input: &[u8], limits: &Limits, pixels: bool) -> Result<(Header, Option<Dy
         InputFormat::Webp => webp::decode(input, limits, pixels),
         InputFormat::Gif => gif::decode(input, limits, pixels),
         InputFormat::Tiff => tiff::decode(input, limits, pixels),
+        InputFormat::Avif => avif::decode(input, limits, pixels),
     }
 }
 
@@ -158,6 +179,8 @@ mod tests {
         assert_eq!(detect(b"RIFF\0\0\0\0WEBPVP8 ").unwrap(), InputFormat::Webp);
         assert_eq!(detect(b"II*\0").unwrap(), InputFormat::Tiff);
         assert_eq!(detect(b"MM\0*").unwrap(), InputFormat::Tiff);
+        assert_eq!(detect(b"\0\0\0\x1cftypavif").unwrap(), InputFormat::Avif);
+        assert!(detect(b"\0\0\0\x1cftypheic").is_err());
         assert!(detect(b"<svg").is_err());
         assert!(detect(b"").is_err());
     }

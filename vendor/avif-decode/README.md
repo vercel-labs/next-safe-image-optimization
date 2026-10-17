@@ -1,5 +1,15 @@
 # Pure Rust AVIF decoder and AVIF to PNG converter
 
+> [!NOTE]
+> This is a vendored fork of [kornelski/avif-decode](https://github.com/kornelski/avif-decode), used by blunt-image-optimization. It's a squashed git subtree of upstream commit `2be10e2`. Changes from upstream:
+>
+> - rav1d's asm is disabled on all targets (only the `bitdepth_8` and `bitdepth_16` features), so that decoding is entirely Rust.
+> - rav1d is a git dependency on an unreleased revision, for its Rust API (`rav1d::Decoder`) instead of the `dav1d_*` C API. Panics can't unwind out of the C API's `extern "C"` functions, so any panic aborted the process. Panics inside rav1d's DSP routines and picture allocator still abort, because rav1d calls them through `extern "C"` function pointers.
+> - `Options` sets the thread count and rav1d's `frame_size_limit`. `Decoder::from_reader_with_options` parses the container without starting rav1d, `avif_data()` exposes the parsed container, and `options_mut()` lets options be changed after parsing (e.g. to use the sequence header's dimensions as the frame size limit).
+> - `to_image` catches panics before closing the rav1d context, because a second panic while unwinding would abort. It also frees the color frame before decoding alpha.
+>
+> To pull upstream changes, run `git subtree pull --prefix=vendor/avif-decode https://github.com/kornelski/avif-decode main --squash` from the repository root.
+
 It can be used as a Rust library for decoding AVIF images (AV1 + HEIF) straight to uncompressed pixels (RGBA, etc). Decoding is done by [rav1d](https://lib.rs/crates/rav1d), a Rust port of dav1d, so there's no C library to build.
 
 Optionally can be built as a CLI that converts AVIF  to standard PNG images. Expect the PNG to bemany times larger than the AVIF input.

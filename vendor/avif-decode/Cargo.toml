@@ -27,7 +27,9 @@ rgb = { version = "0.8.53", default-features = false, features = ["bytemuck"] }
 yuv = "0.8.19"
 
 # blunt-image-optimization: asm is disabled on all targets, so that decoding is entirely Rust.
-rav1d = { version = "1.1.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
+# Unreleased rav1d for its Rust API (`rav1d::Decoder`). Panics in the C API (`dav1d_*`) can't
+# unwind, so they abort the process.
+rav1d = { git = "https://github.com/memorysafety/rav1d", rev = "0c851fa046d6a36430570459283e5886fbdd8a66", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 
 [features]
 default = ["binary"]

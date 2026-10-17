@@ -1,5 +1,5 @@
 use crate::color::{ChromaSampling, Depth, MatrixCoefficients, Range};
-use crate::rav1d::FrameTempRef;
+use crate::rav1d::Frame;
 use crate::{Error, Image, Result};
 use imgref::{Img, ImgRef, ImgVec};
 use rgb::prelude::*;
@@ -131,36 +131,34 @@ fn aligned_copy(plane: ImgRef<'_, [u8; 2]>) -> Cow<'_, [u16]> {
     Cow::Owned(plane.buf().iter().map(|b| u16::from_ne_bytes(*b)).collect())
 }
 
-impl FrameTempRef<'_> {
+impl Frame {
     /// Access pixel data
     ///
     /// The data can be grayscale (mono) or YUV (YCbCr), so the result is wrapped in an `enum`
     pub(crate) fn planes(&self) -> Result<Planes<'_>> {
         let chroma_sampling = self.chroma_sampling()?;
         let depth = self.depth()?;
-        unsafe {
-            Ok(match (chroma_sampling, depth) {
-                (ChromaSampling::Monochrome, Depth::Depth8) => {
-                    Planes::Mono8(self.single_plane_img(0)?)
-                },
-                (ChromaSampling::Monochrome, depth) => {
-                    Planes::Mono16(self.single_plane_img(0)?, depth)
-                },
-                (chroma_sampling, Depth::Depth8) => {
-                    let y = self.single_plane_img::<u8>(0)?;
-                    // rav1d's plane order is always Y, U, V
-                    let u = self.single_plane_img(1)?;
-                    let v = self.single_plane_img(2)?;
-                    Planes::YuvPlanes8 { y, u, v, chroma_sampling }
-                },
-                (chroma_sampling, depth) => {
-                    let y = self.single_plane_img::<[u8; 2]>(0)?;
-                    let u = self.single_plane_img(1)?;
-                    let v = self.single_plane_img(2)?;
-                    Planes::YuvPlanes16 { y, u, v, chroma_sampling, depth }
-                },
-            })
-        }
+        Ok(match (chroma_sampling, depth) {
+            (ChromaSampling::Monochrome, Depth::Depth8) => {
+                Planes::Mono8(self.single_plane_img(0)?)
+            },
+            (ChromaSampling::Monochrome, depth) => {
+                Planes::Mono16(self.single_plane_img(0)?, depth)
+            },
+            (chroma_sampling, Depth::Depth8) => {
+                let y = self.single_plane_img::<u8>(0)?;
+                // rav1d's plane order is always Y, U, V
+                let u = self.single_plane_img(1)?;
+                let v = self.single_plane_img(2)?;
+                Planes::YuvPlanes8 { y, u, v, chroma_sampling }
+            },
+            (chroma_sampling, depth) => {
+                let y = self.single_plane_img::<[u8; 2]>(0)?;
+                let u = self.single_plane_img(1)?;
+                let v = self.single_plane_img(2)?;
+                Planes::YuvPlanes16 { y, u, v, chroma_sampling, depth }
+            },
+        })
     }
 
     pub(crate) fn yuv_to_rgb16(&self, y: ImgRef<'_, [u8; 2]>, u: ImgRef<'_, [u8; 2]>, v: ImgRef<'_, [u8; 2]>, depth: Depth, chroma_sampling: ChromaSampling, has_alpha: bool) -> Result<Image, Error> {

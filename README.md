@@ -16,7 +16,7 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 
 ## Features
 
-- **Input:** JPEG, PNG, WebP, GIF, TIFF. Only the first frame of animations is decoded.
+- **Input:** JPEG, PNG, WebP, GIF, TIFF, AVIF. Only the first frame of animations is decoded. AVIF ICC profiles, orientation (`irot`/`imir`), and cropping (`clap`) are ignored, and grid (tiled) AVIFs and AVIF sequences are rejected.
 - **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp).
 - **Operations:** auto-orient, rotate (multiples of 90°), resize (all of sharp's `fit` modes, gravity, kernels), blur.
 - `metadata()` reads the header without decoding pixels.
@@ -27,10 +27,10 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 
 | Layer | Status |
 | --- | --- |
-| Memory-safe decoders | `zune-jpeg`, `png`, `image-webp`, `gif`, `tiff` (via `image`). |
+| Memory-safe decoders | `zune-jpeg`, `png`, `image-webp`, `gif`, `tiff` (via `image`), `avif-decode` (`avif-parse` and `rav1d`, without asm). |
 | Memory limits | `limitInputPixels` (default 268402689, like sharp), and `limitMemory` (default 512 MiB), which bounds the estimated memory of each stage (decode, resize, blur, encode) and is passed to decoders as their allocation budget. Decoder metadata buffers (ICC, EXIF) have a separate, smaller cap. Frames must match (or fit inside) the declared canvas. |
-| CPU limits | There are no timeouts, and processing can't be cancelled. Work is bounded by the pixel and memory limits, plus format-specific bounds: at most 32 progressive JPEG scans, and at most 4096 JPEG APP1 segments. JPEG-compressed TIFFs are rejected. Blur cost is bounded regardless of sigma. |
-| Crash safety | Panics are caught and reported as `ERR_INTERNAL`. The input is copied before processing, so JS can't mutate it mid-decode. |
+| CPU limits | There are no timeouts, and processing can't be cancelled. Work is bounded by the pixel and memory limits, plus format-specific bounds: at most 32 progressive JPEG scans, at most 4096 JPEG APP1 segments, and at most 8 AV1 frames per AVIF item. JPEG-compressed TIFFs are rejected. Blur cost is bounded regardless of sigma. |
+| Crash safety | Panics are caught and reported as `ERR_INTERNAL`. The input is copied before processing, so JS can't mutate it mid-decode. **Exception: AVIF.** rav1d calls its DSP routines (CDEF, film grain, intra prediction, inverse transforms, loop filter, loop restoration, motion compensation, palette, reference MVs) and its picture allocator through `extern "C"` function pointers, even with asm disabled. A panic in one of them (e.g. a failed bounds check on malformed input) can't unwind, so it aborts the process. Allocation failures inside rav1d also abort, because it mostly uses infallible allocation; the memory limit is our only guard against that. |
 | Encoders | Not sandboxed: they only see pixels we produced. Lossy WebP uses libwebp (C), because `image-webp` only encodes lossless. |
 | wasm | The `wasm32-wasip1-threads` build has no WASI filesystem or environment access. The build also fails if the module imports WASI functions outside an allowlist (which has no filesystem functions). This is defense in depth, not a sandbox: a compromised module can still reach JS globals through napi. |
 
@@ -40,7 +40,7 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 
 - Only in-memory input (never file paths). Exports `blunt()` instead of a default export.
 - `rotate(angle)` only supports multiples of 90. There is no `flip`, `extract`, `composite`, etc.
-- No AVIF or HEIF, SVG, or animated output.
+- No HEIF or SVG input. No AVIF, HEIF, or animated output.
 - PNG output is always lossless truecolor: `png({ quality })` is accepted but ignored (no palette quantization), and `adaptiveFiltering` defaults to `true`.
 - JPEG uses `jpeg-encoder`, not mozjpeg. `mozjpeg: true` approximates mozjpeg's settings, but without trellis quantization, so files are somewhat larger.
 - `blur(sigma)` uses a Gaussian kernel for σ < 3, and a three-pass box blur above that.
@@ -69,7 +69,6 @@ Processing runs on the libuv thread pool, so concurrency is bounded by `UV_THREA
 
 ## Future work
 
-- wasm2c-sandboxed decoders for formats without a trustworthy Rust implementation (SVG, HEIF/AVIF).
-- A per-thread allocation limit (via the global allocator) to bound decoder memory that isn't covered by decoder options, such as lossless WebP's Huffman tables.
+- wasm2c-sandboxed decoders for formats without a trustworthy Rust implementation (SVG, HEIF).- A per-thread allocation limit (via the global allocator) to bound decoder memory that isn't covered by decoder options, such as lossless WebP's Huffman tables.
 - seccomp-based process isolation on Linux.
 - AVIF output, PNG palette quantization, and ICC-aware CMYK conversion.

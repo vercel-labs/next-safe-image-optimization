@@ -2,7 +2,7 @@
 
 A safer image optimization library for Node.js, intended to replace [sharp](https://sharp.pixelplumbing.com/) in Next.js's image optimizer. The API is similar to sharp's, but much smaller.
 
-sharp (libvips) decodes untrusted images with C libraries. This library decodes with memory-safe Rust decoders from the [image-rs](https://github.com/image-rs) ecosystem, configured with explicit memory limits.
+sharp (libvips) decodes untrusted images with C libraries. This library decodes with memory-safe Rust decoders from the [image-rs](https://github.com/image-rs) ecosystem, configured with explicit memory limits, in sandboxed worker processes.
 
 ```js
 const { blunt } = require('blunt-image-optimization')
@@ -20,6 +20,7 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 - **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp).
 - **Operations:** auto-orient, rotate (multiples of 90°), resize (all of sharp's `fit` modes, gravity, kernels), blur.
 - `metadata()` reads the header without decoding pixels.
+- `timeout({ seconds })`, like sharp's, which kills the worker if processing takes too long.
 - Errors are `BluntError`s with a stable `code`.
 - TypeScript types are included.
 
@@ -29,10 +30,10 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 | --- | --- |
 | Memory-safe decoders | `zune-jpeg`, `png`, `image-webp`, `gif`, `tiff` (via `image`), `avif-decode` (`avif-parse` and `rav1d`, without asm). |
 | Memory limits | `limitInputPixels` (default 268402689, like sharp), and `limitMemory` (default 512 MiB), which bounds the estimated memory of each stage (decode, resize, blur, encode) and is passed to decoders as their allocation budget. Decoder metadata buffers (ICC, EXIF) have a separate, smaller cap. Frames must match (or fit inside) the declared canvas. |
-| CPU limits | There are no timeouts, and processing can't be cancelled. Work is bounded by the pixel and memory limits, plus format-specific bounds: at most 32 progressive JPEG scans, at most 4096 JPEG APP1 segments, and at most 8 AV1 frames per AVIF item. JPEG-compressed TIFFs are rejected. Blur cost is bounded regardless of sigma. |
-| Crash safety | Panics are caught and reported as `ERR_INTERNAL`. The input is copied before processing, so JS can't mutate it mid-decode. **Exception: AVIF.** rav1d calls its DSP routines (CDEF, film grain, intra prediction, inverse transforms, loop filter, loop restoration, motion compensation, palette, reference MVs) and its picture allocator through `extern "C"` function pointers, even with asm disabled. A panic in one of them (e.g. a failed bounds check on malformed input) can't unwind, so it aborts the process. Allocation failures inside rav1d also abort, because it mostly uses infallible allocation; the memory limit is our only guard against that. |
-| Encoders | Not sandboxed: they only see pixels we produced. Lossy WebP uses libwebp (C), because `image-webp` only encodes lossless. |
-| wasm | The `wasm32-wasip1-threads` build has no WASI filesystem or environment access. The build also fails if the module imports WASI functions outside an allowlist (which has no filesystem functions). This is defense in depth, not a sandbox: a compromised module can still reach JS globals through napi. |
+| CPU limits | Work is bounded by the pixel and memory limits, plus format-specific bounds: at most 32 progressive JPEG scans, at most 4096 JPEG APP1 segments, and at most 8 AV1 frames per AVIF item. JPEG-compressed TIFFs are rejected. Blur cost is bounded regardless of sigma. `timeout()` bounds the wall time of each image, by killing its worker. |
+| Process isolation | Images are processed in worker processes, never in the Node process. A panic, abort, or allocation failure only ends the worker, and is reported as an error (`ERR_WORKER_CRASHED` or `ERR_OUT_OF_MEMORY`). This covers rav1d, which calls its DSP routines and picture allocator through `extern "C"` function pointers, where panics can't unwind. Workers get an empty environment, and on Linux (x86_64 and aarch64) a seccomp filter blocks every syscall besides reading and writing already-open file descriptors (their pipes and stderr), memory management, and exiting: no opening files or sockets, and no spawning processes. Workers are reused, one image at a time, so a compromised worker could affect later images. The input is copied before processing, so JS can't mutate it mid-decode. |
+| Encoders | They only see pixels we produced. Lossy WebP uses libwebp (C), because `image-webp` only encodes lossless. |
+| wasm | The `wasm32-wasip1` build runs in worker threads. Its only imports are a few stubbed-out WASI functions (no filesystem, environment, or JS access), and the build fails if it imports anything else. Each instance's memory has a configurable maximum. |
 
 See [AGENTS.md](AGENTS.md) for per-decoder details.
 
@@ -45,7 +46,6 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 - JPEG uses `jpeg-encoder`, not mozjpeg. `mozjpeg: true` approximates mozjpeg's settings, but without trellis quantization, so files are somewhat larger.
 - `blur(sigma)` uses a Gaussian kernel for σ < 3, and a three-pass box blur above that.
 - CMYK JPEGs are converted to RGB naively, ignoring their ICC profile.
-- No `timeout()`.
 - `limitInputPixels` also applies to `metadata()`.
 
 ## Development
@@ -60,15 +60,27 @@ cargo test          # unit tests
 pnpm lint
 
 # wasm (needs https://github.com/WebAssembly/wasi-sdk to compile libwebp)
-rustup target add wasm32-wasip1-threads
+rustup target add wasm32-wasip1
 WASI_SDK_PATH=/path/to/wasi-sdk pnpm build:wasm
-pnpm test:wasi
+pnpm test:wasm
 ```
 
-Processing runs on the libuv thread pool, so concurrency is bounded by `UV_THREADPOOL_SIZE` (default 4). That pool is shared with `fs` and `dns`.
+## Pools
+
+Images are processed by a pool of workers, one image per worker at a time. Workers start on demand, exit when idle, and are replaced if they crash or time out. By default, pipelines share a pool with up to `os.availableParallelism()` workers. To configure one:
+
+```js
+const { blunt, Pool } = require('blunt-image-optimization')
+
+const pool = new Pool({ concurrency: 4, idleTimeout: 30_000 })
+const output = await blunt(input, { pool }).timeout({ seconds: 10 }).webp().toBuffer()
+```
+
+The native backend uses worker processes. Without a native binding for the platform, or with `backend: 'wasm'` (or `BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm`), workers are threads running a wasm build. `wasmMaxMemory` limits each one's memory.
 
 ## Future work
 
-- wasm2c-sandboxed decoders for formats without a trustworthy Rust implementation (SVG, HEIF).- A per-thread allocation limit (via the global allocator) to bound decoder memory that isn't covered by decoder options, such as lossless WebP's Huffman tables.
-- seccomp-based process isolation on Linux.
+- wasm2c-sandboxed decoders for formats without a trustworthy Rust implementation (SVG, HEIF).
+- A per-process memory limit (via the workers' global allocator) to bound decoder memory that isn't covered by decoder options, such as lossless WebP's Huffman tables.
+- Sandboxing on macOS and Windows, and killing workers via a Job Object when the parent dies on Windows.
 - AVIF output, PNG palette quantization, and ICC-aware CMYK conversion.

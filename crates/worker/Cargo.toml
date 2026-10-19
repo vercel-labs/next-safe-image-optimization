@@ -1,0 +1,16 @@
+[package]
+name = "blunt-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "blunt-image-optimization-worker"
+path = "src/main.rs"
+
+[dependencies]
+blunt-core = { path = "../core" }
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2.190", default-features = false }

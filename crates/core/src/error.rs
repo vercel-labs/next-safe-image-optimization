@@ -1,16 +1,15 @@
 use std::fmt;
 
-/// Errors are reported to JS as `{ code, message }` instead of a thrown napi error so that the JS
-/// wrapper can construct an `Error` with a stable `code` property. napi-rs can't attach custom codes
-/// to async task rejections on every platform (wasm drops the original JS error object).
+/// Errors are sent to JS as a code and a message (see `protocol.rs`), so that the JS wrapper can
+/// construct an `Error` with a stable `code` property.
 #[derive(Debug)]
 pub enum Error {
     UnsupportedFormat(String),
     LimitExceeded(String),
     Decode(String),
     Encode(String),
-    /// A panic was caught. This should never happen, but decoders are fed untrusted input, and an
-    /// uncaught panic on a libuv thread would abort the process.
+    /// This should never happen: an invalid request (the JS wrapper validates options first), or
+    /// an unexpected error from a library.
     Internal(String),
 }
 

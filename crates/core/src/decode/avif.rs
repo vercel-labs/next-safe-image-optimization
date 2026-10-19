@@ -116,8 +116,8 @@ pub fn decode(
     limits: &Limits,
     pixels: bool,
 ) -> Result<(Header, Option<DynamicImage>)> {
-    // Threads are left to the caller: with one thread, rav1d decodes on the calling thread, so
-    // panics are caught by `catch_panics`, and nothing is spawned on wasm.
+    // Concurrency comes from running more workers: with one thread, rav1d decodes on the calling
+    // thread, and nothing is spawned (which wasm doesn't support).
     let mut options = Options::default();
     options.threads = Some(1);
     let mut decoder = avif_decode::Decoder::from_reader_with_options(&mut &input[..], options)

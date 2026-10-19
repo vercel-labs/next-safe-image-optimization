@@ -1,56 +1,15 @@
-[package]
-name = "blunt-image-optimization"
+[workspace]
+members = ["crates/*"]
+# A path dependency of `blunt-core`, not a workspace member (it has its own binary and tests).
+exclude = ["vendor/avif-decode"]
+resolver = "3"
+
+[workspace.package]
+# The shim checks that the worker it spawns has the same version.
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 publish = false
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-napi = { version = "3.14.2", default-features = false, features = ["napi4", "dyn-symbols"] }
-napi-derive = { version = "3.6.12", default-features = false, features = ["type-def", "strict"] }
-
-# Decoders (memory-safe Rust). We call most decoders directly to configure safety options that
-# `image` doesn't expose (see AGENTS.md). Note that `image` enables the default features of its codec
-# dependencies regardless of what we specify here.
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff"] }
-zune-jpeg = { version = "0.5.15", default-features = false, features = ["std", "x86", "neon"] }
-image-webp = { version = "0.2.4", default-features = false }
-tiff = { version = "0.11.3", default-features = false }
-# Vendored as a git subtree to disable rav1d's asm (see vendor/avif-decode/Cargo.toml).
-avif-decode = { path = "vendor/avif-decode", default-features = false }
-# Same version as avif-decode uses, to match on its errors.
-avif-parse = { version = "2.1.0", default-features = false }
-# Reuses avif-decode's output buffers.
-bytemuck = { version = "1.25.2", default-features = false, features = ["extern_crate_alloc"] }
-# ICC profile -> sRGB conversion. Same major version as `image` uses.
-moxcms = { version = "0.8.1", default-features = false, features = ["lut", "neon_shaper_paths", "sse_shaper_paths", "avx_shaper_paths"] }
-
-# Image operations
-fast_image_resize = { version = "6.1.0", default-features = false, features = ["std"] }
-
-# Encoders. Sandboxing encoders isn't a goal: they only ever see pixel buffers we produced.
-jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
-# Also used for decoding.
-png = { version = "0.18.1", default-features = false }
-# Also used for decoding. `color_quant` is needed for encoding.
-gif = { version = "0.14.2", default-features = false, features = ["std", "color_quant"] }
-# `image-webp` only supports lossless encoding, so lossy WebP comes from libwebp (C). Never use this
-# crate for decoding.
-libwebp-sys = { version = "0.14.4", default-features = false }
-
-# Based on `turbo-tasks-malloc` in Next.js. mimalloc is C, so it's not used on wasm.
-[target.'cfg(all(not(target_os = "linux"), not(target_family = "wasm")))'.dependencies]
-mimalloc = { version = "0.1.52", default-features = false }
-
-[target.'cfg(all(target_os = "linux", not(target_family = "wasm")))'.dependencies]
-# `local_dynamic_tls` is required because the addon is `dlopen`ed.
-mimalloc = { version = "0.1.52", default-features = false, features = ["local_dynamic_tls"] }
-
-[build-dependencies]
-napi-build = "2.6.0"
 
 # These debug-assert on malformed input, instead of returning the error that release builds do.
 # rav1d and yuv are also very slow without optimizations. Same as avif-decode's own profile.
@@ -69,3 +28,13 @@ debug-assertions = false
 lto = true
 codegen-units = 1
 strip = "symbols"
+
+# For the worker process and the wasm module. A panic just ends the process (or instance), so
+# there's no need for unwinding. The shim runs inside Node, so it keeps the default profiles.
+[profile.worker]
+inherits = "release"
+panic = "abort"
+
+[profile.worker-dev]
+inherits = "dev"
+panic = "abort"

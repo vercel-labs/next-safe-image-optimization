@@ -1,7 +1,4 @@
 [toolchain]
-# The wasm build uses wasi-sdk 34, which needs Rust 1.100 or later. Older versions bundle a wasi-libc
-# with an incompatible ABI (https://github.com/napi-rs/napi-rs/issues/3491). Switch to the stable
-# 1.100 release once it's out.
-channel = "beta-2026-10-14"
+channel = "1.99.0"
 profile = "minimal"
-components = ["rustfmt", "clippy"]
+components = ["rustfmt", "clippy", "rust-analyzer"]

@@ -1,13 +1,18 @@
 #!/usr/bin/env node
-// Builds the `wasm32-wasip1-threads` binding (see `napi-build.mjs`), and checks the module's imports
-// against an allowlist.
+// Builds the wasm module (`crates/wasm`) for `wasm32-wasip1`, checks its imports against an
+// allowlist, and copies it to the package root as `blunt-image-optimization.wasm`.
 //
-// Usage: WASI_SDK_PATH=/path/to/wasi-sdk node scripts/build-wasm.mjs [extra napi build args]
+// wasi-sdk is only needed to compile libwebp (C). Rust links with its own wasi-libc.
+//
+// Usage: WASI_SDK_PATH=/path/to/wasi-sdk node scripts/build-wasm.mjs
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { build, install } from './napi-build.mjs'
+const root = join(import.meta.dirname, '..')
+const target = 'wasm32-wasip1'
+const profile = 'worker'
 
 const wasiSdk = process.env.WASI_SDK_PATH
 if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
@@ -15,42 +20,38 @@ if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
   process.exit(1)
 }
 
-const dir = build(['--release', '--target', 'wasm32-wasip1-threads', ...process.argv.slice(2)])
+const exe = process.platform === 'win32' ? '.exe' : ''
+const cargo = spawnSync('cargo', ['build', '-p', 'blunt-wasm', '--target', target, '--profile', profile], {
+  cwd: root,
+  stdio: 'inherit',
+  env: {
+    ...process.env,
+    CC_wasm32_wasip1: join(wasiSdk, 'bin', `clang${exe}`),
+    AR_wasm32_wasip1: join(wasiSdk, 'bin', `llvm-ar${exe}`),
+  },
+})
+if (cargo.status !== 0) {
+  process.exit(cargo.status ?? 1)
+}
 
-// The functions the module may import, by import module (`null` allows any). There are no WASI
-// filesystem functions, so the module can't use the filesystem even if a loader grants it access.
-// `environ_*` is allowed because our loaders pass an empty environment.
+// What the module may import, by import module. These are exactly what `js/wasm-worker.ts`
+// provides: there are no WASI filesystem functions, and nothing that calls into JS.
 const allowedImports = new Map([
-  // napi, implemented by emnapi.
-  ['env', null],
-  ['napi', null],
-  ['emnapi', null],
-  // wasi-threads
-  ['wasi', new Set(['thread-spawn'])],
+  ['env', new Set(['memory'])],
   [
     'wasi_snapshot_preview1',
     new Set(['clock_time_get', 'environ_get', 'environ_sizes_get', 'fd_write', 'proc_exit', 'random_get', 'sched_yield']),
   ],
 ])
-// napi writes a release and a debug module. The loader prefers the debug one, if it exists.
-const wasmFiles = readdirSync(dir).filter((file) => file.endsWith('.wasm'))
-if (wasmFiles.length === 0) {
-  console.error('napi build produced no .wasm files')
+const file = join(root, 'target', target, profile, 'blunt_wasm.wasm')
+const wasm = await WebAssembly.compile(readFileSync(file))
+const disallowed = WebAssembly.Module.imports(wasm)
+  .filter(({ module, name }) => !allowedImports.get(module)?.has(name))
+  .map(({ module, name }) => `${module}.${name}`)
+if (disallowed.length > 0) {
+  console.error(`The wasm module has imports that aren't allowed: ${disallowed.join(', ')}`)
   process.exit(1)
 }
-for (const file of wasmFiles) {
-  const wasm = await WebAssembly.compile(readFileSync(join(dir, file)))
-  const disallowed = WebAssembly.Module.imports(wasm)
-    .filter(({ module, name }) => {
-      const names = allowedImports.get(module)
-      return names === undefined || (names !== null && !names.has(name))
-    })
-    .map(({ module, name }) => `${module}.${name}`)
-  if (disallowed.length > 0) {
-    console.error(`${file} has imports that aren't allowed: ${disallowed.join(', ')}`)
-    process.exit(1)
-  }
-  console.log(`Checked the imports of ${file}`)
-}
+console.log('Checked the imports of the wasm module')
 
-install(dir)
+copyFileSync(file, join(root, 'blunt-image-optimization.wasm'))

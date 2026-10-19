@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
 import { describe, test } from 'node:test'
 
-import { BluntError, Pipeline, blunt } from '../dist/index.js'
+import { BluntError, Pipeline, blunt, defaultPool } from '../dist/index.js'
 import type { InputFormat } from '../dist/index.js'
 import { fromRaw, pattern } from './helpers.ts'
 
 const png = () => fromRaw(pattern(40, 30, 4)).png().toBuffer()
 
-test('loads the expected binding', () => {
-  // So that CI can't silently test the native binding instead of the wasm one, or vice versa.
-  const binding = createRequire(import.meta.url)('../binding.js') as { __napiBindingTarget: string }
-  const expected = process.env.NAPI_RS_FORCE_WASI ? 'wasm32-wasi' : 'native'
-  assert.equal(binding.__napiBindingTarget, expected)
+test('uses the expected backend', () => {
+  // So that CI can't silently test the native backend instead of the wasm one, or vice versa.
+  assert.equal(defaultPool().backend, process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND ?? 'native')
 })
 
 describe('input', () => {

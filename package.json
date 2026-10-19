@@ -10,8 +10,7 @@
     "dist",
     "binding.js",
     "binding.d.ts",
-    "blunt-image-optimization.wasi.cjs",
-    "wasi-worker.mjs"
+    "blunt-image-optimization.wasm"
   ],
   "napi": {
     "binaryName": "blunt-image-optimization",
@@ -23,8 +22,7 @@
       "x86_64-unknown-linux-gnu",
       "aarch64-unknown-linux-gnu",
       "x86_64-unknown-linux-musl",
-      "aarch64-unknown-linux-musl",
-      "wasm32-wasip1-threads"
+      "aarch64-unknown-linux-musl"
     ]
   },
   "engines": {
@@ -37,7 +35,7 @@
     "build:wasm": "node scripts/build-wasm.mjs",
     "build:js": "tsc -p tsconfig.json",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
-    "test:wasi": "NAPI_RS_FORCE_WASI=error node --run test",
+    "test:wasm": "BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm node --run test",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit",
     "lint": "cargo fmt --check && cargo clippy --all-targets -- -D warnings && pnpm typecheck",
     "artifacts": "napi artifacts",
@@ -45,13 +43,8 @@
   },
   "packageManager": "pnpm@12.11.2",
   "devDependencies": {
-    "@emnapi/core": "2.0.0-alpha.6",
-    "@emnapi/runtime": "2.0.0-alpha.6",
     "@napi-rs/cli": "^3.10.8",
-    "@napi-rs/wasm-runtime": "^1.2.5",
-    "@tybys/wasm-util": "^0.10.4",
     "@types/node": "^26.6.5",
-    "emnapi": "2.0.0-alpha.6",
     "sharp": "^0.35.5",
     "typescript": "^7.0.2"
   }

@@ -1,10 +1,16 @@
-import { metadata as nativeMetadata, transform as nativeTransform } from '../binding.js'
+import { availableParallelism } from 'node:os'
+
+import { NativeBackend, loadBinding } from './native.js'
+import { InvalidResponseError, decodeResponse, encodeOptions, maxResponseBytes } from './protocol.js'
 import type {
-  NativeError,
-  NativeLimitOptions,
-  NativeResizeOptions,
-  NativeTransformOptions,
-} from '../binding.js'
+  Backend,
+  LimitOptions,
+  RequestOptions,
+  ResizeOptions as NativeResizeOptions,
+  Response,
+  TransformOptions,
+} from './protocol.js'
+import { MAX_MEMORY_BYTES, WasmBackend } from './wasm.js'
 
 export type InputFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'tiff' | 'avif'
 export type OutputFormat = 'jpeg' | 'png' | 'webp' | 'gif'
@@ -57,6 +63,25 @@ export interface BluntOptions {
   limitMemory?: number
   /** Equivalent to calling `autoOrient()`. */
   autoOrient?: boolean
+  /** The pool of workers that processes the image. Default: `defaultPool()`. */
+  pool?: Pool
+}
+
+export type BackendName = 'native' | 'wasm'
+
+export interface PoolOptions {
+  /**
+   * `'native'` processes images in worker processes. `'wasm'` processes them in worker threads,
+   * with a wasm build. Default: the `BLUNT_IMAGE_OPTIMIZATION_BACKEND` environment variable, or
+   * else `'native'`, falling back to `'wasm'` if there's no native binding for this platform.
+   */
+  backend?: BackendName
+  /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
+  concurrency?: number
+  /** Milliseconds before an idle worker exits. Default: 10000. */
+  idleTimeout?: number
+  /** `'wasm'` only: the maximum memory of each worker in bytes. Default: 4 GiB (the most possible). */
+  wasmMaxMemory?: number
 }
 
 export interface ResizeOptions {
@@ -151,12 +176,25 @@ export interface ToBufferOptions {
   resolveWithObject?: boolean
 }
 
+export interface TimeoutOptions {
+  /** 0 (the default) waits indefinitely. */
+  seconds: number
+}
+
 export type ErrorCode =
   | 'ERR_UNSUPPORTED_FORMAT'
   | 'ERR_LIMIT_EXCEEDED'
   | 'ERR_DECODE_FAILED'
   | 'ERR_ENCODE_FAILED'
   | 'ERR_INTERNAL'
+  /** Processing took longer than `timeout()`. */
+  | 'ERR_TIMEOUT'
+  /** The worker ran out of memory. */
+  | 'ERR_OUT_OF_MEMORY'
+  /** The worker crashed or sent an invalid response. */
+  | 'ERR_WORKER_CRASHED'
+  /** The worker couldn't be started. */
+  | 'ERR_WORKER_SPAWN'
 
 /** Errors from processing an image. Invalid arguments throw a `TypeError` instead. */
 export class BluntError extends Error {
@@ -247,8 +285,84 @@ function toUint8Array(input: Input): Uint8Array {
   throw invalid('input', 'Buffer, Uint8Array, ArrayBuffer, or ArrayBufferView', input)
 }
 
-function toError(error: NativeError): BluntError {
-  return new BluntError(error.code as ErrorCode, error.message)
+/** Same as `DEFAULT_MEMORY` in `crates/core/src/limits.rs`. */
+const DEFAULT_LIMIT_MEMORY = 512 * 1024 * 1024
+const BACKENDS: readonly BackendName[] = ['native', 'wasm']
+
+function createBackend(options: PoolOptions): Backend {
+  const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1, 0xffffffff))
+  const idleTimeout = optional(options.idleTimeout, (v) => checkInteger('idleTimeout', v, 0, 0xffffffff))
+  const wasmMaxMemory = optional(options.wasmMaxMemory, (v) =>
+    checkInteger('wasmMaxMemory', v, 1, Number.MAX_SAFE_INTEGER),
+  )
+  const backend = options.backend ?? process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND
+  if (backend !== undefined) {
+    checkOneOf('backend', backend, BACKENDS)
+  }
+  const maxWorkers = concurrency ?? availableParallelism()
+  const idleTimeoutMs = idleTimeout ?? 10_000
+  const wasm = () =>
+    new WasmBackend({ maxWorkers, idleTimeoutMs, maxMemoryBytes: Math.min(wasmMaxMemory ?? Infinity, MAX_MEMORY_BYTES) })
+  if (backend === 'wasm') {
+    return wasm()
+  }
+  let binding
+  try {
+    binding = loadBinding()
+  } catch (error) {
+    if (backend === 'native') {
+      throw error
+    }
+    return wasm()
+  }
+  return new NativeBackend(binding, { maxProcesses: maxWorkers, idleTimeoutMs })
+}
+
+/**
+ * A pool of workers (processes, or threads running wasm) that process images, one image per worker
+ * at a time. Workers are started on demand, and exit when idle. A worker that crashes or times out
+ * is replaced.
+ */
+export class Pool {
+  readonly backend: BackendName
+  #backend: Backend
+
+  constructor(options: PoolOptions = {}) {
+    this.#backend = createBackend(options)
+    this.backend = this.#backend.name
+  }
+
+  /** @internal */
+  async run(input: Uint8Array, options: RequestOptions, limits: LimitOptions, timeoutMs?: number): Promise<Response> {
+    const result = await this.#backend.run(input, encodeOptions(options), {
+      timeoutMs,
+      maxResponseBytes: maxResponseBytes(limits.limitMemory ?? DEFAULT_LIMIT_MEMORY),
+    })
+    if (result.error) {
+      throw new BluntError(result.error.code as ErrorCode, result.error.message)
+    }
+    let response
+    try {
+      response = decodeResponse(result.response!)
+    } catch (error) {
+      if (error instanceof InvalidResponseError) {
+        throw new BluntError('ERR_WORKER_CRASHED', `the worker sent an invalid response: ${error.message}`)
+      }
+      throw error
+    }
+    if (response.kind === 'error') {
+      throw new BluntError(response.code, response.message)
+    }
+    return response
+  }
+}
+
+let globalPool: Pool | undefined
+
+/** The pool used by pipelines without a `pool` option. Created with default options on first use. */
+export function defaultPool(): Pool {
+  globalPool ??= new Pool()
+  return globalPool
 }
 
 /**
@@ -257,16 +371,22 @@ function toError(error: NativeError): BluntError {
  */
 export class Pipeline {
   #input: Uint8Array
-  #limits: NativeLimitOptions = {}
+  #pool: Pool | undefined
+  #limits: LimitOptions = {}
+  #timeoutMs: number | undefined
   #autoOrient = false
   #rotate: number | undefined
   #resize: NativeResizeOptions | undefined
-  #blur: NativeTransformOptions['blur']
-  #output: Pick<NativeTransformOptions, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
+  #blur: TransformOptions['blur']
+  #output: Pick<TransformOptions, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
 
   constructor(input: Input, options: BluntOptions = {}) {
     this.#input = toUint8Array(input)
-    const { limitInputPixels, limitMemory, autoOrient } = options
+    const { limitInputPixels, limitMemory, autoOrient, pool } = options
+    if (pool !== undefined && !(pool instanceof Pool)) {
+      throw invalid('pool', 'Pool', pool)
+    }
+    this.#pool = pool
     if (limitInputPixels !== undefined) {
       if (typeof limitInputPixels === 'boolean') {
         this.#limits.limitInputPixels = limitInputPixels ? DEFAULT_LIMIT_INPUT_PIXELS : 0
@@ -285,6 +405,17 @@ export class Pipeline {
     if (optional(autoOrient, (v) => checkBoolean('autoOrient', v))) {
       this.autoOrient()
     }
+  }
+
+  /**
+   * Limits the wall time of processing (in seconds, 0-3600), like sharp. The time starts when a
+   * worker picks up the image, not while it waits for a free worker. The worker is killed when the
+   * time runs out, so this works even if a decoder hangs.
+   */
+  timeout(options: TimeoutOptions): this {
+    const seconds = checkInteger('timeout.seconds', options?.seconds, 0, 3600)
+    this.#timeoutMs = seconds === 0 ? undefined : seconds * 1000
+    return this
   }
 
   /** Rotates using the EXIF orientation, which is then stripped (like all metadata). */
@@ -450,7 +581,7 @@ export class Pipeline {
   toBuffer(options?: ToBufferOptions & { resolveWithObject?: false }): Promise<Buffer>
   toBuffer(options: ToBufferOptions & { resolveWithObject: true }): Promise<{ data: Buffer; info: OutputInfo }>
   async toBuffer(options: ToBufferOptions = {}): Promise<Buffer | { data: Buffer; info: OutputInfo }> {
-    const nativeOptions: NativeTransformOptions = {
+    const transform: TransformOptions = {
       limits: this.#limits,
       autoOrient: this.#autoOrient,
       rotate: this.#rotate,
@@ -458,25 +589,23 @@ export class Pipeline {
       blur: this.#blur,
       ...this.#output,
     }
-    const result = await nativeTransform(this.#input, nativeOptions)
-    if (result.error) {
-      throw toError(result.error)
+    const response = await this.#run({ transform })
+    if (response.kind !== 'transform') {
+      throw new BluntError('ERR_WORKER_CRASHED', `the worker sent a ${response.kind} response to a transform`)
     }
-    const data = result.data!
-    const info = result.info as OutputInfo
+    const { data, info } = response
     return options.resolveWithObject ? { data, info } : data
   }
 
-  /** Reads the image header without decoding pixels. Ignores all operations. */
+  /** Reads the image header without decoding pixels. Ignores all operations except `timeout()`. */
   async metadata(): Promise<Metadata> {
-    const result = await nativeMetadata(this.#input, this.#limits)
-    if (result.error) {
-      throw toError(result.error)
+    const metadata = await this.#run({ metadata: this.#limits })
+    if (metadata.kind !== 'metadata') {
+      throw new BluntError('ERR_WORKER_CRASHED', `the worker sent a ${metadata.kind} response to metadata`)
     }
-    const metadata = result.metadata!
     const swap = metadata.orientation >= 5
     return {
-      format: metadata.format as InputFormat,
+      format: metadata.format,
       width: metadata.width,
       height: metadata.height,
       hasAlpha: metadata.hasAlpha,
@@ -487,6 +616,10 @@ export class Pipeline {
         height: swap ? metadata.width : metadata.height,
       },
     }
+  }
+
+  #run(options: RequestOptions): Promise<Response> {
+    return (this.#pool ?? defaultPool()).run(this.#input, options, this.#limits, this.#timeoutMs)
   }
 }
 

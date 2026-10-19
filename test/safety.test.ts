@@ -57,10 +57,23 @@ describe('limits', () => {
     await blunt(input, { limitInputPixels: 0 }).toBuffer()
   })
 
-  test('limitMemory', async () => {
+  test('limitAllocatorMemory', async () => {
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
-    await assertRejectsWithCode(blunt(input, { limitMemory: 20_000 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
-    await blunt(input, { limitMemory: 100_000 }).toBuffer()
+    await assertRejectsWithCode(blunt(input, { limitAllocatorMemory: 20_000 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).toBuffer()
+  })
+
+  test('limitAllocatorMemory counts actual allocations, not just estimates', async () => {
+    // The decoded image (30 KB) fits, but not with the decoder's and encoder's buffers.
+    const input = await fromRaw(pattern(100, 100)).png().toBuffer()
+    await assert.rejects(blunt(input, { limitAllocatorMemory: 60_000 }).toBuffer(), (error: unknown) => {
+      assert.ok(error instanceof BluntError)
+      assert.equal(error.code, 'ERR_LIMIT_EXCEEDED')
+      assert.match(error.message, /allocated more than limitAllocatorMemory/)
+      return true
+    })
+    // The worker that exceeded the limit was replaced.
+    await blunt(input).toBuffer()
   })
 
   test('default pixel limit rejects huge declared dimensions before allocating', async () => {
@@ -101,9 +114,9 @@ describe('limits', () => {
   test('encoder memory counts against the memory limit', async () => {
     const input = await fromRaw(pattern(256, 256)).png().toBuffer()
     // Lossless WebP needs much more memory than PNG for the same image.
-    await blunt(input, { limitMemory: 1024 * 1024 }).png().toBuffer()
+    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).png().toBuffer()
     await assertRejectsWithCode(
-      blunt(input, { limitMemory: 1024 * 1024 }).webp({ lossless: true }).toBuffer(),
+      blunt(input, { limitAllocatorMemory: 1024 * 1024 }).webp({ lossless: true }).toBuffer(),
       'ERR_LIMIT_EXCEEDED',
     )
   })
@@ -189,8 +202,8 @@ describe('limits', () => {
   test('AVIF decoder memory counts against the memory limit', async () => {
     // 4:4:4 frames are 3 bytes per pixel, counted twice for film grain, plus the RGB output.
     const input = await fromRaw(pattern(256, 256)).avif().toBuffer()
-    await assertRejectsWithCode(blunt(input, { limitMemory: 400_000 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
-    await blunt(input, { limitMemory: 1024 * 1024 }).png().toBuffer()
+    await assertRejectsWithCode(blunt(input, { limitAllocatorMemory: 400_000 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).png().toBuffer()
   })
 
   test('JPEG-compressed TIFFs are rejected', async () => {

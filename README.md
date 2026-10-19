@@ -20,7 +20,7 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 - **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp).
 - **Operations:** auto-orient, rotate (multiples of 90°), resize (all of sharp's `fit` modes, gravity, kernels), blur.
 - `metadata()` reads the header without decoding pixels.
-- `timeout({ seconds })`, like sharp's, which kills the worker if processing takes too long.
+- `timeout({ seconds })`, like sharp's, which kills the worker if processing takes too long. There's no default timeout, but you should set one for untrusted input.
 - Errors are `BluntError`s with a stable `code`.
 - TypeScript types are included.
 
@@ -29,8 +29,8 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 | Layer | Status |
 | --- | --- |
 | Memory-safe decoders | `zune-jpeg`, `png`, `image-webp`, `gif`, `tiff` (via `image`), `avif-decode` (`avif-parse` and `rav1d`, without asm). |
-| Memory limits | `limitInputPixels` (default 268402689, like sharp), and `limitMemory` (default 512 MiB), which bounds the estimated memory of each stage (decode, resize, blur, encode) and is passed to decoders as their allocation budget. Decoder metadata buffers (ICC, EXIF) have a separate, smaller cap. Frames must match (or fit inside) the declared canvas. |
-| CPU limits | Work is bounded by the pixel and memory limits, plus format-specific bounds: at most 32 progressive JPEG scans, at most 4096 JPEG APP1 segments, and at most 8 AV1 frames per AVIF item. JPEG-compressed TIFFs are rejected. Blur cost is bounded regardless of sigma. `timeout()` bounds the wall time of each image, by killing its worker. |
+| Memory limits | `limitInputPixels` (default 268402689, like sharp). `limitAllocatorMemory` (default 512 MiB) bounds what each image may allocate: the worker's allocator tracks every Rust allocation, and the worker exits with `ERR_LIMIT_EXCEEDED` if they exceed it. Each stage (decode, resize, blur, encode) also estimates its memory up front, and the limit is passed to decoders as their allocation budget. The pool's `limitProcessMemory` (default 768 MiB) is a hard, OS-enforced limit per worker (`RLIMIT_DATA` on Linux, the memory's maximum size for wasm) that also covers libwebp, which the allocator can't see. macOS accepts `RLIMIT_DATA` but doesn't enforce it, and Windows has no equivalent yet. Decoder metadata buffers (ICC, EXIF) have a separate, smaller cap. Frames must match (or fit inside) the declared canvas. |
+| CPU limits | Work is bounded by the pixel and memory limits, plus format-specific bounds: at most 32 progressive JPEG scans, at most 4096 JPEG APP1 segments, and at most 8 AV1 frames per AVIF item. JPEG-compressed TIFFs are rejected. Blur cost is bounded regardless of sigma. `timeout()` bounds the wall time of each image, by killing its worker. There's no default, so set one for untrusted input. |
 | Process isolation | Images are processed in worker processes, never in the Node process. A panic, abort, or allocation failure only ends the worker, and is reported as an error (`ERR_WORKER_CRASHED` or `ERR_OUT_OF_MEMORY`). This covers rav1d, which calls its DSP routines and picture allocator through `extern "C"` function pointers, where panics can't unwind. Workers get an empty environment, and on Linux (x86_64 and aarch64) a seccomp filter blocks every syscall besides reading and writing already-open file descriptors (their pipes and stderr), memory management, and exiting: no opening files or sockets, and no spawning processes. Workers are reused, one image at a time, so a compromised worker could affect later images. The input is copied before processing, so JS can't mutate it mid-decode. |
 | Encoders | They only see pixels we produced. Lossy WebP uses libwebp (C), because `image-webp` only encodes lossless. |
 | wasm | The `wasm32-wasip1` build runs in worker threads. Its only imports are a few stubbed-out WASI functions (no filesystem, environment, or JS access), and the build fails if it imports anything else. Each instance's memory has a configurable maximum. |
@@ -76,7 +76,7 @@ const pool = new Pool({ concurrency: 4, idleTimeout: 30_000 })
 const output = await blunt(input, { pool }).timeout({ seconds: 10 }).webp().toBuffer()
 ```
 
-The native backend uses worker processes. Without a native binding for the platform, or with `backend: 'wasm'` (or `BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm`), workers are threads running a wasm build. `wasmMaxMemory` limits each one's memory.
+The native backend uses worker processes. Without a native binding for the platform, or with `backend: 'wasm'` (or `BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm`), workers are threads running a wasm build. `limitProcessMemory` limits each worker's memory.
 
 ## Future work
 

@@ -17,11 +17,14 @@ use std::time::{Duration, Instant};
 const EXIT_OUT_OF_MEMORY: i32 = 86;
 const EXIT_VERSION_MISMATCH: i32 = 87;
 const EXIT_SANDBOX_FAILED: i32 = 88;
+const EXIT_MEMORY_LIMIT: i32 = 90;
 
 pub struct Config {
     pub worker_path: PathBuf,
     pub max_processes: usize,
     pub idle_timeout: Duration,
+    /// The worker's `RLIMIT_DATA` in bytes, or 0 for none.
+    pub memory_limit: u64,
 }
 
 pub struct Failure {
@@ -130,7 +133,7 @@ impl Pool {
         while let Some(job) = self.next_job() {
             let w = match &mut worker {
                 Some(w) => w,
-                None => match Worker::spawn(&self.config.worker_path) {
+                None => match Worker::spawn(&self.config) {
                     Ok(w) => worker.insert(w),
                     Err(failure) => {
                         (job.done)(Err(failure));
@@ -190,11 +193,13 @@ impl From<io::Error> for ExchangeError {
 }
 
 impl Worker {
-    fn spawn(path: &PathBuf) -> Result<Self, Failure> {
+    fn spawn(config: &Config) -> Result<Self, Failure> {
+        let path = &config.worker_path;
         let mut command = Command::new(path);
         command
             .arg(env!("CARGO_PKG_VERSION"))
             .arg(std::process::id().to_string())
+            .arg(config.memory_limit.to_string())
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -253,6 +258,10 @@ impl Worker {
             ),
             (ExchangeError::Io, Ok(status)) => match status.code() {
                 Some(EXIT_OUT_OF_MEMORY) => Failure::new("ERR_OUT_OF_MEMORY", "out of memory"),
+                Some(EXIT_MEMORY_LIMIT) => Failure::new(
+                    "ERR_LIMIT_EXCEEDED",
+                    "Limit exceeded: processing allocated more than limitAllocatorMemory",
+                ),
                 Some(EXIT_VERSION_MISMATCH) => Failure::new(
                     "ERR_WORKER_SPAWN",
                     "the worker binary doesn't match the native binding's version",

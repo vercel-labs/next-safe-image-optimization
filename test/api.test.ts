@@ -73,7 +73,7 @@ describe('argument validation', () => {
     const input = await png()
     assert.throws(() => blunt(input, { limitInputPixels: -1 }), TypeError)
     assert.throws(() => blunt(input, { limitInputPixels: 1.5 }), TypeError)
-    assert.throws(() => blunt(input, { limitMemory: 0 }), TypeError)
+    assert.throws(() => blunt(input, { limitAllocatorMemory: 0 }), TypeError)
   })
 })
 

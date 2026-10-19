@@ -90,7 +90,7 @@ describe('resize matches sharp', () => {
   test('rejects outputs over the memory limit', async () => {
     const input = await photo()
     await assert.rejects(
-      blunt(input, { limitMemory: 1024 * 1024 }).resize(1000, 1000).toBuffer(),
+      blunt(input, { limitAllocatorMemory: 1024 * 1024 }).resize(1000, 1000).toBuffer(),
       (error: { code?: string }) => error.code === 'ERR_LIMIT_EXCEEDED',
     )
   })

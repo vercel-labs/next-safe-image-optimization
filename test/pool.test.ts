@@ -73,13 +73,21 @@ describe('pool', () => {
     assert.ok(performance.now() - start < 20_000)
   })
 
-  test('wasm workers that run out of memory are reported and replaced', { skip: backend !== 'wasm' }, async () => {
-    const pool = new Pool({ backend: 'wasm', concurrency: 1, wasmMaxMemory: 48 * 1024 * 1024 })
-    // 48 MB of pixels, which doesn't fit along with the module's stack and data.
-    const large = await fromRaw(pattern(4000, 4000)).png().toBuffer()
-    await assertRejectsWithCode(blunt(large, { pool }).png().toBuffer(), 'ERR_OUT_OF_MEMORY')
+  // The OS enforces it on Linux, and wasm enforces it everywhere.
+  const enforcesProcessMemory = backend === 'wasm' || process.platform === 'linux'
+  test('limitProcessMemory is enforced, and the worker is replaced', { skip: !enforcesProcessMemory }, async () => {
+    const pool = new Pool({ concurrency: 1, limitProcessMemory: 48 * 1024 * 1024 })
+    // 75 MB of pixels. `limitAllocatorMemory` allows it, so the allocator doesn't stop it first.
+    const large = await fromRaw(pattern(5000, 5000)).png().toBuffer()
+    await assertRejectsWithCode(blunt(large, { pool, limitAllocatorMemory: 2 ** 30 }).png().toBuffer(), 'ERR_OUT_OF_MEMORY')
     const small = await fromRaw(pattern(30, 30)).png().toBuffer()
     await blunt(small, { pool }).png().toBuffer()
+  })
+
+  test('limitProcessMemory is validated', () => {
+    assert.throws(() => new Pool({ limitProcessMemory: -1 }), TypeError)
+    assert.throws(() => new Pool({ limitProcessMemory: true as never }), TypeError)
+    new Pool({ limitProcessMemory: false })
   })
 })
 
@@ -104,7 +112,7 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     return path
   }
   function run(workerPath: string, timeoutMs?: number): Promise<RunResult> {
-    const pool = new binding.WorkerPool({ workerPath, maxProcesses: 1, idleTimeoutMs: 1000 })
+    const pool = new binding.WorkerPool({ workerPath, maxProcesses: 1, idleTimeoutMs: 1000, memoryLimit: 0 })
     return pool.run(Buffer.alloc(16), '{}', { timeoutMs, maxResponseBytes: 1024 })
   }
   async function assertFails(result: Promise<RunResult>, code: string) {

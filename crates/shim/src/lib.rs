@@ -45,6 +45,8 @@ pub struct PoolOptions {
     pub worker_path: String,
     pub max_processes: u32,
     pub idle_timeout_ms: u32,
+    /// Each worker's `RLIMIT_DATA` in bytes (Linux and macOS), or 0 for none.
+    pub memory_limit: f64,
 }
 
 #[napi(object)]
@@ -90,6 +92,7 @@ impl WorkerPool {
             worker_path: PathBuf::from(options.worker_path),
             max_processes: options.max_processes as usize,
             idle_timeout: Duration::from_millis(u64::from(options.idle_timeout_ms)),
+            memory_limit: options.memory_limit as u64,
         })
         .map_err(|err| {
             napi::Error::from_reason(format!("failed to start the watchdog thread: {err}"))

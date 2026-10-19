@@ -1,5 +1,5 @@
 //! The worker process. The shim (`crates/shim`) spawns it with the arguments `<version> <parent
-//! pid>`, an empty environment, and pipes for stdin and stdout.
+//! pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for stdin and stdout.
 //!
 //! Requests arrive on stdin as `[u64 LE length][request]`, and responses are written to stdout
 //! (see `blunt_core::protocol`). The worker handles one request at a time. It exits as soon as
@@ -21,9 +21,19 @@ fn main() {
     if args.next().as_deref() != Some(OsStr::new(env!("CARGO_PKG_VERSION"))) {
         exit_immediately(EXIT_VERSION_MISMATCH);
     }
-    let parent = args
-        .next()
-        .and_then(|pid| pid.to_str()?.parse::<u32>().ok());
+    let mut number = || {
+        args.next()
+            .and_then(|arg| arg.to_str()?.parse::<u64>().ok())
+    };
+    let parent = number().and_then(|pid| u32::try_from(pid).ok());
+    let memory_limit = number().unwrap_or(0);
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if memory_limit > 0 && limit_process_memory(memory_limit).is_err() {
+        exit_immediately(EXIT_SANDBOX_FAILED);
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = memory_limit;
 
     #[cfg(target_os = "linux")]
     sandbox::exit_with_parent(parent);
@@ -87,6 +97,24 @@ fn read_requests(sender: mpsc::SyncSender<Vec<u8>>) -> ! {
             exit_immediately(0);
         }
     }
+}
+
+/// Sets the hard (and soft) `RLIMIT_DATA`. Unlike the allocator's limit, this also covers libwebp
+/// (C), but it can't distinguish going over the limit from any other allocation failure.
+///
+/// Linux counts private writable mappings (so all of `malloc`'s memory, but not code or address
+/// space that's only reserved). macOS accepts the limit, but doesn't enforce it for `mmap`, which
+/// is where most allocations come from.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn limit_process_memory(bytes: u64) -> Result<(), ()> {
+    let limit = libc::rlimit {
+        rlim_cur: bytes as libc::rlim_t,
+        rlim_max: bytes as libc::rlim_t,
+    };
+    if unsafe { libc::setrlimit(libc::RLIMIT_DATA, &limit) } != 0 {
+        return Err(());
+    }
+    Ok(())
 }
 
 /// Moves stdout to a private file descriptor and points fd 1 at stderr, so that nothing else

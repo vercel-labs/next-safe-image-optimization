@@ -13,8 +13,10 @@ const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 pub struct Limits {
     /// Maximum `width * height` of the input image.
     pub input_pixels: u64,
-    /// Maximum estimated memory in bytes for each stage (decode, resize, blur, encode), and the
-    /// allocation budget passed to decoders that support one.
+    /// Maximum memory in bytes that the worker may allocate while processing the request (enforced
+    /// by `ExitOnOom`, for Rust allocations). Also the maximum estimated memory for each stage
+    /// (decode, resize, blur, encode), checked before the stage runs so that the error is clearer,
+    /// and the allocation budget passed to decoders that support one.
     pub memory: u64,
 }
 

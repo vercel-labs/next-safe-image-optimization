@@ -121,7 +121,7 @@ struct GifOptions {
 pub struct LimitOptions {
     /// 0 disables the limit.
     limit_input_pixels: Option<f64>,
-    limit_memory: Option<f64>,
+    limit_allocator_memory: Option<f64>,
 }
 
 #[derive(Default, Deserialize)]
@@ -176,8 +176,8 @@ pub fn parse_limits(options: Option<LimitOptions>) -> Result<Limits> {
             let pixels = int("limitInputPixels", pixels, 0.0, MAX_SAFE_INTEGER)? as u64;
             limits.input_pixels = if pixels == 0 { u64::MAX } else { pixels };
         }
-        if let Some(memory) = options.limit_memory {
-            limits.memory = int("limitMemory", memory, 1.0, MAX_SAFE_INTEGER)? as u64;
+        if let Some(memory) = options.limit_allocator_memory {
+            limits.memory = int("limitAllocatorMemory", memory, 1.0, MAX_SAFE_INTEGER)? as u64;
         }
     }
     Ok(limits)
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn parses_transform() {
         let request = parse(
-            br#"{"transform":{"limits":{"limitMemory":1000},"rotate":90,"resize":{"width":10},
+            br#"{"transform":{"limits":{"limitAllocatorMemory":1000},"rotate":90,"resize":{"width":10},
                 "blur":{},"format":"webp","webp":{"quality":50}}}"#,
         )
         .unwrap();
@@ -351,7 +351,7 @@ mod tests {
             r#"{"transform":{"resize":{"width":0}}}"#,
             r#"{"transform":{"format":"avif"}}"#,
             r#"{"transform":{"unknown":1}}"#,
-            r#"{"metadata":{"limitMemory":0}}"#,
+            r#"{"metadata":{"limitAllocatorMemory":0}}"#,
             r#"{"other":{}}"#,
         ] {
             let result = parse(json.as_bytes()).and_then(|request| match request {

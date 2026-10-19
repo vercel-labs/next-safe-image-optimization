@@ -10,7 +10,7 @@ import type {
   Response,
   TransformOptions,
 } from './protocol.js'
-import { MAX_MEMORY_BYTES, WasmBackend } from './wasm.js'
+import { WasmBackend } from './wasm.js'
 
 export type InputFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'tiff' | 'avif'
 export type OutputFormat = 'jpeg' | 'png' | 'webp' | 'gif'
@@ -56,11 +56,12 @@ export interface BluntOptions {
    */
   limitInputPixels?: number | boolean
   /**
-   * The maximum memory in bytes that each stage (decode, resize, blur, encode) may allocate,
-   * estimated before the stage runs. Also passed to decoders as their allocation budget. Default:
-   * 512 MiB.
+   * The maximum memory in bytes that processing may allocate, including the input. The worker's
+   * allocator enforces this, by exiting the worker, which doesn't cover libwebp (C); see the
+   * pool's `limitProcessMemory` for that. Each stage (decode, resize, blur, encode) also estimates
+   * its memory before it runs, for a clearer error. Default: 512 MiB.
    */
-  limitMemory?: number
+  limitAllocatorMemory?: number
   /** Equivalent to calling `autoOrient()`. */
   autoOrient?: boolean
   /** The pool of workers that processes the image. Default: `defaultPool()`. */
@@ -80,8 +81,14 @@ export interface PoolOptions {
   concurrency?: number
   /** Milliseconds before an idle worker exits. Default: 10000. */
   idleTimeout?: number
-  /** `'wasm'` only: the maximum memory of each worker in bytes. Default: 4 GiB (the most possible). */
-  wasmMaxMemory?: number
+  /**
+   * The maximum memory of each worker in bytes, enforced by the OS: `RLIMIT_DATA` on Linux (macOS
+   * accepts it, but doesn't enforce it), and the memory's maximum size for wasm. There's no limit
+   * on Windows. This is a backstop for `limitAllocatorMemory`, and unlike it, covers libwebp (C).
+   * It's per worker, not per image, so it should be larger than `limitAllocatorMemory`. `false` or
+   * `0` removes the limit (not recommended). Default: 768 MiB.
+   */
+  limitProcessMemory?: number | false
 }
 
 export interface ResizeOptions {
@@ -286,15 +293,19 @@ function toUint8Array(input: Input): Uint8Array {
 }
 
 /** Same as `DEFAULT_MEMORY` in `crates/core/src/limits.rs`. */
-const DEFAULT_LIMIT_MEMORY = 512 * 1024 * 1024
+const DEFAULT_LIMIT_ALLOCATOR_MEMORY = 512 * 1024 * 1024
+const DEFAULT_LIMIT_PROCESS_MEMORY = 768 * 1024 * 1024
 const BACKENDS: readonly BackendName[] = ['native', 'wasm']
 
 function createBackend(options: PoolOptions): Backend {
   const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1, 0xffffffff))
   const idleTimeout = optional(options.idleTimeout, (v) => checkInteger('idleTimeout', v, 0, 0xffffffff))
-  const wasmMaxMemory = optional(options.wasmMaxMemory, (v) =>
-    checkInteger('wasmMaxMemory', v, 1, Number.MAX_SAFE_INTEGER),
-  )
+  const memoryLimit =
+    options.limitProcessMemory === false
+      ? 0
+      : (optional(options.limitProcessMemory, (v) =>
+          checkInteger('limitProcessMemory', v, 0, Number.MAX_SAFE_INTEGER),
+        ) ?? DEFAULT_LIMIT_PROCESS_MEMORY)
   const backend = options.backend ?? process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND
   if (backend !== undefined) {
     checkOneOf('backend', backend, BACKENDS)
@@ -302,7 +313,7 @@ function createBackend(options: PoolOptions): Backend {
   const maxWorkers = concurrency ?? availableParallelism()
   const idleTimeoutMs = idleTimeout ?? 10_000
   const wasm = () =>
-    new WasmBackend({ maxWorkers, idleTimeoutMs, maxMemoryBytes: Math.min(wasmMaxMemory ?? Infinity, MAX_MEMORY_BYTES) })
+    new WasmBackend({ maxWorkers, idleTimeoutMs, memoryLimit })
   if (backend === 'wasm') {
     return wasm()
   }
@@ -315,7 +326,7 @@ function createBackend(options: PoolOptions): Backend {
     }
     return wasm()
   }
-  return new NativeBackend(binding, { maxProcesses: maxWorkers, idleTimeoutMs })
+  return new NativeBackend(binding, { maxProcesses: maxWorkers, idleTimeoutMs, memoryLimit })
 }
 
 /**
@@ -336,7 +347,7 @@ export class Pool {
   async run(input: Uint8Array, options: RequestOptions, limits: LimitOptions, timeoutMs?: number): Promise<Response> {
     const result = await this.#backend.run(input, encodeOptions(options), {
       timeoutMs,
-      maxResponseBytes: maxResponseBytes(limits.limitMemory ?? DEFAULT_LIMIT_MEMORY),
+      maxResponseBytes: maxResponseBytes(limits.limitAllocatorMemory ?? DEFAULT_LIMIT_ALLOCATOR_MEMORY),
     })
     if (result.error) {
       throw new BluntError(result.error.code as ErrorCode, result.error.message)
@@ -382,7 +393,7 @@ export class Pipeline {
 
   constructor(input: Input, options: BluntOptions = {}) {
     this.#input = toUint8Array(input)
-    const { limitInputPixels, limitMemory, autoOrient, pool } = options
+    const { limitInputPixels, limitAllocatorMemory, autoOrient, pool } = options
     if (pool !== undefined && !(pool instanceof Pool)) {
       throw invalid('pool', 'Pool', pool)
     }
@@ -399,8 +410,8 @@ export class Pipeline {
         )
       }
     }
-    this.#limits.limitMemory = optional(limitMemory, (v) =>
-      checkInteger('limitMemory', v, 1, Number.MAX_SAFE_INTEGER),
+    this.#limits.limitAllocatorMemory = optional(limitAllocatorMemory, (v) =>
+      checkInteger('limitAllocatorMemory', v, 1, Number.MAX_SAFE_INTEGER),
     )
     if (optional(autoOrient, (v) => checkBoolean('autoOrient', v))) {
       this.autoOrient()
@@ -411,6 +422,9 @@ export class Pipeline {
    * Limits the wall time of processing (in seconds, 0-3600), like sharp. The time starts when a
    * worker picks up the image, not while it waits for a free worker. The worker is killed when the
    * time runs out, so this works even if a decoder hangs.
+   *
+   * There's no timeout by default (like sharp), but you should set one for untrusted input.
+   * Otherwise, an image that's slow to process can occupy a worker indefinitely.
    */
   timeout(options: TimeoutOptions): this {
     const seconds = checkInteger('timeout.seconds', options?.seconds, 0, 3600)

@@ -15,4 +15,4 @@ mod pipeline;
 pub mod protocol;
 mod request;
 
-pub use crate::alloc::{ExitOnOom, exit_immediately};
+pub use crate::alloc::{ExitOnOom, exit_immediately, set_memory_limit};

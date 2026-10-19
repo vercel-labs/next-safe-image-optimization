@@ -11,6 +11,8 @@ type Binding = typeof import('../binding.js')
 export interface NativeOptions {
   maxProcesses: number
   idleTimeoutMs: number
+  /** Each worker's `RLIMIT_DATA`, or 0 for none. */
+  memoryLimit: number
   workerPath?: string
 }
 
@@ -47,6 +49,7 @@ export class NativeBackend implements Backend {
       workerPath: options.workerPath ?? findWorker(binding),
       maxProcesses: options.maxProcesses,
       idleTimeoutMs: options.idleTimeoutMs,
+      memoryLimit: options.memoryLimit,
     })
   }
 

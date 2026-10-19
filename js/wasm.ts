@@ -7,15 +7,15 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
-import { EXIT_OUT_OF_MEMORY } from './protocol.js'
+import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY } from './protocol.js'
 import type { Backend, RunOptions, RunResult } from './protocol.js'
 import type { WasmWorkerData, WasmWorkerMessage } from './wasm-worker.js'
 
 export interface WasmOptions {
   maxWorkers: number
   idleTimeoutMs: number
-  /** The maximum size of each instance's memory. */
-  maxMemoryBytes: number
+  /** The maximum size of each instance's memory, or 0 for the most possible. */
+  memoryLimit: number
 }
 
 /** 64 KiB. */
@@ -23,7 +23,7 @@ const PAGE_SIZE = 64 * 1024
 /** 32 MiB. Must match `--initial-memory` in `.cargo/config.toml`. */
 const INITIAL_PAGES = 512
 /** The most that wasm32 can address. */
-export const MAX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
+const MAX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 
 interface Job {
   request: Uint8Array
@@ -100,7 +100,8 @@ export class WasmBackend implements Backend {
   }
 
   #spawn(module: WebAssembly.Module): Slot {
-    const maximumPages = Math.max(INITIAL_PAGES, Math.floor(this.#options.maxMemoryBytes / PAGE_SIZE))
+    const memoryLimit = Math.min(this.#options.memoryLimit || MAX_MEMORY_BYTES, MAX_MEMORY_BYTES)
+    const maximumPages = Math.max(INITIAL_PAGES, Math.floor(memoryLimit / PAGE_SIZE))
     const workerData: WasmWorkerData = { module, initialPages: INITIAL_PAGES, maximumPages }
     const slot: Slot = { worker: new Worker(join(__dirname, 'wasm-worker.js'), { workerData }) }
     this.#slots.add(slot)
@@ -116,6 +117,9 @@ export class WasmBackend implements Backend {
         this.#release(slot)
       } else if (message.exit === EXIT_OUT_OF_MEMORY) {
         job.resolve(failure('ERR_OUT_OF_MEMORY', 'out of memory'))
+        this.#discard(slot)
+      } else if (message.exit === EXIT_MEMORY_LIMIT) {
+        job.resolve(failure('ERR_LIMIT_EXCEEDED', 'Limit exceeded: processing allocated more than limitAllocatorMemory'))
         this.#discard(slot)
       } else {
         const reason = message.exit === undefined ? message.crash : `exit code ${message.exit}`

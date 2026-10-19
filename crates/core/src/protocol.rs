@@ -13,7 +13,9 @@
 //! Integers are little-endian. Formats and error codes are indexes into [`FORMATS`] and
 //! [`ERROR_CODES`].
 
+use crate::alloc::set_memory_limit;
 use crate::error::{Error, Result};
+use crate::limits::Limits;
 use crate::pipeline;
 use crate::request::{self, Request};
 
@@ -23,6 +25,8 @@ pub const EXIT_OUT_OF_MEMORY: i32 = 86;
 pub const EXIT_VERSION_MISMATCH: i32 = 87;
 pub const EXIT_SANDBOX_FAILED: i32 = 88;
 pub const EXIT_INVALID_FRAME: i32 = 89;
+/// Allocations exceeded the request's `limitAllocatorMemory` (see `alloc.rs`).
+pub const EXIT_MEMORY_LIMIT: i32 = 90;
 
 pub const KIND_TRANSFORM: u8 = 0;
 pub const KIND_METADATA: u8 = 1;
@@ -53,7 +57,10 @@ pub fn handle(request: Vec<u8>) -> Response {
         head: vec![0; LENGTH_PREFIX],
         data: Vec::new(),
     };
-    if let Err(err) = run(request, &mut response) {
+    let result = run(request, &mut response);
+    // The next request's input is read before its limit is known.
+    set_memory_limit(usize::MAX);
+    if let Err(err) = result {
         response.head.truncate(LENGTH_PREFIX);
         response.head.push(KIND_ERROR);
         response.head.push(error_index(&err));
@@ -77,6 +84,7 @@ fn run(mut request: Vec<u8>, response: &mut Response) -> Result<()> {
     match request_options {
         Request::Transform(options) => {
             let pipeline = request::parse_pipeline(options)?;
+            limit_allocator_memory(&pipeline.limits);
             let output = pipeline::run(input, &pipeline)?;
             let encoded = output.encoded;
             let head = &mut response.head;
@@ -89,6 +97,7 @@ fn run(mut request: Vec<u8>, response: &mut Response) -> Result<()> {
         }
         Request::Metadata(options) => {
             let limits = request::parse_limits(Some(options))?;
+            limit_allocator_memory(&limits);
             let header = pipeline::metadata(&input, &limits)?;
             let head = &mut response.head;
             head.push(KIND_METADATA);
@@ -101,6 +110,11 @@ fn run(mut request: Vec<u8>, response: &mut Response) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The limit covers everything the worker has allocated, including the request itself.
+fn limit_allocator_memory(limits: &Limits) {
+    set_memory_limit(usize::try_from(limits.memory).unwrap_or(usize::MAX));
 }
 
 fn format_index(name: &str) -> u8 {

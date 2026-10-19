@@ -24,6 +24,8 @@ export interface PoolOptions {
   workerPath: string
   maxProcesses: number
   idleTimeoutMs: number
+  /** Each worker's `RLIMIT_DATA` in bytes (Linux and macOS), or 0 for none. */
+  memoryLimit: number
 }
 
 export interface RunError {

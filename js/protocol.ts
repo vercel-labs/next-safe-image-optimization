@@ -12,7 +12,7 @@ export interface RequestOptions {
 export interface LimitOptions {
   /** 0 disables the limit. */
   limitInputPixels?: number
-  limitMemory?: number
+  limitAllocatorMemory?: number
 }
 
 export interface ColorOptions {
@@ -93,6 +93,7 @@ export interface Backend {
 
 /** These must match `crates/core/src/protocol.rs`. */
 export const EXIT_OUT_OF_MEMORY = 86
+export const EXIT_MEMORY_LIMIT = 90
 const KIND_TRANSFORM = 0
 const KIND_METADATA = 1
 const KIND_ERROR = 2
@@ -109,11 +110,11 @@ const ERROR_CODES = [
 const RESPONSE_OVERHEAD = 64 * 1024
 
 /**
- * The encoded image is bounded by the encoder's memory, which is bounded by `limitMemory`. So
+ * The encoded image is bounded by the encoder's memory, which is bounded by `limitAllocatorMemory`. So
  * anything larger means the worker is misbehaving.
  */
-export function maxResponseBytes(limitMemory: number): number {
-  return limitMemory + RESPONSE_OVERHEAD
+export function maxResponseBytes(limitAllocatorMemory: number): number {
+  return limitAllocatorMemory + RESPONSE_OVERHEAD
 }
 
 export function encodeOptions(options: RequestOptions): string {

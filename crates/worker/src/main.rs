@@ -28,11 +28,11 @@ fn main() {
     let parent = number().and_then(|pid| u32::try_from(pid).ok());
     let memory_limit = number().unwrap_or(0);
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     if memory_limit > 0 && limit_process_memory(memory_limit).is_err() {
         exit_immediately(EXIT_SANDBOX_FAILED);
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(target_os = "linux"))]
     let _ = memory_limit;
 
     #[cfg(target_os = "linux")]
@@ -103,9 +103,9 @@ fn read_requests(sender: mpsc::SyncSender<Vec<u8>>) -> ! {
 /// (C), but it can't distinguish going over the limit from any other allocation failure.
 ///
 /// Linux counts private writable mappings (so all of `malloc`'s memory, but not code or address
-/// space that's only reserved). macOS accepts the limit, but doesn't enforce it for `mmap`, which
-/// is where most allocations come from.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// space that's only reserved). Not on macOS, which counts all reserved address space (hundreds of
+/// GiB at startup on arm64), and rejects any smaller limit with `EINVAL`.
+#[cfg(target_os = "linux")]
 fn limit_process_memory(bytes: u64) -> Result<(), ()> {
     let limit = libc::rlimit {
         rlim_cur: bytes as libc::rlim_t,

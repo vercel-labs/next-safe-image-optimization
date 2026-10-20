@@ -82,9 +82,8 @@ export interface PoolOptions {
   /** Milliseconds before an idle worker exits. Default: 10000. */
   idleTimeout?: number
   /**
-   * The maximum memory of each worker in bytes, enforced by the OS: `RLIMIT_DATA` on Linux (macOS
-   * accepts it, but doesn't enforce it), and the memory's maximum size for wasm. There's no limit
-   * on Windows. This is a backstop for `limitAllocatorMemory`, and unlike it, covers libwebp (C).
+   * The maximum memory of each worker in bytes, enforced by the OS: `RLIMIT_DATA` on Linux, and the
+   * memory's maximum size for wasm. There's no limit on macOS or Windows. This is a backstop for `limitAllocatorMemory`, and unlike it, covers libwebp (C).
    * It's per worker, not per image, so it should be larger than `limitAllocatorMemory`. `false` or
    * `0` removes the limit (not recommended). Default: 768 MiB.
    */

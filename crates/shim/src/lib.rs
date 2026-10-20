@@ -45,7 +45,7 @@ pub struct PoolOptions {
     pub worker_path: String,
     pub max_processes: u32,
     pub idle_timeout_ms: u32,
-    /// Each worker's `RLIMIT_DATA` in bytes (Linux and macOS), or 0 for none.
+    /// Each worker's `RLIMIT_DATA` in bytes (Linux only), or 0 for none.
     pub memory_limit: f64,
 }
 

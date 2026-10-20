@@ -49,7 +49,6 @@ export interface TransformOptions {
   format?: OutputFormat
   jpeg?: {
     quality?: number
-    progressive?: boolean
     mozjpeg?: boolean
   }
   png?: { compressionLevel?: number; adaptiveFiltering?: boolean }

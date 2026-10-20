@@ -9,9 +9,9 @@ use crate::error::{Error, Result};
 pub struct JpegSpec {
     /// 1-100
     pub quality: u8,
-    pub progressive: bool,
-    /// Encode with mozjpeg (C), with trellis quantization, overshoot deringing, quantization table
-    /// 3, and (if progressive) scan optimization. Otherwise, with jpeg-encoder.
+    /// Encode with mozjpeg (C), with its defaults: progressive, with trellis quantization,
+    /// overshoot deringing, scan optimization, and quantization table 3. Otherwise, a baseline
+    /// JPEG with jpeg-encoder.
     pub mozjpeg: bool,
 }
 
@@ -20,17 +20,8 @@ impl Default for JpegSpec {
         // Same as sharp.
         Self {
             quality: 80,
-            progressive: false,
             mozjpeg: false,
         }
-    }
-}
-
-impl JpegSpec {
-    /// sharp's `mozjpeg: true` preset.
-    pub fn apply_mozjpeg_preset(&mut self) {
-        self.mozjpeg = true;
-        self.progressive = true;
     }
 }
 
@@ -57,7 +48,6 @@ fn encode_jpeg_encoder(img: &DynamicImage, spec: &JpegSpec) -> Result<Vec<u8>> {
     };
     let mut out = Vec::new();
     let mut encoder = Encoder::new(&mut out, spec.quality);
-    encoder.set_progressive(spec.progressive);
     encoder.set_optimized_huffman_tables(true);
     encoder.set_sampling_factor(SamplingFactor::F_2_2);
     encoder.set_chroma_subsampling_method(ChromaSubsamplingMethod::Average);
@@ -76,16 +66,12 @@ fn encode_jpeg_encoder(img: &DynamicImage, spec: &JpegSpec) -> Result<Vec<u8>> {
 /// expected for images we produced, besides `malloc` failing.
 fn encode_mozjpeg(img: &DynamicImage, spec: &JpegSpec) -> Result<Vec<u8>> {
     let error = |e: std::io::Error| Error::Encode(format!("mozjpeg: {e}"));
-    // mozjpeg's defaults are its "max compression" profile: progressive, with trellis
-    // quantization, overshoot deringing, scan optimization, and quantization table 3.
+    // mozjpeg's defaults are its "max compression" profile, which is also sharp's mozjpeg preset.
     let mut compress = mozjpeg::Compress::new(match img {
         DynamicImage::ImageLuma8(_) => mozjpeg::ColorSpace::JCS_GRAYSCALE,
         _ => mozjpeg::ColorSpace::JCS_RGB,
     });
     compress.set_size(img.width() as usize, img.height() as usize);
-    if !spec.progressive {
-        compress.set_optimize_scans(false);
-    }
     let table = mozjpeg_qtable(spec.quality);
     compress.set_luma_qtable(&table);
     compress.set_chroma_qtable(&table);
@@ -148,31 +134,24 @@ mod tests {
         let img = DynamicImage::ImageRgb8(image::RgbImage::from_fn(67, 33, |x, y| {
             image::Rgb([(x * 3) as u8, (y * 7) as u8, 128])
         }));
-        for progressive in [false, true] {
-            let spec = JpegSpec {
-                progressive,
-                mozjpeg: true,
-                ..JpegSpec::default()
-            };
-            let (jpeg, channels) = encode(img.clone(), &spec).unwrap();
-            assert_eq!(channels, 3);
-            let decoded = decode(&jpeg).into_rgb8();
-            assert_eq!(decoded.dimensions(), (67, 33));
-            let error = decoded
-                .pixels()
-                .zip(img.as_rgb8().unwrap().pixels())
-                .flat_map(|(a, b)| a.0.into_iter().zip(b.0))
-                .map(|(a, b)| u32::from(a.abs_diff(b)))
-                .max()
-                .unwrap();
-            assert!(error < 16, "max error {error}");
-        }
-
-        let gray = DynamicImage::ImageLuma8(image::GrayImage::new(9, 9));
         let spec = JpegSpec {
             mozjpeg: true,
             ..JpegSpec::default()
         };
+        let (jpeg, channels) = encode(img.clone(), &spec).unwrap();
+        assert_eq!(channels, 3);
+        let decoded = decode(&jpeg).into_rgb8();
+        assert_eq!(decoded.dimensions(), (67, 33));
+        let error = decoded
+            .pixels()
+            .zip(img.as_rgb8().unwrap().pixels())
+            .flat_map(|(a, b)| a.0.into_iter().zip(b.0))
+            .map(|(a, b)| u32::from(a.abs_diff(b)))
+            .max()
+            .unwrap();
+        assert!(error < 16, "max error {error}");
+
+        let gray = DynamicImage::ImageLuma8(image::GrayImage::new(9, 9));
         let (jpeg, channels) = encode(gray, &spec).unwrap();
         assert_eq!(channels, 1);
         assert_eq!(decode(&jpeg).color(), image::ColorType::L8);

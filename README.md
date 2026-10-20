@@ -44,7 +44,7 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 - No HEIF or SVG input. No AVIF, HEIF, or animated output.
 - No YCbCr TIFF input, which includes most JPEG-compressed TIFFs.
 - PNG output is always lossless truecolor: `png({ quality })` is accepted but ignored (no palette quantization), and `adaptiveFiltering` defaults to `true`.
-- JPEG uses `jpeg-encoder` by default, not mozjpeg, so files are somewhat larger than sharp's. `mozjpeg: true` uses mozjpeg, like sharp, but built without its SIMD assembly, so it's slower than sharp's. `chromaSubsampling` (always 4:2:0), `optimiseCoding` (always on), and `quantisationTable` aren't supported.
+- JPEG uses `jpeg-encoder` by default, not mozjpeg, so files are somewhat larger than sharp's. `mozjpeg: true` uses mozjpeg, like sharp, but built without its SIMD assembly, so it's slower than sharp's. `progressive`, `chromaSubsampling` (always 4:2:0), `optimiseCoding` (always on), and `quantisationTable` aren't supported. JPEGs may be progressive: they always are with `mozjpeg: true` (its defaults, like sharp's preset), and never are without it.
 - `blur(sigma)` uses a Gaussian kernel for σ < 3, and a three-pass box blur above that.
 - CMYK JPEGs are converted to RGB naively, ignoring their ICC profile.
 - `limitInputPixels` also applies to `metadata()`.

@@ -2,10 +2,9 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import sharp from 'sharp'
-import type { JpegOptions as SharpJpegOptions } from 'sharp'
 
 import { blunt } from '../dist/index.js'
-import type { JpegOptions, OutputFormat } from '../dist/index.js'
+import type { OutputFormat } from '../dist/index.js'
 import { assertRejectsWithCode, assertSimilar, formatOf, fromRaw, pattern } from './helpers.ts'
 
 const rgb = pattern(96, 64)
@@ -131,32 +130,14 @@ describe('encoder options', () => {
     assert.ok(low.length < high.length)
   })
 
-  test('jpeg progressive and mozjpeg presets produce progressive files', async () => {
-    const input = await inputs.png()
-    for (const options of [{ progressive: true }, { mozjpeg: true }]) {
-      const meta = await sharp(await blunt(input).jpeg(options).toBuffer()).metadata()
-      assert.equal(meta.isProgressive, true)
-    }
-  })
-
   test('mozjpeg matches sharp', async () => {
     const input = await fromRaw(pattern(256, 256)).png().toBuffer()
-    // sharp's preset overrides `progressive: false`, so that needs the preset's options instead.
-    const baseline = { trellisQuantisation: true, overshootDeringing: true, quantisationTable: 3 }
-    const cases: [JpegOptions, SharpJpegOptions][] = [
-      [{}, { mozjpeg: true }],
-      [{ progressive: false }, { ...baseline, progressive: false }],
-      // Low qualities need baseline (8-bit) quantization tables.
-      [{ quality: 20 }, { quality: 20, mozjpeg: true }],
-      [{ quality: 50 }, { quality: 50, mozjpeg: true }],
-      [{ quality: 95 }, { quality: 95, mozjpeg: true }],
-    ]
-    for (const [options, sharpOptions] of cases) {
-      const ours = await blunt(input).jpeg({ ...options, mozjpeg: true }).toBuffer()
-      const theirs = await sharp(input).jpeg(sharpOptions).toBuffer()
+    // Low qualities need baseline (8-bit) quantization tables.
+    for (const quality of [20, 50, 80, 95]) {
+      const ours = await blunt(input).jpeg({ quality, mozjpeg: true }).toBuffer()
+      const theirs = await sharp(input).jpeg({ quality, mozjpeg: true }).toBuffer()
       const ratio = ours.length / theirs.length
-      assert.ok(ratio > 0.95 && ratio < 1.05, `${JSON.stringify(options)}: ${ours.length} vs ${theirs.length} bytes`)
-      assert.equal((await sharp(ours).metadata()).isProgressive, options.progressive ?? true)
+      assert.ok(ratio > 0.95 && ratio < 1.05, `quality ${quality}: ${ours.length} vs ${theirs.length} bytes`)
       await assertSimilar(ours, theirs, 3)
     }
     const jpegEncoder = await blunt(input).jpeg().toBuffer()

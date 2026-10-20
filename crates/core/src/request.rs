@@ -84,7 +84,6 @@ struct BlurOptions {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct JpegOptions {
     quality: Option<f64>,
-    progressive: Option<bool>,
     mozjpeg: Option<bool>,
 }
 
@@ -231,13 +230,10 @@ fn parse_output(options: &mut TransformOptions) -> Result<Option<OutputSpec>> {
         OutputFormat::Jpeg => {
             let mut spec = JpegSpec::default();
             if let Some(o) = options.jpeg.take() {
-                if o.mozjpeg == Some(true) {
-                    spec.apply_mozjpeg_preset();
-                }
                 if let Some(q) = o.quality {
                     spec.quality = int("jpeg.quality", q, 1.0, 100.0)? as u8;
                 }
-                spec.progressive = o.progressive.unwrap_or(spec.progressive);
+                spec.mozjpeg = o.mozjpeg.unwrap_or(spec.mozjpeg);
             }
             OutputSpec::Jpeg(spec)
         }

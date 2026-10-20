@@ -114,7 +114,7 @@ describe('limits', () => {
       blunt(input, { limitAllocatorMemory: 1024 * 1024 }).webp({ lossless: true }).toBuffer(),
       'ERR_LIMIT_EXCEEDED',
     )
-    // Progressive mozjpeg needs ~16 bytes per pixel, exactly 1 MiB here.
+    // mozjpeg needs ~16 bytes per pixel, exactly 1 MiB here.
     await assertRejectsWithCode(
       blunt(input, { limitAllocatorMemory: 1000 * 1000 }).jpeg({ mozjpeg: true }).toBuffer(),
       'ERR_LIMIT_EXCEEDED',

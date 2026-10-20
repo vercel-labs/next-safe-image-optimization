@@ -61,12 +61,10 @@ fn c_encoder_bytes_per_pixel(img: &DynamicImage, spec: &OutputSpec) -> u64 {
         // Trellis quantization keeps the whole image's DCT coefficients. Scan optimization also
         // buffers each candidate scan, which grows with quality.
         OutputSpec::Jpeg(spec) if spec.mozjpeg => {
-            let gray = matches!(img.color(), image::ColorType::L8 | image::ColorType::La8);
-            match (gray, spec.progressive) {
-                (true, false) => 5,
-                (true, true) => 12,
-                (false, false) => 7,
-                (false, true) => 16,
+            if matches!(img.color(), image::ColorType::L8 | image::ColorType::La8) {
+                12
+            } else {
+                16
             }
         }
         _ => 0,

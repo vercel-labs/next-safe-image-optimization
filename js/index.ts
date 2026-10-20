@@ -110,11 +110,10 @@ export interface ResizeOptions {
 export interface JpegOptions {
   /** 1-100. Default: 80. */
   quality?: number
-  progressive?: boolean
   /**
    * Encode with mozjpeg instead of `jpeg-encoder`, with sharp's mozjpeg preset: progressive, trellis
    * quantization, overshoot deringing, scan optimization, and quantization table 3. Smaller files,
-   * but slower. Default: `false`.
+   * but slower. Output is progressive with mozjpeg, and baseline without it. Default: `false`.
    */
   mozjpeg?: boolean
 }
@@ -511,7 +510,6 @@ export class Pipeline {
       format: 'jpeg',
       jpeg: {
         quality: optional(options.quality, (v) => checkInteger('quality', v, 1, 100)),
-        progressive: optional(options.progressive, (v) => checkBoolean('progressive', v)),
         mozjpeg: optional(options.mozjpeg, (v) => checkBoolean('mozjpeg', v)),
       },
     }

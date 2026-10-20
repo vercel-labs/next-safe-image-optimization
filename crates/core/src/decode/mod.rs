@@ -1,12 +1,18 @@
-//! Decoders. Everything but AVIF goes through `image`. AVIF uses avif-decode, because `image`'s
-//! AVIF decoder is dav1d (C).
+//! Decoders. Everything goes through `image`, which detects the format from its magic bytes (never
+//! file extensions or content types). AVIF is plugged in with hooks (see `avif.rs`).
+//!
+//! The worker's memory limits and the caller's timeout bound what decoders can do, so the only
+//! check before decoding is the pixel limit.
 
 mod avif;
-mod generic;
 
-use image::DynamicImage;
+use std::io::Cursor;
+use std::sync::Once;
+
 use image::metadata::Orientation;
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, hooks};
 
+use crate::decode::avif::AvifDecoder;
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 
@@ -31,6 +37,25 @@ impl InputFormat {
             InputFormat::Avif => "avif",
         }
     }
+
+    /// Only these formats are decoded. `image` detects more (BMP, ICO, PNM, QOI, etc.), which fail
+    /// because their features are disabled. But Cargo unifies features across the dependency
+    /// graph, so another crate could enable them without us noticing.
+    fn from_image_format(format: Option<ImageFormat>) -> Result<Self> {
+        Ok(match format {
+            Some(ImageFormat::Jpeg) => InputFormat::Jpeg,
+            Some(ImageFormat::Png) => InputFormat::Png,
+            Some(ImageFormat::WebP) => InputFormat::Webp,
+            Some(ImageFormat::Gif) => InputFormat::Gif,
+            Some(ImageFormat::Tiff) => InputFormat::Tiff,
+            Some(ImageFormat::Avif) => InputFormat::Avif,
+            _ => {
+                return Err(Error::UnsupportedFormat(
+                    "input is not a JPEG, PNG, WebP, GIF, TIFF, or AVIF image".into(),
+                ));
+            }
+        })
+    }
 }
 
 pub struct Header {
@@ -48,50 +73,36 @@ pub struct Decoded {
     pub image: DynamicImage,
 }
 
-/// Detects the format from magic bytes. We never trust file extensions or content types.
-pub fn detect(input: &[u8]) -> Result<InputFormat> {
-    match input {
-        [0xFF, 0xD8, 0xFF, ..] => Ok(InputFormat::Jpeg),
-        [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n', ..] => Ok(InputFormat::Png),
-        [b'G', b'I', b'F', b'8', b'7' | b'9', b'a', ..] => Ok(InputFormat::Gif),
-        [
-            b'R',
-            b'I',
-            b'F',
-            b'F',
-            _,
-            _,
-            _,
-            _,
-            b'W',
-            b'E',
-            b'B',
-            b'P',
-            ..,
-        ] => Ok(InputFormat::Webp),
-        // Classic TIFF and BigTIFF, in both byte orders.
-        [b'I', b'I', 42 | 43, 0, ..] | [b'M', b'M', 0, 42 | 43, ..] => Ok(InputFormat::Tiff),
-        // An ISOBMFF `ftyp` box with the still image (`avif`) or sequence (`avis`) major brand.
-        // avif-parse rejects sequences with a clearer error than ours.
-        [
-            _,
-            _,
-            _,
-            _,
-            b'f',
-            b't',
-            b'y',
-            b'p',
-            b'a',
-            b'v',
-            b'i',
-            b'f' | b's',
-            ..,
-        ] => Ok(InputFormat::Avif),
-        _ => Err(Error::UnsupportedFormat(
-            "input is not a JPEG, PNG, WebP, GIF, TIFF, or AVIF image".into(),
-        )),
-    }
+/// Registers our AVIF decoder with `image` (hooks are global, so once per process).
+///
+/// The detection hook is needed even though `image` detects AVIF on its own: its built-in
+/// detection selects its built-in AVIF decoder (dav1d, which we don't enable), and only formats
+/// detected by a hook are looked up in the decoding hooks. Detection hooks are checked before
+/// `image`'s own magic bytes, so ours wins.
+fn register_hooks() {
+    static HOOKS: Once = Once::new();
+    HOOKS.call_once(|| {
+        for signature in avif::SIGNATURES {
+            hooks::register_format_detection_hook(
+                avif::EXTENSION.into(),
+                signature,
+                Some(avif::SIGNATURE_MASK),
+            );
+        }
+        hooks::register_decoding_hook(
+            avif::EXTENSION.into(),
+            Box::new(|reader| Ok(Box::new(AvifDecoder::new(reader)?))),
+        );
+    });
+}
+
+fn reader(input: &[u8]) -> Result<(ImageReader<Cursor<&[u8]>>, InputFormat)> {
+    register_hooks();
+    let reader = ImageReader::new(Cursor::new(input))
+        .with_guessed_format()
+        .map_err(|err| Error::Decode(err.to_string()))?;
+    let format = InputFormat::from_image_format(reader.format())?;
+    Ok((reader, format))
 }
 
 pub fn header(input: &[u8], limits: &Limits) -> Result<Header> {
@@ -105,9 +116,38 @@ pub fn decode(input: &[u8], limits: &Limits) -> Result<Decoded> {
 }
 
 fn run(input: &[u8], limits: &Limits, pixels: bool) -> Result<(Header, Option<DynamicImage>)> {
-    match detect(input)? {
-        InputFormat::Avif => avif::decode(input, limits, pixels),
-        format => generic::decode(input, format, limits, pixels),
+    let (mut reader, format) = reader(input)?;
+    reader.limits(limits.image_limits());
+    let mut decoder = reader.into_decoder()?;
+    let (width, height) = decoder.dimensions();
+    limits.check_input(width, height)?;
+    let header = Header {
+        format,
+        width,
+        height,
+        has_alpha: decoder.color_type().has_alpha(),
+        orientation: decoder.orientation()?,
+        icc_profile: decoder.icc_profile()?,
+    };
+    if !pixels {
+        return Ok((header, None));
+    }
+
+    // For animations, this is the first frame.
+    let image = DynamicImage::from_decoder(decoder)?;
+    Ok((header, Some(drop_opaque_gif_alpha(format, image))))
+}
+
+/// GIF frames always decode as RGBA. Drop the alpha channel if the frame turned out to be opaque,
+/// so that it's treated like other opaque images (e.g. PNG output doesn't get an alpha channel).
+fn drop_opaque_gif_alpha(format: InputFormat, image: DynamicImage) -> DynamicImage {
+    match image {
+        DynamicImage::ImageRgba8(rgba)
+            if format == InputFormat::Gif && rgba.pixels().all(|p| p[3] == u8::MAX) =>
+        {
+            DynamicImage::ImageRgba8(rgba).to_rgb8().into()
+        }
+        image => image,
     }
 }
 
@@ -128,6 +168,10 @@ pub fn normalize(img: DynamicImage) -> DynamicImage {
 mod tests {
     use super::*;
 
+    fn detect(input: &[u8]) -> Result<InputFormat> {
+        reader(input).map(|(_, format)| format)
+    }
+
     #[test]
     fn detects_formats() {
         assert_eq!(detect(b"\xFF\xD8\xFF\xE0").unwrap(), InputFormat::Jpeg);
@@ -136,9 +180,22 @@ mod tests {
         assert_eq!(detect(b"RIFF\0\0\0\0WEBPVP8 ").unwrap(), InputFormat::Webp);
         assert_eq!(detect(b"II*\0").unwrap(), InputFormat::Tiff);
         assert_eq!(detect(b"MM\0*").unwrap(), InputFormat::Tiff);
+        // Including box sizes that `image`'s own signature doesn't allow.
         assert_eq!(detect(b"\0\0\0\x1cftypavif").unwrap(), InputFormat::Avif);
-        assert!(detect(b"\0\0\0\x1cftypheic").is_err());
-        assert!(detect(b"<svg").is_err());
-        assert!(detect(b"").is_err());
+        assert_eq!(detect(b"\x01\0\0\x1cftypavis").unwrap(), InputFormat::Avif);
+        for unsupported in [
+            &b"\0\0\0\x1cftypheic"[..],
+            b"<svg",
+            b"",
+            b"BM",
+            b"P6\n1 1\n255\n",
+            b"qoif",
+            b"farbfeld",
+        ] {
+            assert!(matches!(
+                detect(unsupported),
+                Err(Error::UnsupportedFormat(_))
+            ));
+        }
     }
 }

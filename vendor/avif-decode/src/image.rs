@@ -1,11 +1,10 @@
 use crate::color::{ChromaSampling, Depth, MatrixCoefficients, Range};
 use crate::rav1d::Frame;
-use crate::{Error, Image, Result};
-use imgref::{Img, ImgRef, ImgVec};
+use crate::{Error, Result};
+use imgref::{Img, ImgRef};
 use rgb::prelude::*;
-use rgb::{Gray, Rgb, Rgba};
+use rgb::Rgba;
 use std::borrow::Cow;
-use std::collections::TryReserveError;
 use yuv::{YuvPlanarImage, YuvRange, YuvStandardMatrix};
 
 /// It's an enum, because frames may have different pixel formats
@@ -35,10 +34,16 @@ pub enum Planes<'a> {
     Mono16(ImgRef<'a, [u8; 2]>, Depth),
 }
 
-pub(crate) fn write_alpha16(img: &mut Image, y: ImgRef<'_, [u8; 2]>, depth: Depth, range: Range, premultiplied_alpha: bool) -> Result<()> {
+/// An RGBA output buffer, whose alpha channel is written separately from the color
+pub(crate) enum AlphaTarget<'a> {
+    Rgba8(&'a mut [Rgba<u8>]),
+    Rgba16(&'a mut [Rgba<u16>]),
+}
+
+pub(crate) fn write_alpha16(img: AlphaTarget<'_>, width: usize, y: ImgRef<'_, [u8; 2]>, depth: Depth, range: Range, premultiplied_alpha: bool) -> Result<()> {
     match img {
-        Image::Rgba8(img) => {
-            for (y_row, img_row) in y.rows().zip(img.rows_mut()) {
+        AlphaTarget::Rgba8(img) => {
+            for (y_row, img_row) in y.rows().zip(img.chunks_exact_mut(width)) {
                 if y_row.len() != img_row.len() {
                     return Err(Error::Unsupported("invalid alpha size"));
                 }
@@ -50,8 +55,8 @@ pub(crate) fn write_alpha16(img: &mut Image, y: ImgRef<'_, [u8; 2]>, depth: Dept
                 }
             }
         },
-        Image::Rgba16(img) => {
-            for (y_row, img_row) in y.rows().zip(img.rows_mut()) {
+        AlphaTarget::Rgba16(img) => {
+            for (y_row, img_row) in y.rows().zip(img.chunks_exact_mut(width)) {
                 if y_row.len() != img_row.len() {
                     return Err(Error::Unsupported("invalid alpha size"));
                 }
@@ -63,15 +68,14 @@ pub(crate) fn write_alpha16(img: &mut Image, y: ImgRef<'_, [u8; 2]>, depth: Dept
                 }
             }
         },
-        _ => return Err(Error::InternalError("not an RGBA image")),
     }
     Ok(())
 }
 
-pub(crate) fn write_alpha8(img: &mut Image, y: ImgRef<'_, u8>, range: Range, premultiplied_alpha: bool) -> Result<()> {
+pub(crate) fn write_alpha8(img: AlphaTarget<'_>, width: usize, y: ImgRef<'_, u8>, range: Range, premultiplied_alpha: bool) -> Result<()> {
     match img {
-        Image::Rgba8(img) => {
-            for (y_row, img_row) in y.rows().zip(img.rows_mut()) {
+        AlphaTarget::Rgba8(img) => {
+            for (y_row, img_row) in y.rows().zip(img.chunks_exact_mut(width)) {
                 if y_row.len() != img_row.len() {
                     return Err(Error::Unsupported("invalid alpha size"));
                 }
@@ -83,8 +87,8 @@ pub(crate) fn write_alpha8(img: &mut Image, y: ImgRef<'_, u8>, range: Range, pre
                 }
             }
         },
-        Image::Rgba16(img) => {
-            for (y_row, img_row) in y.rows().zip(img.rows_mut()) {
+        AlphaTarget::Rgba16(img) => {
+            for (y_row, img_row) in y.rows().zip(img.chunks_exact_mut(width)) {
                 if y_row.len() != img_row.len() {
                     return Err(Error::Unsupported("invalid alpha size"));
                 }
@@ -96,7 +100,6 @@ pub(crate) fn write_alpha8(img: &mut Image, y: ImgRef<'_, u8>, range: Range, pre
                 }
             }
         },
-        _ => return Err(Error::InternalError("not an RGBA image")),
     }
     Ok(())
 }
@@ -161,12 +164,15 @@ impl Frame {
         })
     }
 
-    pub(crate) fn yuv_to_rgb16(&self, y: ImgRef<'_, [u8; 2]>, u: ImgRef<'_, [u8; 2]>, v: ImgRef<'_, [u8; 2]>, depth: Depth, chroma_sampling: ChromaSampling, has_alpha: bool) -> Result<Image, Error> {
+    /// Converts into `out`, which is RGB when `has_alpha` is false and RGBA otherwise
+    pub(crate) fn yuv_to_rgb16(&self, y: ImgRef<'_, [u8; 2]>, u: ImgRef<'_, [u8; 2]>, v: ImgRef<'_, [u8; 2]>, depth: Depth, chroma_sampling: ChromaSampling, out: &mut [u16], has_alpha: bool) -> Result<(), Error> {
         let mc = self.matrix_coefficients().unwrap_or(MatrixCoefficients::BT601);
         let conv = conversion(mc, self.range())?;
         let range = to_yuv_range(self.range());
         let width = y.width();
         let height = y.height();
+        let channels = if has_alpha { 4 } else { 3 };
+        check_len(out, width * height * channels)?;
         // Planes are read where the decoder left them; only unaligned planes are copied
         let (y_plane, u_plane, v_plane) = (imgref_align_to_u16(y), imgref_align_to_u16(u), imgref_align_to_u16(v));
         let planar = YuvPlanarImage {
@@ -179,75 +185,52 @@ impl Frame {
             width: width as u32,
             height: height as u32,
         };
-        if has_alpha {
-            let mut out = vec![Rgba::<u16>::new(0, 0, 0, 0); width * height];
-            convert16(&planar, bytemuck::cast_slice_mut(out.as_mut_slice()), (width * 4) as u32, chroma_sampling, depth, conv, range, true)?;
-            Ok(Image::Rgba16(ImgVec::new(out, width, height)))
-        } else {
-            let mut out = vec![Rgb::<u16>::new(0, 0, 0); width * height];
-            convert16(&planar, bytemuck::cast_slice_mut(out.as_mut_slice()), (width * 3) as u32, chroma_sampling, depth, conv, range, false)?;
-            Ok(Image::Rgb16(ImgVec::new(out, width, height)))
+        convert16(&planar, out, (width * channels) as u32, chroma_sampling, depth, conv, range, has_alpha)
+    }
+
+    /// Converts into `out`, which is gray when `has_alpha` is false, and RGBA (with placeholder alpha) otherwise
+    pub(crate) fn yuv_to_gray16(&self, y: ImgRef<'_, [u8; 2]>, depth: Depth, out: &mut [u16], has_alpha: bool) -> Result<(), Error> {
+        let range = self.range();
+        let channels = if has_alpha { 4 } else { 1 };
+        check_len(out, y.width() * y.height() * channels)?;
+        let pixels = y.rows().flat_map(|row| row.iter().copied());
+        for (y, px) in pixels.zip(out.chunks_exact_mut(channels)) {
+            let g = luma16(u16::from_ne_bytes(y), depth, range);
+            if has_alpha {
+                px.copy_from_slice(&[g, g, g, 0]);
+            } else {
+                px[0] = g;
+            }
         }
+        Ok(())
     }
 
-    pub(crate) fn yuv_to_gray16(&self, y: ImgRef<'_, [u8; 2]>, depth: Depth, has_alpha: bool) -> Result<Image, TryReserveError> {
+    /// Converts into `out`, which is gray when `has_alpha` is false, and RGBA (with placeholder alpha) otherwise
+    pub(crate) fn yuv_to_gray8(&self, y: ImgRef<'_, u8>, out: &mut [u8], has_alpha: bool) -> Result<(), Error> {
         let range = self.range();
-        let width = y.width();
-        let height = y.height();
-        Ok(if has_alpha {
-            let mut out = Vec::new();
-            out.try_reserve_exact(width * height)?;
-            out.extend(y.rows().flat_map(|row| {
-                row.iter().copied().map(|y| {
-                    let g = luma16(u16::from_ne_bytes(y), depth, range);
-                    Rgba::new(g, g, g, 0)
-                })
-            }));
-            Image::Rgba16(ImgVec::new(out, width, height))
-        } else {
-            let mut out = Vec::new();
-            out.try_reserve_exact(width * height)?;
-            out.extend(y.rows().flat_map(|row| {
-                row.iter()
-                    .copied()
-                    .map(|y| Gray::new(luma16(u16::from_ne_bytes(y), depth, range)))
-            }));
-            Image::Gray16(ImgVec::new(out, width, height))
-        })
+        let channels = if has_alpha { 4 } else { 1 };
+        check_len(out, y.width() * y.height() * channels)?;
+        let pixels = y.rows().flat_map(|row| row.iter().copied());
+        for (y, px) in pixels.zip(out.chunks_exact_mut(channels)) {
+            let g = luma8(y, range);
+            if has_alpha {
+                px.copy_from_slice(&[g, g, g, 0]);
+            } else {
+                px[0] = g;
+            }
+        }
+        Ok(())
     }
 
-    pub(crate) fn yuv_to_gray8(&self, y: ImgRef<'_, u8>, has_alpha: bool) -> Result<Image, TryReserveError> {
-        let range = self.range();
-        let width = y.width();
-        let height = y.height();
-        Ok(if has_alpha {
-            let mut out = Vec::new();
-            out.try_reserve_exact(width * height)?;
-            out.extend(y.rows().flat_map(|row| {
-                row.iter().copied().map(|y| {
-                    let g = luma8(y, range);
-                    Rgba::new(g, g, g, 0)
-                })
-            }));
-            Image::Rgba8(ImgVec::new(out, width, height))
-        } else {
-            let mut out = Vec::new();
-            out.try_reserve_exact(width * height)?;
-            out.extend(y.rows().flat_map(|row| {
-                row.iter()
-                    .copied()
-                    .map(|y| Gray::new(luma8(y, range)))
-            }));
-            Image::Gray8(ImgVec::new(out, width, height))
-        })
-    }
-
-    pub(crate) fn yuv_to_rgb8(&self, y: ImgRef<'_, u8>, u: ImgRef<'_, u8>, v: ImgRef<'_, u8>, chroma_sampling: ChromaSampling, has_alpha: bool) -> Result<Image, Error> {
+    /// Converts into `out`, which is RGB when `has_alpha` is false and RGBA otherwise
+    pub(crate) fn yuv_to_rgb8(&self, y: ImgRef<'_, u8>, u: ImgRef<'_, u8>, v: ImgRef<'_, u8>, chroma_sampling: ChromaSampling, out: &mut [u8], has_alpha: bool) -> Result<(), Error> {
         let mc = self.matrix_coefficients().unwrap_or(MatrixCoefficients::BT601);
         let conv = conversion(mc, self.range())?;
         let range = to_yuv_range(self.range());
         let width = y.width();
         let height = y.height();
+        let channels = if has_alpha { 4 } else { 3 };
+        check_len(out, width * height * channels)?;
         let planar = YuvPlanarImage {
             y_plane: y.buf(),
             y_stride: y.stride() as u32,
@@ -258,16 +241,15 @@ impl Frame {
             width: width as u32,
             height: height as u32,
         };
-        if has_alpha {
-            let mut out = vec![Rgba::<u8>::new(0, 0, 0, 0); width * height];
-            convert8(&planar, bytemuck::cast_slice_mut(out.as_mut_slice()), (width * 4) as u32, chroma_sampling, conv, range, true)?;
-            Ok(Image::Rgba8(ImgVec::new(out, width, height)))
-        } else {
-            let mut out = vec![Rgb::<u8>::new(0, 0, 0); width * height];
-            convert8(&planar, bytemuck::cast_slice_mut(out.as_mut_slice()), (width * 3) as u32, chroma_sampling, conv, range, false)?;
-            Ok(Image::Rgb8(ImgVec::new(out, width, height)))
-        }
+        convert8(&planar, out, (width * channels) as u32, chroma_sampling, conv, range, has_alpha)
     }
+}
+
+fn check_len<T>(out: &[T], len: usize) -> Result<(), Error> {
+    if out.len() != len {
+        return Err(Error::InternalError("output buffer size"));
+    }
+    Ok(())
 }
 
 /// Meaning of the frame's planes, as far as conversion to RGB is concerned

@@ -200,6 +200,46 @@ describe('limits', () => {
     await assertRejectsWithCode(blunt(input).png().toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
   })
 
+  test('other formats that image-rs can detect are rejected', async () => {
+    // Valid 1x1 images where they're simple to write by hand, so that these fail even if another
+    // crate enables image-rs's decoders for them.
+    const bmp = Buffer.alloc(58)
+    bmp.write('BM', 'latin1')
+    bmp.writeUInt32LE(bmp.length, 2)
+    bmp.writeUInt32LE(54, 10) // pixel data offset
+    bmp.writeUInt32LE(40, 14) // BITMAPINFOHEADER
+    bmp.writeInt32LE(1, 18) // width
+    bmp.writeInt32LE(1, 22) // height
+    bmp.writeUInt16LE(1, 26) // planes
+    bmp.writeUInt16LE(24, 28) // bits per pixel
+    const qoi = Buffer.concat([
+      Buffer.from('qoif', 'latin1'),
+      Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 3, 0]),
+      Buffer.from([0xfe, 255, 0, 0]), // QOI_OP_RGB
+      Buffer.from([0, 0, 0, 0, 0, 0, 0, 1]),
+    ])
+    const farbfeld = Buffer.concat([Buffer.from('farbfeld', 'latin1'), Buffer.from([0, 0, 0, 1, 0, 0, 0, 1]), Buffer.alloc(8, 0xff)])
+    const inputs = {
+      bmp,
+      pnm: Buffer.from('P6\n1 1\n255\n\xff\0\0', 'latin1'),
+      qoi,
+      farbfeld,
+      hdr: Buffer.concat([Buffer.from('#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n', 'latin1'), Buffer.from([128, 0, 0, 129])]),
+      ico: Buffer.concat([Buffer.from([0, 0, 1, 0, 1, 0]), Buffer.alloc(16)]),
+      dds: Buffer.concat([Buffer.from('DDS ', 'latin1'), Buffer.alloc(124)]),
+      exr: Buffer.concat([Buffer.from([0x76, 0x2f, 0x31, 0x01]), Buffer.alloc(16)]),
+    }
+    for (const [name, input] of Object.entries(inputs)) {
+      await assert.rejects(blunt(input).toBuffer(), (error: unknown) => {
+        assert.ok(error instanceof BluntError, `${name}: ${String(error)}`)
+        assert.equal(error.code, 'ERR_UNSUPPORTED_FORMAT', `${name}: ${error.message}`)
+        assert.match(error.message, /input is not a JPEG/, name)
+        return true
+      })
+      await assertRejectsWithCode(blunt(input).metadata(), 'ERR_UNSUPPORTED_FORMAT')
+    }
+  })
+
   test('unsupported formats are rejected', async () => {
     const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>')
     const heif = Buffer.from('000000186674797068656963000000006d696631', 'hex')

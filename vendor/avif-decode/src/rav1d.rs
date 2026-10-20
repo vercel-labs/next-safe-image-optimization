@@ -77,6 +77,12 @@ impl From<Rav1dError> for Error {
 pub struct Frame(Picture);
 
 impl Frame {
+    /// Width and height in pixels
+    #[inline]
+    pub(crate) fn dimensions(&self) -> (usize, usize) {
+        (self.0.width() as usize, self.0.height() as usize)
+    }
+
     #[inline]
     pub(crate) fn single_plane_img<T: bytemuck::Pod>(&self, plane_n: u8) -> Result<ImgRef<'_, T>> {
         let component = PlanarImageComponent::try_from(usize::from(plane_n))?;

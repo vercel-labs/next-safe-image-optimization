@@ -2,7 +2,7 @@
 //! Decoding is done by [rav1d](https://lib.rs/crates/rav1d), a Rust port of dav1d, so there's no C library to build.
 //!
 //! (an older version of this library supports libaom instead)
-use crate::image::{Planes, write_alpha8, write_alpha16};
+use crate::image::{AlphaTarget, Planes, write_alpha8, write_alpha16};
 use crate::rav1d::Rav1dDecoder;
 use crate::color::MatrixCoefficients;
 use imgref::ImgVec;
@@ -62,6 +62,53 @@ pub enum Image {
 }
 
 
+/// The pixel format of a decoded image. Samples are interleaved, and 16-bit samples use the full
+/// 16-bit range, regardless of the image's bit depth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PixelFormat {
+    Rgb8,
+    Rgb16,
+    Rgba8,
+    Rgba16,
+    Gray8,
+    Gray16,
+}
+
+impl PixelFormat {
+    /// Bytes per pixel
+    #[inline]
+    #[must_use]
+    pub fn bytes_per_pixel(self) -> usize {
+        match self {
+            Self::Gray8 => 1,
+            Self::Gray16 => 2,
+            Self::Rgb8 => 3,
+            Self::Rgba8 => 4,
+            Self::Rgb16 => 6,
+            Self::Rgba16 => 8,
+        }
+    }
+}
+
+/// What [`Decoder::decode_into`] writes, from the AV1 sequence header
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OutputFormat {
+    pub width: usize,
+    pub height: usize,
+    pub pixel_format: PixelFormat,
+}
+
+impl OutputFormat {
+    /// The size of the output buffer in bytes
+    #[inline]
+    #[must_use]
+    pub fn buffer_len(&self) -> usize {
+        self.width * self.height * self.pixel_format.bytes_per_pixel()
+    }
+}
+
 /// Decoder settings
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
@@ -102,29 +149,89 @@ impl Decoder {
         &self.avif
     }
 
+    /// The dimensions and pixel format of the image, before decoding it. Decoding fails if the
+    /// frames don't match the sequence header.
+    pub fn output_format(&self) -> Result<OutputFormat> {
+        let seq = self.avif.primary_item_metadata()?;
+        let has_alpha = self.avif.alpha_item.is_some();
+        let pixel_format = match (has_alpha, seq.monochrome, seq.bit_depth > 8) {
+            (true, _, false) => PixelFormat::Rgba8,
+            (true, _, true) => PixelFormat::Rgba16,
+            (false, true, false) => PixelFormat::Gray8,
+            (false, true, true) => PixelFormat::Gray16,
+            (false, false, false) => PixelFormat::Rgb8,
+            (false, false, true) => PixelFormat::Rgb16,
+        };
+        Ok(OutputFormat {
+            width: seq.max_frame_width.get() as usize,
+            height: seq.max_frame_height.get() as usize,
+            pixel_format,
+        })
+    }
+
+    /// Decodes into `buf`, which must be [`OutputFormat::buffer_len`] bytes, without padding
+    /// between rows. 16-bit samples are native-endian, so `buf` must be aligned to 2 bytes for
+    /// them.
+    ///
+    /// Unlike [`Decoder::to_image`], this doesn't allocate the output.
     #[inline(never)]
-    pub fn to_image(mut self) -> Result<Image> {
+    pub fn decode_into(mut self, buf: &mut [u8]) -> Result<()> {
+        let format = self.output_format()?;
+        if buf.len() != format.buffer_len() {
+            return Err(Error::InternalError("output buffer size"));
+        }
         let threads = self.options.threads
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()).min(32));
         let mut decoder = Rav1dDecoder::new(threads)?;
-        self.decode_with(&mut decoder)
+        self.decode_with(&mut decoder, format, buf)
     }
 
-    fn decode_with(&mut self, decoder: &mut Rav1dDecoder) -> Result<Image> {
-        // Conversion puts placeholders in the alpha channel, and then updates alpha, so that the
-        // color frame can be freed before decoding alpha
+    #[inline(never)]
+    pub fn to_image(self) -> Result<Image> {
+        let format = self.output_format()?;
+        let (width, height) = (format.width, format.height);
+        macro_rules! decode {
+            ($variant:ident, $pixel:ty) => {{
+                let mut out = Vec::<$pixel>::new();
+                out.try_reserve_exact(width * height)?;
+                out.resize(width * height, <$pixel>::default());
+                self.decode_into(bytemuck::cast_slice_mut(out.as_mut_slice()))?;
+                Image::$variant(ImgVec::new(out, width, height))
+            }};
+        }
+        Ok(match format.pixel_format {
+            PixelFormat::Rgb8 => decode!(Rgb8, Rgb<u8>),
+            PixelFormat::Rgb16 => decode!(Rgb16, Rgb<u16>),
+            PixelFormat::Rgba8 => decode!(Rgba8, Rgba<u8>),
+            PixelFormat::Rgba16 => decode!(Rgba16, Rgba<u16>),
+            PixelFormat::Gray8 => decode!(Gray8, Gray<u8>),
+            PixelFormat::Gray16 => decode!(Gray16, Gray<u16>),
+        })
+    }
+
+    fn decode_with(&mut self, decoder: &mut Rav1dDecoder, format: OutputFormat, buf: &mut [u8]) -> Result<()> {
+        // The color conversion leaves placeholders in the alpha channel, and then alpha is written
+        // separately, so that the color frame can be freed before decoding alpha
         let has_alpha = self.avif.alpha_item.is_some();
         let color = decoder.decode_frame(&std::mem::take(&mut self.avif.primary_item))?;
-        let mut img = match color.planes()? {
-            Planes::YuvPlanes8 { y, u, v, chroma_sampling } => {
-                color.yuv_to_rgb8(y, u, v, chroma_sampling, has_alpha)?
+        if color.dimensions() != (format.width, format.height) {
+            return Err(Error::Unsupported("frame size doesn't match the sequence header"));
+        }
+        let mismatch = || Error::Unsupported("frame pixel format doesn't match the sequence header");
+        use PixelFormat as F;
+        match (color.planes()?, format.pixel_format) {
+            (Planes::YuvPlanes8 { y, u, v, chroma_sampling }, F::Rgb8 | F::Rgba8) => {
+                color.yuv_to_rgb8(y, u, v, chroma_sampling, buf, has_alpha)?;
             },
-            Planes::Mono8(y) => color.yuv_to_gray8(y, has_alpha)?,
-            Planes::Mono16(y, depth) => color.yuv_to_gray16(y, depth, has_alpha)?,
-            Planes::YuvPlanes16 { y, u, v, chroma_sampling, depth } => {
-                color.yuv_to_rgb16(y, u, v, depth, chroma_sampling, has_alpha)?
+            (Planes::Mono8(y), F::Gray8 | F::Rgba8) => color.yuv_to_gray8(y, buf, has_alpha)?,
+            (Planes::Mono16(y, depth), F::Gray16 | F::Rgba16) => {
+                color.yuv_to_gray16(y, depth, samples16(buf)?, has_alpha)?;
             },
-        };
+            (Planes::YuvPlanes16 { y, u, v, chroma_sampling, depth }, F::Rgb16 | F::Rgba16) => {
+                color.yuv_to_rgb16(y, u, v, depth, chroma_sampling, samples16(buf)?, has_alpha)?;
+            },
+            _ => return Err(mismatch()),
+        }
         let color_mc = color.matrix_coefficients().unwrap_or(MatrixCoefficients::Identity);
         drop(color);
 
@@ -136,17 +243,26 @@ impl Decoder {
                 && color_mc != alpha_mc {
                 return Err(Error::Unsupported("alpha image has color info"));
             }
+            let target = match format.pixel_format {
+                F::Rgba8 => AlphaTarget::Rgba8(bytemuck::cast_slice_mut(buf)),
+                F::Rgba16 => AlphaTarget::Rgba16(bytemuck::cast_slice_mut(samples16(buf)?)),
+                _ => return Err(Error::InternalError("alpha without an alpha channel")),
+            };
             match alpha.planes()? {
                 Planes::YuvPlanes8 { y, .. } | Planes::Mono8(y) => {
-                    write_alpha8(&mut img, y, range, self.avif.premultiplied_alpha)?;
+                    write_alpha8(target, format.width, y, range, self.avif.premultiplied_alpha)?;
                 },
                 Planes::YuvPlanes16 { y, depth, .. } | Planes::Mono16(y, depth) => {
-                    write_alpha16(&mut img, y, depth, range, self.avif.premultiplied_alpha)?;
+                    write_alpha16(target, format.width, y, depth, range, self.avif.premultiplied_alpha)?;
                 },
             }
         } else if has_alpha {
             return Err(Error::InternalError("alpha item missing"));
         }
-        Ok(img)
+        Ok(())
     }
+}
+
+fn samples16(buf: &mut [u8]) -> Result<&mut [u16]> {
+    bytemuck::try_cast_slice_mut(buf).map_err(|_| Error::InternalError("output buffer alignment"))
 }

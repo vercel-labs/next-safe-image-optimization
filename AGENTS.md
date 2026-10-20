@@ -47,8 +47,10 @@ A Cargo workspace:
 
 Memory is bounded by the worker's limits (`limitAllocatorMemory` in the allocator, `limitProcessMemory` from the OS), and CPU by the caller's `timeout()`. So decoders aren't configured defensively: the only check before decoding is the pixel limit (`Limits::check_input`), which works the same way for every format.
 
-- **JPEG (zune-jpeg), PNG, GIF, WebP, TIFF:** through `image` (`decode/generic.rs`), with `limitAllocatorMemory` as `image`'s `max_alloc`. GIF frames always decode as RGBA, so we drop the alpha channel if the first frame is opaque. `image`'s TIFF decoder doesn't support YCbCr, which is how sharp and most encoders write JPEG-compressed TIFFs.
-- **AVIF (vendored avif-decode → avif-parse + rav1d):** not through `image`, whose AVIF decoder is dav1d (C). rav1d is a git dependency on an unreleased revision for its Rust API. One thread (decoding happens on the calling thread, nothing is spawned on wasm), and the decoded size must match the sequence header. rav1d logs errors to stderr (`rust_api::Settings` can't disable its logger), which release builds discard.
+Every format goes through `image`'s `ImageReader` (`decode/mod.rs`), which detects the format from magic bytes, with `limitAllocatorMemory` as `image`'s `max_alloc`. The detected format must be in an explicit allowlist (`InputFormat::from_image_format`): `image` also detects formats like BMP and QOI, and Cargo's feature unification means another crate could enable their decoders.
+
+- **JPEG (zune-jpeg), PNG, GIF, WebP, TIFF:** `image`'s built-in decoders. GIF frames always decode as RGBA, so we drop the alpha channel if the first frame is opaque. `image`'s TIFF decoder doesn't support YCbCr, which is how sharp and most encoders write JPEG-compressed TIFFs.
+- **AVIF (vendored avif-decode → avif-parse + rav1d):** not `image`'s AVIF decoder, which is dav1d (C). `decode/avif.rs` registers `image` hooks instead: a detection hook (checked before `image`'s own signatures) and a decoding hook for an `ImageDecoder` wrapper. avif-decode is patched with `decode_into`, so it decodes straight into `image`'s buffer, without a copy. rav1d is a git dependency on an unreleased revision for its Rust API. One thread (decoding happens on the calling thread, nothing is spawned on wasm), and the decoded size must match the sequence header. rav1d logs errors to stderr (`rust_api::Settings` can't disable its logger), which release builds discard.
 
 ## Encoders
 

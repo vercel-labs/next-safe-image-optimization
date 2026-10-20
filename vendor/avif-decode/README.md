@@ -6,7 +6,8 @@
 > - rav1d's asm is disabled on all targets (only the `bitdepth_8` and `bitdepth_16` features), so that decoding is entirely Rust.
 > - rav1d is a git dependency on an unreleased revision, for its Rust API (`rav1d::Decoder`) instead of the `dav1d_*` C API, which avoids `unsafe` FFI calls.
 > - `Options` sets the thread count. `Decoder::from_reader_with_options` parses the container without starting rav1d, and `avif_data()` exposes the parsed container (e.g. to check the sequence header's dimensions before decoding).
-> - `to_image` frees the color frame before decoding alpha.
+> - `output_format()` reports the dimensions and pixel format from the sequence header, before decoding, and `decode_into` decodes into a caller-provided buffer of that format (instead of allocating one). `to_image` is built on `decode_into`. Decoding fails if the frame doesn't match the sequence header.
+> - Decoding frees the color frame before decoding alpha.
 >
 > To pull upstream changes, run `git subtree pull --prefix=vendor/avif-decode https://github.com/kornelski/avif-decode main --squash` from the repository root.
 

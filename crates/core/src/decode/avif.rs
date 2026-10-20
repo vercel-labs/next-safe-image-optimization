@@ -1,95 +1,88 @@
 //! AVIF via avif-decode (vendored to disable rav1d's asm), which parses the container with
-//! avif-parse and decodes with rav1d, a Rust port of dav1d.
+//! avif-parse and decodes with rav1d, a Rust port of dav1d. `image`'s own AVIF decoder is dav1d
+//! (C), so we plug this in with a decoding hook instead.
 //!
 //! Known gap: avif-parse doesn't expose `colr` (ICC), `irot`/`imir` (orientation), or `clap`
 //! (cropping), so they're ignored. Grid (tiled) images and image sequences are rejected.
 
-use avif_decode::{Image, Options};
-use image::metadata::Orientation;
-use image::{DynamicImage, ImageBuffer, Pixel};
+use std::io::Read;
 
-use crate::decode::{Header, InputFormat};
-use crate::error::{Error, Result};
-use crate::limits::Limits;
+use avif_decode::{OutputFormat, PixelFormat};
+use image::error::{
+    DecodingError, ImageFormatHint, LimitError, LimitErrorKind, UnsupportedError,
+    UnsupportedErrorKind,
+};
+use image::{ColorType, ImageDecoder, ImageError, ImageFormat, ImageResult};
 
-fn map_err(err: avif_decode::Error) -> Error {
+/// The extension that `image`'s hooks use to identify the format.
+pub const EXTENSION: &str = "avif";
+
+/// An ISOBMFF `ftyp` box (after its size) with the still image (`avif`) or sequence (`avis`)
+/// major brand. avif-parse rejects sequences with a clearer error than image-rs.
+pub const SIGNATURES: [&[u8]; 2] = [b"\0\0\0\0ftypavif", b"\0\0\0\0ftypavis"];
+/// Ignores the box size.
+pub const SIGNATURE_MASK: &[u8] = b"\0\0\0\0\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF";
+
+const HINT: ImageFormatHint = ImageFormatHint::Exact(ImageFormat::Avif);
+
+fn map_err(err: avif_decode::Error) -> ImageError {
     use avif_decode::Error as E;
     match err {
         E::Avif(avif_parse::Error::Unsupported(msg)) | E::Unsupported(msg) => {
-            Error::UnsupportedFormat(format!("AVIF: {msg}"))
+            ImageError::Unsupported(UnsupportedError::from_format_and_kind(
+                HINT,
+                UnsupportedErrorKind::GenericFeature(msg.into()),
+            ))
         }
         E::Avif(avif_parse::Error::OutOfMemory) => {
-            Error::LimitExceeded("AVIF container is too large".into())
+            ImageError::Limits(LimitError::from_kind(LimitErrorKind::InsufficientMemory))
         }
-        err => Error::Decode(err.to_string()),
+        err => ImageError::Decoding(DecodingError::new(HINT, err.to_string())),
     }
 }
 
-fn to_dynamic<P: Pixel>(
-    width: u32,
-    height: u32,
-    data: Vec<P::Subpixel>,
-) -> Result<ImageBuffer<P, Vec<P::Subpixel>>> {
-    ImageBuffer::from_raw(width, height, data)
-        .ok_or_else(|| Error::Decode("decoder output size doesn't match dimensions".into()))
+pub struct AvifDecoder {
+    decoder: avif_decode::Decoder,
+    format: OutputFormat,
 }
 
-fn to_dynamic_image(img: Image) -> Result<DynamicImage> {
-    use bytemuck::allocation::cast_vec;
-    macro_rules! convert {
-        ($img:expr, $variant:ident) => {{
-            let img = $img;
-            let (width, height) = (img.width() as u32, img.height() as u32);
-            DynamicImage::$variant(to_dynamic(width, height, cast_vec(img.into_buf()))?)
-        }};
+impl AvifDecoder {
+    pub fn new(mut reader: impl Read) -> ImageResult<Self> {
+        // Concurrency comes from running more workers: with one thread, rav1d decodes on the
+        // calling thread, and nothing is spawned (which wasm doesn't support).
+        let mut options = avif_decode::Options::default();
+        options.threads = Some(1);
+        let decoder = avif_decode::Decoder::from_reader_with_options(&mut reader, options)
+            .map_err(map_err)?;
+        let format = decoder.output_format().map_err(map_err)?;
+        Ok(AvifDecoder { decoder, format })
     }
-    // avif-decode allocates its output with `ImgVec::new`, so rows aren't padded.
-    Ok(match img {
-        Image::Rgb8(img) => convert!(img, ImageRgb8),
-        Image::Rgba8(img) => convert!(img, ImageRgba8),
-        Image::Gray8(img) => convert!(img, ImageLuma8),
-        Image::Rgb16(img) => convert!(img, ImageRgb16),
-        Image::Rgba16(img) => convert!(img, ImageRgba16),
-        Image::Gray16(img) => convert!(img, ImageLuma16),
-    })
 }
 
-pub fn decode(
-    input: &[u8],
-    limits: &Limits,
-    pixels: bool,
-) -> Result<(Header, Option<DynamicImage>)> {
-    // Concurrency comes from running more workers: with one thread, rav1d decodes on the calling
-    // thread, and nothing is spawned (which wasm doesn't support).
-    let mut options = Options::default();
-    options.threads = Some(1);
-    let decoder = avif_decode::Decoder::from_reader_with_options(&mut &input[..], options)
-        .map_err(map_err)?;
-    let avif = decoder.avif_data();
-    let seq = avif
-        .primary_item_metadata()
-        .map_err(|err| map_err(err.into()))?;
-    let (width, height) = (seq.max_frame_width.get(), seq.max_frame_height.get());
-    limits.check_input(width, height)?;
-
-    let has_alpha = avif.alpha_item.is_some();
-    let header = Header {
-        format: InputFormat::Avif,
-        width,
-        height,
-        has_alpha,
-        orientation: Orientation::NoTransforms,
-        icc_profile: None,
-    };
-    if !pixels {
-        return Ok((header, None));
+impl ImageDecoder for AvifDecoder {
+    fn dimensions(&self) -> (u32, u32) {
+        // From the sequence header's `u32`s.
+        (self.format.width as u32, self.format.height as u32)
     }
 
-    let image = to_dynamic_image(decoder.to_image().map_err(map_err)?)?;
-    if (image.width(), image.height()) != (width, height) {
-        return Err(Error::Decode(
-            "AVIF frame size doesn't match the sequence header".into(),
-        ));
+    fn color_type(&self) -> ColorType {
+        match self.format.pixel_format {
+            PixelFormat::Gray8 => ColorType::L8,
+            PixelFormat::Gray16 => ColorType::L16,
+            PixelFormat::Rgb8 => ColorType::Rgb8,
+            PixelFormat::Rgb16 => ColorType::Rgb16,
+            PixelFormat::Rgba8 => ColorType::Rgba8,
+            PixelFormat::Rgba16 => ColorType::Rgba16,
+            _ => unreachable!("avif-decode added a pixel format"),
+        }
     }
-    Ok((header, Some(image)))
+
+    /// Decodes straight into `buf`, without an intermediate copy.
+    fn read_image(self, buf: &mut [u8]) -> ImageResult<()> {
+        self.decoder.decode_into(buf).map_err(map_err)
+    }
+
+    fn read_image_boxed(self: Box<Self>, buf: &mut [u8]) -> ImageResult<()> {
+        (*self).read_image(buf)
+    }
 }

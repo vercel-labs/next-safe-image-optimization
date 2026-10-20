@@ -9,141 +9,42 @@
  */
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
-/**
- * Cooperative cancellation for in-flight work. The JS wrapper calls `cancel()` from an
- * `AbortSignal`'s `abort` event.
- */
-export declare class CancelToken {
-  constructor()
-  cancel(): void
+export declare class WorkerPool {
+  constructor(options: PoolOptions)
+  /**
+   * Sends `[input][optionsJson][u32 LE length of optionsJson]` to a worker (see
+   * `crates/core/src/protocol.rs`). `input` is copied before this returns, so the caller may
+   * reuse the buffer immediately. (Reading from memory that JS can concurrently mutate would be
+   * a data race.)
+   */
+  run(input: Uint8Array, optionsJson: string, options: RunOptions): Promise<RunResult>
 }
 
-export type Fit = 'cover' | 'contain' | 'fill' | 'inside' | 'outside'
-
-export type Kernel = 'nearest' | 'linear' | 'cubic' | 'mitchell' | 'lanczos2' | 'lanczos3'
-
-export declare function metadata(input: Uint8Array, limits?: NativeLimitOptions | undefined | null, token?: CancelToken | undefined | null): Promise<NativeMetadataResult>
-
-export interface NativeBlurOptions {
-  /** Omit for a mild 3x3 box blur. */
-  sigma?: number
+export interface PoolOptions {
+  workerPath: string
+  maxProcesses: number
+  idleTimeoutMs: number
+  /** Each worker's `RLIMIT_DATA` in bytes (Linux only), or 0 for none. */
+  memoryLimit: number
 }
 
-export interface NativeColor {
-  /** 0-255 */
-  r: number
-  g: number
-  b: number
-  /** 0-1 */
-  alpha: number
-}
-
-export interface NativeError {
+export interface RunError {
   code: string
   message: string
 }
 
-export interface NativeGifOptions {
-  effort?: number
-}
-
-export interface NativeJpegOptions {
-  quality?: number
-  progressive?: boolean
-  /** `true` for 4:2:0 (the default), `false` for 4:4:4. */
-  chromaSubsampling?: boolean
-  optimizeCoding?: boolean
-  quantizationTable?: number
-  mozjpeg?: boolean
-}
-
-export interface NativeLimitOptions {
-  /** 0 disables the limit. */
-  limitInputPixels?: number
-  limitMemory?: number
-  /** 0 disables the timeout. */
+export interface RunOptions {
+  /** Omit to wait indefinitely. */
   timeoutMs?: number
+  /** A larger response is treated as a crash. */
+  maxResponseBytes: number
 }
 
-export interface NativeMetadata {
-  format: string
-  /** Stored dimensions, before applying the EXIF orientation. */
-  width: number
-  height: number
-  hasAlpha: boolean
-  /** EXIF orientation, 1-8. */
-  orientation: number
-  hasProfile: boolean
+/** Exactly one of `response` or `error` is set. `response` is untrusted. */
+export interface RunResult {
+  response?: Buffer
+  error?: RunError
 }
 
-/** Exactly one of `error` or `metadata` is set. */
-export interface NativeMetadataResult {
-  metadata?: NativeMetadata
-  error?: NativeError
-}
-
-export interface NativeOutputInfo {
-  format: string
-  width: number
-  height: number
-  channels: number
-  size: number
-}
-
-export interface NativePngOptions {
-  compressionLevel?: number
-  adaptiveFiltering?: boolean
-}
-
-export interface NativeResizeOptions {
-  width?: number
-  height?: number
-  fit?: Fit
-  /** 0 (left) to 1 (right). */
-  gravityX?: number
-  /** 0 (top) to 1 (bottom). */
-  gravityY?: number
-  kernel?: Kernel
-  withoutEnlargement?: boolean
-  withoutReduction?: boolean
-  background?: NativeColor
-}
-
-export interface NativeTransformOptions {
-  limits?: NativeLimitOptions
-  autoOrient?: boolean
-  /** Clockwise degrees, a multiple of 90. */
-  rotate?: number
-  resize?: NativeResizeOptions
-  blur?: NativeBlurOptions
-  /** Defaults to the input format. */
-  format?: OutputFormat
-  jpeg?: NativeJpegOptions
-  png?: NativePngOptions
-  webp?: NativeWebpOptions
-  gif?: NativeGifOptions
-}
-
-/** Exactly one of `error` or the other fields is set. */
-export interface NativeTransformResult {
-  data?: Buffer
-  info?: NativeOutputInfo
-  error?: NativeError
-}
-
-export interface NativeWebpOptions {
-  quality?: number
-  alphaQuality?: number
-  lossless?: boolean
-  nearLossless?: boolean
-  smartSubsample?: boolean
-  effort?: number
-}
-
-export type OutputFormat = 'jpeg' | 'png' | 'webp' | 'gif'
-
-/**
- * `input` is copied before this returns, so the caller may reuse the buffer immediately. (Reading
- * from memory that JS can concurrently mutate would be a data race.)
- */
-export declare function transform(input: Uint8Array, options: NativeTransformOptions, token?: CancelToken | undefined | null): Promise<NativeTransformResult>
+/** The platform in napi's format (like `linux-x64-gnu`), which the worker's file name includes. */
+export declare function target(): string

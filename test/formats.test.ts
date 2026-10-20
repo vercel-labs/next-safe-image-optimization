@@ -34,6 +34,13 @@ const inputs: Record<string, () => Promise<Buffer>> = {
   // A single tile that's larger than the image.
   'tiled tiff': () =>
     fromRaw(rgb).tiff({ compression: 'none', tile: true, tileWidth: 256, tileHeight: 256 }).toBuffer(),
+  avif: () => fromRaw(rgb).avif({ quality: 90 }).toBuffer(),
+  '4:2:0 avif': () => fromRaw(rgb).avif({ quality: 90, chromaSubsampling: '4:2:0' }).toBuffer(),
+  'avif with alpha': () => fromRaw(rgba).avif({ quality: 90 }).toBuffer(),
+  'lossless avif': () => fromRaw(rgb).avif({ lossless: true }).toBuffer(),
+  '10-bit avif': () => fromRaw(rgb).avif({ quality: 90, bitdepth: 10 }).toBuffer(),
+  '12-bit avif with alpha': () => fromRaw(rgba).avif({ quality: 90, bitdepth: 12 }).toBuffer(),
+  'grayscale avif': () => fromRaw(rgb).toColourspace('b-w').avif({ quality: 90 }).toBuffer(),
 }
 
 const outputs: OutputFormat[] = ['jpeg', 'png', 'webp', 'gif']
@@ -69,9 +76,11 @@ describe('output format defaults to the input format', () => {
     })
   }
 
-  test('tiff has no default output format', async () => {
-    await assertRejectsWithCode(blunt(await inputs.tiff()).toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
-  })
+  for (const name of ['tiff', 'avif'] as const) {
+    test(`${name} has no default output format`, async () => {
+      await assertRejectsWithCode(blunt(await inputs[name]()).toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
+    })
+  }
 })
 
 describe('alpha', () => {
@@ -92,6 +101,27 @@ describe('alpha', () => {
   })
 })
 
+describe('avif', () => {
+  test('metadata', async () => {
+    const meta = await blunt(await inputs['avif with alpha']()).metadata()
+    assert.deepEqual([meta.format, meta.width, meta.height, meta.hasAlpha], ['avif', rgb.width, rgb.height, true])
+  })
+
+  test('odd dimensions with chroma subsampling', async () => {
+    const input = await fromRaw(pattern(97, 65)).avif({ quality: 90, chromaSubsampling: '4:2:0' }).toBuffer()
+    const { data, info } = await blunt(input).png().toBuffer({ resolveWithObject: true })
+    assert.deepEqual([info.width, info.height], [97, 65])
+    await assertSimilar(data, input, 8)
+  })
+
+  test('alpha is preserved', async () => {
+    const input = await inputs['avif with alpha']()
+    const { data, info } = await blunt(input).png().toBuffer({ resolveWithObject: true })
+    assert.equal(info.channels, 4)
+    await assertSimilar(data, input, 8, 4)
+  })
+})
+
 describe('encoder options', () => {
   test('jpeg quality affects size', async () => {
     const input = await fromRaw(pattern(256, 256)).png().toBuffer()
@@ -100,20 +130,18 @@ describe('encoder options', () => {
     assert.ok(low.length < high.length)
   })
 
-  test('jpeg progressive and mozjpeg presets produce progressive files', async () => {
-    const input = await inputs.png()
-    for (const options of [{ progressive: true }, { mozjpeg: true }]) {
-      const meta = await sharp(await blunt(input).jpeg(options).toBuffer()).metadata()
-      assert.equal(meta.isProgressive, true)
+  test('mozjpeg matches sharp', async () => {
+    const input = await fromRaw(pattern(256, 256)).png().toBuffer()
+    // Low qualities need baseline (8-bit) quantization tables.
+    for (const quality of [20, 50, 80, 95]) {
+      const ours = await blunt(input).jpeg({ quality, mozjpeg: true }).toBuffer()
+      const theirs = await sharp(input).jpeg({ quality, mozjpeg: true }).toBuffer()
+      const ratio = ours.length / theirs.length
+      assert.ok(ratio > 0.95 && ratio < 1.05, `quality ${quality}: ${ours.length} vs ${theirs.length} bytes`)
+      await assertSimilar(ours, theirs, 3)
     }
-  })
-
-  test('jpeg chroma subsampling', async () => {
-    const input = await inputs.png()
-    for (const chromaSubsampling of ['4:2:0', '4:4:4'] as const) {
-      const meta = await sharp(await blunt(input).jpeg({ chromaSubsampling }).toBuffer()).metadata()
-      assert.equal(meta.chromaSubsampling, chromaSubsampling)
-    }
+    const jpegEncoder = await blunt(input).jpeg().toBuffer()
+    assert.ok((await blunt(input).jpeg({ mozjpeg: true }).toBuffer()).length < jpegEncoder.length)
   })
 
   test('webp lossless is lossless', async () => {

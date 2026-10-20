@@ -5,7 +5,7 @@ import { crc32, deflateSync } from 'node:zlib'
 import sharp from 'sharp'
 
 import { BluntError, blunt } from '../dist/index.js'
-import { assertRejectsWithCode, fromRaw, noisy, pattern } from './helpers.ts'
+import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
 function pngChunk(type: string, data: Buffer): Buffer {
   const length = Buffer.alloc(4)
@@ -31,12 +31,6 @@ function pngWithDimensions(width: number, height: number): Buffer {
   ])
 }
 
-function jpegSegment(marker: number, payload: Buffer): Buffer {
-  const header = Buffer.from([0xff, marker, 0, 0])
-  header.writeUInt16BE(payload.length + 2, 2)
-  return Buffer.concat([header, payload])
-}
-
 /** Deterministic PRNG (mulberry32). */
 function random(seed: number) {
   return () => {
@@ -57,10 +51,23 @@ describe('limits', () => {
     await blunt(input, { limitInputPixels: 0 }).toBuffer()
   })
 
-  test('limitMemory', async () => {
+  test('limitAllocatorMemory', async () => {
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
-    await assertRejectsWithCode(blunt(input, { limitMemory: 20_000 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
-    await blunt(input, { limitMemory: 100_000 }).toBuffer()
+    await assertRejectsWithCode(blunt(input, { limitAllocatorMemory: 20_000 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).toBuffer()
+  })
+
+  test('limitAllocatorMemory counts actual allocations, not just estimates', async () => {
+    // The decoded image (30 KB) fits, but not with the decoder's and encoder's buffers.
+    const input = await fromRaw(pattern(100, 100)).png().toBuffer()
+    await assert.rejects(blunt(input, { limitAllocatorMemory: 60_000 }).toBuffer(), (error: unknown) => {
+      assert.ok(error instanceof BluntError)
+      assert.equal(error.code, 'ERR_LIMIT_EXCEEDED')
+      assert.match(error.message, /allocated more than limitAllocatorMemory/)
+      return true
+    })
+    // The worker that exceeded the limit was replaced.
+    await blunt(input).toBuffer()
   })
 
   test('default pixel limit rejects huge declared dimensions before allocating', async () => {
@@ -100,10 +107,16 @@ describe('limits', () => {
 
   test('encoder memory counts against the memory limit', async () => {
     const input = await fromRaw(pattern(256, 256)).png().toBuffer()
-    // Lossless WebP needs much more memory than PNG for the same image.
-    await blunt(input, { limitMemory: 1024 * 1024 }).png().toBuffer()
+    // Lossless WebP and mozjpeg need much more memory than PNG and jpeg-encoder for the same image.
+    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).png().toBuffer()
+    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).jpeg().toBuffer()
     await assertRejectsWithCode(
-      blunt(input, { limitMemory: 1024 * 1024 }).webp({ lossless: true }).toBuffer(),
+      blunt(input, { limitAllocatorMemory: 1024 * 1024 }).webp({ lossless: true }).toBuffer(),
+      'ERR_LIMIT_EXCEEDED',
+    )
+    // mozjpeg needs ~16 bytes per pixel, exactly 1 MiB here.
+    await assertRejectsWithCode(
+      blunt(input, { limitAllocatorMemory: 1000 * 1000 }).jpeg({ mozjpeg: true }).toBuffer(),
       'ERR_LIMIT_EXCEEDED',
     )
   })
@@ -142,7 +155,7 @@ describe('limits', () => {
     assert.ok(performance.now() - start < 5000)
   })
 
-  test('GIF frames must fit inside the logical screen', async () => {
+  test('GIF frames larger than the logical screen are bounded by the memory limit', async () => {
     const gif = Buffer.concat([
       Buffer.from('GIF89a', 'latin1'),
       // 1x1 screen with a 2-color global palette.
@@ -151,14 +164,7 @@ describe('limits', () => {
       Buffer.from([0x2c, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0]),
       Buffer.from([2, 2, 0x4c, 0x01, 0, 0x3b]),
     ])
-    await assertRejectsWithCode(blunt(gif).toBuffer(), 'ERR_DECODE_FAILED')
-  })
-
-  test('JPEGs with excessive metadata segments are rejected', async () => {
-    const valid = await fromRaw(pattern(8, 8)).jpeg().toBuffer()
-    const segments = Array.from({ length: 5000 }, () => jpegSegment(0xe1, Buffer.from('http://ns.adobe.com/xmp/extension/\0')))
-    const input = Buffer.concat([valid.subarray(0, 2), ...segments, valid.subarray(2)])
-    await assertRejectsWithCode(blunt(input).toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await assertRejectsWithCode(blunt(gif).toBuffer(), 'ERR_LIMIT_EXCEEDED')
   })
 
   test('progressive JPEGs with many empty scans do bounded work', async () => {
@@ -179,9 +185,65 @@ describe('limits', () => {
     }
   })
 
-  test('JPEG-compressed TIFFs are rejected', async () => {
+  test('AVIF limitInputPixels is checked before decoding', async () => {
+    const input = await fromRaw(pattern(100, 100)).avif().toBuffer()
+    await assertRejectsWithCode(blunt(input, { limitInputPixels: 9999 }).metadata(), 'ERR_LIMIT_EXCEEDED')
+    await assertRejectsWithCode(blunt(input, { limitInputPixels: 9999 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await blunt(input, { limitInputPixels: 10000 }).png().toBuffer()
+  })
+
+  test('AVIF decoder memory counts against the memory limit', async () => {
+    // 4:4:4 frames are 3 bytes per pixel, counted twice for film grain, plus the RGB output.
+    const input = await fromRaw(pattern(256, 256)).avif().toBuffer()
+    await assertRejectsWithCode(blunt(input, { limitAllocatorMemory: 400_000 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).png().toBuffer()
+  })
+
+  test('YCbCr TIFFs are rejected', async () => {
+    // sharp (like most encoders) writes JPEG-compressed TIFFs as YCbCr, which `image` doesn't
+    // support.
     const input = await fromRaw(pattern(64, 64)).tiff({ compression: 'jpeg' }).toBuffer()
     await assertRejectsWithCode(blunt(input).png().toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
+  })
+
+  test('other formats that image-rs can detect are rejected', async () => {
+    // Valid 1x1 images where they're simple to write by hand, so that these fail even if another
+    // crate enables image-rs's decoders for them.
+    const bmp = Buffer.alloc(58)
+    bmp.write('BM', 'latin1')
+    bmp.writeUInt32LE(bmp.length, 2)
+    bmp.writeUInt32LE(54, 10) // pixel data offset
+    bmp.writeUInt32LE(40, 14) // BITMAPINFOHEADER
+    bmp.writeInt32LE(1, 18) // width
+    bmp.writeInt32LE(1, 22) // height
+    bmp.writeUInt16LE(1, 26) // planes
+    bmp.writeUInt16LE(24, 28) // bits per pixel
+    const qoi = Buffer.concat([
+      Buffer.from('qoif', 'latin1'),
+      Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 3, 0]),
+      Buffer.from([0xfe, 255, 0, 0]), // QOI_OP_RGB
+      Buffer.from([0, 0, 0, 0, 0, 0, 0, 1]),
+    ])
+    const farbfeld = Buffer.concat([Buffer.from('farbfeld', 'latin1'), Buffer.from([0, 0, 0, 1, 0, 0, 0, 1]), Buffer.alloc(8, 0xff)])
+    const inputs = {
+      bmp,
+      pnm: Buffer.from('P6\n1 1\n255\n\xff\0\0', 'latin1'),
+      qoi,
+      farbfeld,
+      hdr: Buffer.concat([Buffer.from('#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n', 'latin1'), Buffer.from([128, 0, 0, 129])]),
+      ico: Buffer.concat([Buffer.from([0, 0, 1, 0, 1, 0]), Buffer.alloc(16)]),
+      dds: Buffer.concat([Buffer.from('DDS ', 'latin1'), Buffer.alloc(124)]),
+      exr: Buffer.concat([Buffer.from([0x76, 0x2f, 0x31, 0x01]), Buffer.alloc(16)]),
+    }
+    for (const [name, input] of Object.entries(inputs)) {
+      await assert.rejects(blunt(input).toBuffer(), (error: unknown) => {
+        assert.ok(error instanceof BluntError, `${name}: ${String(error)}`)
+        assert.equal(error.code, 'ERR_UNSUPPORTED_FORMAT', `${name}: ${error.message}`)
+        assert.match(error.message, /input is not a JPEG/, name)
+        return true
+      })
+      await assertRejectsWithCode(blunt(input).metadata(), 'ERR_UNSUPPORTED_FORMAT')
+    }
   })
 
   test('unsupported formats are rejected', async () => {
@@ -202,6 +264,7 @@ describe('malformed input never crashes or panics', () => {
     'lossless webp': () => fromRaw(pattern(64, 48)).webp({ lossless: true }).toBuffer(),
     gif: () => fromRaw(pattern(64, 48)).gif().toBuffer(),
     tiff: () => fromRaw(pattern(64, 48)).tiff({ compression: 'lzw' }).toBuffer(),
+    avif: () => fromRaw(pattern(64, 48, 4)).avif().toBuffer(),
   }
   const allowed = new Set(['ERR_DECODE_FAILED', 'ERR_LIMIT_EXCEEDED', 'ERR_UNSUPPORTED_FORMAT'])
 
@@ -233,68 +296,6 @@ describe('malformed input never crashes or panics', () => {
       }
     })
   }
-})
-
-describe('timeouts and cancellation', () => {
-  const large = () => fromRaw(pattern(4000, 4000)).png({ compressionLevel: 1 }).toBuffer()
-
-  test('timeout', async () => {
-    const input = await large()
-    await assertRejectsWithCode(blunt(input).timeout({ seconds: 0.001 }).blur(20).toBuffer(), 'ERR_TIMEOUT')
-  })
-
-  // Lossy WebP is missing: image-webp reads the whole VP8 chunk before decoding it.
-  const photo = noisy(2000, 2000)
-  const decoders = {
-    'baseline jpeg': () => fromRaw(photo).jpeg().toBuffer(),
-    // zune-jpeg still runs its final IDCT pass after an error, so this is less precise.
-    'progressive jpeg': () => fromRaw(photo).jpeg({ progressive: true }).toBuffer(),
-    png: () => fromRaw(photo).png({ compressionLevel: 1 }).toBuffer(),
-    'lossless webp': () => fromRaw(photo).webp({ lossless: true, effort: 0 }).toBuffer(),
-    gif: () => fromRaw(photo).gif({ effort: 1 }).toBuffer(),
-    tiff: () => fromRaw(photo).tiff({ compression: 'lzw' }).toBuffer(),
-  }
-  for (const [name, make] of Object.entries(decoders)) {
-    test(`timeout interrupts ${name} decoding`, async () => {
-      const input = await make()
-      // Resize to a tiny output, so that decoding dominates.
-      const pipeline = () => blunt(input).resize(8).png()
-      let start = performance.now()
-      await pipeline().toBuffer()
-      const full = performance.now() - start
-      start = performance.now()
-      await assertRejectsWithCode(pipeline().timeout({ seconds: 0.001 }).toBuffer(), 'ERR_TIMEOUT')
-      const interrupted = performance.now() - start
-      assert.ok(interrupted < full / 2, `interrupted after ${interrupted}ms, full run took ${full}ms`)
-    })
-  }
-
-  test('already aborted signal', async () => {
-    const input = await fromRaw(pattern(8, 8)).png().toBuffer()
-    const reason = new Error('stop')
-    await assert.rejects(blunt(input).toBuffer({ signal: AbortSignal.abort(reason) }), (error) => error === reason)
-  })
-
-  test('aborting in-flight work stops it early', async () => {
-    const input = await large()
-    const pipeline = () => blunt(input).blur(20).webp({ effort: 6 })
-    const start = performance.now()
-    await pipeline().toBuffer()
-    const duration = performance.now() - start
-
-    const controller = new AbortController()
-    const abortedStart = performance.now()
-    const promise = pipeline().toBuffer({ signal: controller.signal })
-    setTimeout(() => controller.abort(), duration / 10)
-    await assert.rejects(promise, (error: Error) => error.name === 'AbortError')
-    const abortedDuration = performance.now() - abortedStart
-    assert.ok(abortedDuration < duration * 0.75, `aborted after ${abortedDuration}ms, full run took ${duration}ms`)
-  })
-
-  test('a signal that never aborts has no effect', async () => {
-    const input = await fromRaw(pattern(8, 8)).png().toBuffer()
-    await blunt(input).toBuffer({ signal: new AbortController().signal })
-  })
 })
 
 describe('concurrency', () => {

@@ -1,12 +1,18 @@
-import { CancelToken, metadata as nativeMetadata, transform as nativeTransform } from '../binding.js'
-import type {
-  NativeError,
-  NativeLimitOptions,
-  NativeResizeOptions,
-  NativeTransformOptions,
-} from '../binding.js'
+import { availableParallelism } from 'node:os'
 
-export type InputFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'tiff'
+import { NativeBackend, loadBinding } from './native.js'
+import { InvalidResponseError, decodeResponse, encodeOptions, maxResponseBytes } from './protocol.js'
+import type {
+  Backend,
+  LimitOptions,
+  RequestOptions,
+  ResizeOptions as NativeResizeOptions,
+  Response,
+  TransformOptions,
+} from './protocol.js'
+import { WasmBackend } from './wasm.js'
+
+export type InputFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'tiff' | 'avif'
 export type OutputFormat = 'jpeg' | 'png' | 'webp' | 'gif'
 export type Fit = 'cover' | 'contain' | 'fill' | 'inside' | 'outside'
 export type Kernel = 'nearest' | 'linear' | 'cubic' | 'mitchell' | 'lanczos2' | 'lanczos3'
@@ -50,13 +56,39 @@ export interface BluntOptions {
    */
   limitInputPixels?: number | boolean
   /**
-   * The maximum memory in bytes that each stage (decode, resize, blur, encode) may allocate,
-   * estimated before the stage runs. Also passed to decoders as their allocation budget. Default:
-   * 512 MiB.
+   * The maximum memory in bytes that processing may allocate, including the input. The worker's
+   * allocator enforces this, by exiting the worker, which doesn't cover the C encoders (libwebp and
+   * mozjpeg); see the pool's `limitProcessMemory` for that. Each stage (decode, resize, blur, encode) also estimates
+   * its memory before it runs, for a clearer error. Default: 512 MiB.
    */
-  limitMemory?: number
+  limitAllocatorMemory?: number
   /** Equivalent to calling `autoOrient()`. */
   autoOrient?: boolean
+  /** The pool of workers that processes the image. Default: `defaultPool()`. */
+  pool?: Pool
+}
+
+export type BackendName = 'native' | 'wasm'
+
+export interface PoolOptions {
+  /**
+   * `'native'` processes images in worker processes. `'wasm'` processes them in worker threads,
+   * with a wasm build. Default: the `BLUNT_IMAGE_OPTIMIZATION_BACKEND` environment variable, or
+   * else `'native'`, falling back to `'wasm'` if there's no native binding for this platform.
+   */
+  backend?: BackendName
+  /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
+  concurrency?: number
+  /** Milliseconds before an idle worker exits. Default: 10000. */
+  idleTimeout?: number
+  /**
+   * The maximum memory of each worker in bytes, enforced by the OS: `RLIMIT_DATA` on Linux, and the
+   * memory's maximum size for wasm. There's no limit on macOS or Windows. This is a backstop for
+   * `limitAllocatorMemory`, and unlike it, covers the C encoders (libwebp and mozjpeg). It's per
+   * worker, not per image, so it should be larger than `limitAllocatorMemory`. `false` or
+   * `0` removes the limit (not recommended). Default: 768 MiB.
+   */
+  limitProcessMemory?: number | false
 }
 
 export interface ResizeOptions {
@@ -74,21 +106,14 @@ export interface ResizeOptions {
   withoutReduction?: boolean
 }
 
+/** Output is always 4:2:0, with optimized Huffman tables, like sharp's defaults. */
 export interface JpegOptions {
   /** 1-100. Default: 80. */
   quality?: number
-  progressive?: boolean
-  /** Default: `'4:2:0'`. */
-  chromaSubsampling?: '4:2:0' | '4:4:4'
-  /** Optimize Huffman tables. Default: `true`. */
-  optimiseCoding?: boolean
-  optimizeCoding?: boolean
-  /** mozjpeg's quantization table index, 0-8. Default: 0. */
-  quantisationTable?: number
-  quantizationTable?: number
   /**
-   * Approximates sharp's mozjpeg preset (progressive, optimized coding, quantization table 3). There
-   * is no trellis quantization, so output is somewhat larger than real mozjpeg.
+   * Encode with mozjpeg instead of `jpeg-encoder`, with sharp's mozjpeg preset: progressive, trellis
+   * quantization, overshoot deringing, scan optimization, and quantization table 3. Smaller files,
+   * but slower. Output is progressive with mozjpeg, and baseline without it. Default: `false`.
    */
   mozjpeg?: boolean
 }
@@ -124,11 +149,6 @@ export interface GifOptions {
 
 export type FormatOptions = JpegOptions | PngOptions | WebpOptions | GifOptions
 
-export interface TimeoutOptions {
-  /** Processing time (not including time spent queued) after which to fail. 0 disables. */
-  seconds: number
-}
-
 export interface OutputInfo {
   format: OutputFormat
   width: number
@@ -152,13 +172,13 @@ export interface Metadata {
   autoOrient: { width: number; height: number }
 }
 
-export interface ProcessOptions {
-  /** Aborting rejects with `signal.reason` and stops processing at the next checkpoint. */
-  signal?: AbortSignal
+export interface ToBufferOptions {
+  resolveWithObject?: boolean
 }
 
-export interface ToBufferOptions extends ProcessOptions {
-  resolveWithObject?: boolean
+export interface TimeoutOptions {
+  /** 0 (the default) waits indefinitely. */
+  seconds: number
 }
 
 export type ErrorCode =
@@ -166,9 +186,15 @@ export type ErrorCode =
   | 'ERR_LIMIT_EXCEEDED'
   | 'ERR_DECODE_FAILED'
   | 'ERR_ENCODE_FAILED'
-  | 'ERR_TIMEOUT'
-  | 'ERR_ABORTED'
   | 'ERR_INTERNAL'
+  /** Processing took longer than `timeout()`. */
+  | 'ERR_TIMEOUT'
+  /** The worker ran out of memory. */
+  | 'ERR_OUT_OF_MEMORY'
+  /** The worker crashed or sent an invalid response. */
+  | 'ERR_WORKER_CRASHED'
+  /** The worker couldn't be started. */
+  | 'ERR_WORKER_SPAWN'
 
 /** Errors from processing an image. Invalid arguments throw a `TypeError` instead. */
 export class BluntError extends Error {
@@ -259,23 +285,88 @@ function toUint8Array(input: Input): Uint8Array {
   throw invalid('input', 'Buffer, Uint8Array, ArrayBuffer, or ArrayBufferView', input)
 }
 
-function toError(error: NativeError, signal: AbortSignal | undefined): unknown {
-  if (error.code === 'ERR_ABORTED' && signal?.aborted) {
-    return signal.reason
+/** Same as `DEFAULT_MEMORY` in `crates/core/src/limits.rs`. */
+const DEFAULT_LIMIT_ALLOCATOR_MEMORY = 512 * 1024 * 1024
+const DEFAULT_LIMIT_PROCESS_MEMORY = 768 * 1024 * 1024
+const BACKENDS: readonly BackendName[] = ['native', 'wasm']
+
+function createBackend(options: PoolOptions): Backend {
+  const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1, 0xffffffff))
+  const idleTimeout = optional(options.idleTimeout, (v) => checkInteger('idleTimeout', v, 0, 0xffffffff))
+  const memoryLimit =
+    options.limitProcessMemory === false
+      ? 0
+      : (optional(options.limitProcessMemory, (v) =>
+          checkInteger('limitProcessMemory', v, 0, Number.MAX_SAFE_INTEGER),
+        ) ?? DEFAULT_LIMIT_PROCESS_MEMORY)
+  const backend = options.backend ?? process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND
+  if (backend !== undefined) {
+    checkOneOf('backend', backend, BACKENDS)
   }
-  return new BluntError(error.code as ErrorCode, error.message)
+  const maxWorkers = concurrency ?? availableParallelism()
+  const idleTimeoutMs = idleTimeout ?? 10_000
+  const wasm = () =>
+    new WasmBackend({ maxWorkers, idleTimeoutMs, memoryLimit })
+  if (backend === 'wasm') {
+    return wasm()
+  }
+  let binding
+  try {
+    binding = loadBinding()
+  } catch (error) {
+    if (backend === 'native') {
+      throw error
+    }
+    return wasm()
+  }
+  return new NativeBackend(binding, { maxProcesses: maxWorkers, idleTimeoutMs, memoryLimit })
 }
 
-async function withCancelToken<T>(signal: AbortSignal | undefined, run: (token: CancelToken) => Promise<T>) {
-  signal?.throwIfAborted()
-  const token = new CancelToken()
-  const onAbort = () => token.cancel()
-  signal?.addEventListener('abort', onAbort, { once: true })
-  try {
-    return await run(token)
-  } finally {
-    signal?.removeEventListener('abort', onAbort)
+/**
+ * A pool of workers (processes, or threads running wasm) that process images, one image per worker
+ * at a time. Workers are started on demand, and exit when idle. A worker that crashes or times out
+ * is replaced.
+ */
+export class Pool {
+  readonly backend: BackendName
+  #backend: Backend
+
+  constructor(options: PoolOptions = {}) {
+    this.#backend = createBackend(options)
+    this.backend = this.#backend.name
   }
+
+  /** @internal */
+  async run(input: Uint8Array, options: RequestOptions, limits: LimitOptions, timeoutMs?: number): Promise<Response> {
+    const result = await this.#backend.run(input, encodeOptions(options), {
+      timeoutMs,
+      maxResponseBytes: maxResponseBytes(limits.limitAllocatorMemory ?? DEFAULT_LIMIT_ALLOCATOR_MEMORY),
+    })
+    if (result.error) {
+      throw new BluntError(result.error.code as ErrorCode, result.error.message)
+    }
+    let response
+    try {
+      response = decodeResponse(result.response!)
+    } catch (error) {
+      if (error instanceof InvalidResponseError) {
+        throw new BluntError('ERR_WORKER_CRASHED', `the worker sent an invalid response: ${error.message}`)
+      }
+      throw error
+    }
+    if (response.kind === 'error') {
+      throw new BluntError(response.code, response.message)
+    }
+    return response
+  }
+}
+
+let globalPool: Pool | undefined
+
+/** The pool used by pipelines without a `pool` option. Created with default options on first use. */
+export function defaultPool(): Pool {
+  globalPool ??= new Pool()
+  return globalPool
 }
 
 /**
@@ -284,16 +375,22 @@ async function withCancelToken<T>(signal: AbortSignal | undefined, run: (token: 
  */
 export class Pipeline {
   #input: Uint8Array
-  #limits: NativeLimitOptions = {}
+  #pool: Pool | undefined
+  #limits: LimitOptions = {}
+  #timeoutMs: number | undefined
   #autoOrient = false
   #rotate: number | undefined
   #resize: NativeResizeOptions | undefined
-  #blur: NativeTransformOptions['blur']
-  #output: Pick<NativeTransformOptions, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
+  #blur: TransformOptions['blur']
+  #output: Pick<TransformOptions, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
 
   constructor(input: Input, options: BluntOptions = {}) {
     this.#input = toUint8Array(input)
-    const { limitInputPixels, limitMemory, autoOrient } = options
+    const { limitInputPixels, limitAllocatorMemory, autoOrient, pool } = options
+    if (pool !== undefined && !(pool instanceof Pool)) {
+      throw invalid('pool', 'Pool', pool)
+    }
+    this.#pool = pool
     if (limitInputPixels !== undefined) {
       if (typeof limitInputPixels === 'boolean') {
         this.#limits.limitInputPixels = limitInputPixels ? DEFAULT_LIMIT_INPUT_PIXELS : 0
@@ -306,12 +403,26 @@ export class Pipeline {
         )
       }
     }
-    this.#limits.limitMemory = optional(limitMemory, (v) =>
-      checkInteger('limitMemory', v, 1, Number.MAX_SAFE_INTEGER),
+    this.#limits.limitAllocatorMemory = optional(limitAllocatorMemory, (v) =>
+      checkInteger('limitAllocatorMemory', v, 1, Number.MAX_SAFE_INTEGER),
     )
     if (optional(autoOrient, (v) => checkBoolean('autoOrient', v))) {
       this.autoOrient()
     }
+  }
+
+  /**
+   * Limits the wall time of processing (in seconds, 0-3600), like sharp. The time starts when a
+   * worker picks up the image, not while it waits for a free worker. The worker is killed when the
+   * time runs out, so this works even if a decoder hangs.
+   *
+   * There's no timeout by default (like sharp), but you should set one for untrusted input.
+   * Otherwise, an image that's slow to process can occupy a worker indefinitely.
+   */
+  timeout(options: TimeoutOptions): this {
+    const seconds = checkInteger('timeout.seconds', options?.seconds, 0, 3600)
+    this.#timeoutMs = seconds === 0 ? undefined : seconds * 1000
+    return this
   }
 
   /** Rotates using the EXIF orientation, which is then stripped (like all metadata). */
@@ -395,20 +506,10 @@ export class Pipeline {
   }
 
   jpeg(options: JpegOptions = {}): this {
-    const { chromaSubsampling } = options
-    if (chromaSubsampling !== undefined) {
-      checkOneOf('chromaSubsampling', chromaSubsampling, ['4:2:0', '4:4:4'])
-    }
-    const optimizeCoding = options.optimizeCoding ?? options.optimiseCoding
-    const quantizationTable = options.quantizationTable ?? options.quantisationTable
     this.#output = {
       format: 'jpeg',
       jpeg: {
         quality: optional(options.quality, (v) => checkInteger('quality', v, 1, 100)),
-        progressive: optional(options.progressive, (v) => checkBoolean('progressive', v)),
-        chromaSubsampling: chromaSubsampling === undefined ? undefined : chromaSubsampling === '4:2:0',
-        optimizeCoding: optional(optimizeCoding, (v) => checkBoolean('optimizeCoding', v)),
-        quantizationTable: optional(quantizationTable, (v) => checkInteger('quantizationTable', v, 0, 8)),
         mozjpeg: optional(options.mozjpeg, (v) => checkBoolean('mozjpeg', v)),
       },
     }
@@ -473,18 +574,11 @@ export class Pipeline {
     }
   }
 
-  timeout({ seconds }: TimeoutOptions): this {
-    // Round up, because 0 disables the timeout.
-    this.#limits.timeoutMs = Math.ceil(checkNumber('seconds', seconds, 0, 3600) * 1000)
-    return this
-  }
-
   /** Processes the image. Without an explicit output format, uses the input format. */
   toBuffer(options?: ToBufferOptions & { resolveWithObject?: false }): Promise<Buffer>
   toBuffer(options: ToBufferOptions & { resolveWithObject: true }): Promise<{ data: Buffer; info: OutputInfo }>
   async toBuffer(options: ToBufferOptions = {}): Promise<Buffer | { data: Buffer; info: OutputInfo }> {
-    const { signal, resolveWithObject } = options
-    const nativeOptions: NativeTransformOptions = {
+    const transform: TransformOptions = {
       limits: this.#limits,
       autoOrient: this.#autoOrient,
       rotate: this.#rotate,
@@ -492,26 +586,23 @@ export class Pipeline {
       blur: this.#blur,
       ...this.#output,
     }
-    const result = await withCancelToken(signal, (token) => nativeTransform(this.#input, nativeOptions, token))
-    if (result.error) {
-      throw toError(result.error, signal)
+    const response = await this.#run({ transform })
+    if (response.kind !== 'transform') {
+      throw new BluntError('ERR_WORKER_CRASHED', `the worker sent a ${response.kind} response to a transform`)
     }
-    const data = result.data!
-    const info = result.info as OutputInfo
-    return resolveWithObject ? { data, info } : data
+    const { data, info } = response
+    return options.resolveWithObject ? { data, info } : data
   }
 
-  /** Reads the image header without decoding pixels. Ignores all operations. */
-  async metadata(options: ProcessOptions = {}): Promise<Metadata> {
-    const { signal } = options
-    const result = await withCancelToken(signal, (token) => nativeMetadata(this.#input, this.#limits, token))
-    if (result.error) {
-      throw toError(result.error, signal)
+  /** Reads the image header without decoding pixels. Ignores all operations except `timeout()`. */
+  async metadata(): Promise<Metadata> {
+    const metadata = await this.#run({ metadata: this.#limits })
+    if (metadata.kind !== 'metadata') {
+      throw new BluntError('ERR_WORKER_CRASHED', `the worker sent a ${metadata.kind} response to metadata`)
     }
-    const metadata = result.metadata!
     const swap = metadata.orientation >= 5
     return {
-      format: metadata.format as InputFormat,
+      format: metadata.format,
       width: metadata.width,
       height: metadata.height,
       hasAlpha: metadata.hasAlpha,
@@ -522,6 +613,10 @@ export class Pipeline {
         height: swap ? metadata.width : metadata.height,
       },
     }
+  }
+
+  #run(options: RequestOptions): Promise<Response> {
+    return (this.#pool ?? defaultPool()).run(this.#input, options, this.#limits, this.#timeoutMs)
   }
 }
 

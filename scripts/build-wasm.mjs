@@ -1,21 +1,18 @@
 #!/usr/bin/env node
-// Builds the `wasm32-wasip1-threads` binding, then locks down the generated WASI loaders.
+// Builds the wasm module (`crates/wasm`) for `wasm32-wasip1`, checks its imports against an
+// allowlist, and copies it to the package root as `blunt-image-optimization.wasm`.
 //
-// Usage: WASI_SDK_PATH=/path/to/wasi-sdk node scripts/build-wasm.mjs [extra napi build args]
+// wasi-sdk is only needed to compile libwebp and mozjpeg (C). Rust links with its own wasi-libc.
 //
-// libwebp (C) is compiled with wasi-sdk's clang, but we deliberately hide `WASI_SDK_PATH` from the
-// napi CLI. If napi sees it, it links against wasi-sdk's wasi-libc, which is ABI-incompatible with
-// the wasi-libc and crt objects that Rust's `wasm32-wasip1-threads` target ships (wasi-sdk 34
-// changed the futex ABI and removed `__wasi_init_tp`). Linking with rust-lld against Rust's own
-// wasi-libc avoids the mismatch; libwebp only needs the C standard library's basic functions.
+// Usage: WASI_SDK_PATH=/path/to/wasi-sdk node scripts/build-wasm.mjs
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const root = join(import.meta.dirname, '..')
-const target = 'wasm32-wasip1-threads'
-const targetEnv = target.replaceAll('-', '_')
+const target = 'wasm32-wasip1'
+const profile = 'worker'
 
 const wasiSdk = process.env.WASI_SDK_PATH
 if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
@@ -23,50 +20,48 @@ if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
   process.exit(1)
 }
 
-const env = { ...process.env }
-delete env.WASI_SDK_PATH
-env[`CC_${targetEnv}`] = join(wasiSdk, 'bin', 'clang')
-env[`AR_${targetEnv}`] = join(wasiSdk, 'bin', 'llvm-ar')
-env[`CFLAGS_${targetEnv}`] = [`--target=${target}`, `--sysroot=${join(wasiSdk, 'share', 'wasi-sysroot')}`, '-pthread'].join(' ')
+const exe = process.platform === 'win32' ? '.exe' : ''
+const cargo = spawnSync('cargo', ['build', '-p', 'blunt-wasm', '--target', target, '--profile', profile], {
+  cwd: root,
+  stdio: 'inherit',
+  env: {
+    ...process.env,
+    CC_wasm32_wasip1: join(wasiSdk, 'bin', `clang${exe}`),
+    AR_wasm32_wasip1: join(wasiSdk, 'bin', `llvm-ar${exe}`),
+  },
+})
+if (cargo.status !== 0) {
+  process.exit(cargo.status ?? 1)
+}
 
-const napi = spawnSync(
-  'pnpm',
+// What the module may import, by import module. These are exactly what `js/wasm-worker.ts`
+// provides: there are no WASI filesystem functions, and nothing that calls into JS.
+const allowedImports = new Map([
+  ['env', new Set(['memory'])],
   [
-    'exec',
-    'napi',
-    'build',
-    '--platform',
-    '--no-const-enum',
-    '--release',
-    '--target',
-    target,
-    '--js',
-    'binding.js',
-    '--dts',
-    'binding.d.ts',
-    ...process.argv.slice(2),
+    'wasi_snapshot_preview1',
+    new Set([
+      'clock_time_get',
+      'environ_get',
+      'environ_sizes_get',
+      'fd_close',
+      'fd_seek',
+      'fd_write',
+      'proc_exit',
+      'random_get',
+      'sched_yield',
+    ]),
   ],
-  { cwd: root, env, stdio: 'inherit', shell: process.platform === 'win32' },
-)
-if (napi.status !== 0) {
-  process.exit(napi.status ?? 1)
+])
+const file = join(root, 'target', target, profile, 'blunt_wasm.wasm')
+const wasm = await WebAssembly.compile(readFileSync(file))
+const disallowed = WebAssembly.Module.imports(wasm)
+  .filter(({ module, name }) => !allowedImports.get(module)?.has(name))
+  .map(({ module, name }) => `${module}.${name}`)
+if (disallowed.length > 0) {
+  console.error(`The wasm module has imports that aren't allowed: ${disallowed.join(', ')}`)
+  process.exit(1)
 }
+console.log('Checked the imports of the wasm module')
 
-// The generated loaders give the module the host's entire filesystem (via WASI preopens) and
-// environment variables. We need neither. WASI preview1 has no other network or filesystem access.
-//
-// Note that this is defense in depth, not a sandbox: a compromised module can still reach JS globals
-// through the napi interface.
-const preopens = /env: process\.env,(\s*)preopens: \{\s*\[__rootDir\]: __hostRoot,\s*\[__hostRoot\]: __hostRoot,\s*\},/g
-for (const file of ['blunt-image-optimization.wasi.cjs', 'wasi-worker.mjs']) {
-  const path = join(root, file)
-  const source = readFileSync(path, 'utf8')
-  const matches = source.match(preopens)?.length ?? 0
-  if (matches !== 1) {
-    // Fail loudly if napi's template changes, rather than silently shipping an unrestricted loader.
-    console.error(`Expected exactly one WASI preopens block in ${file}, found ${matches}.`)
-    process.exit(1)
-  }
-  writeFileSync(path, source.replace(preopens, 'env: {},$1preopens: {},'))
-  console.log(`Removed WASI filesystem and environment access from ${file}`)
-}
+copyFileSync(file, join(root, 'blunt-image-optimization.wasm'))

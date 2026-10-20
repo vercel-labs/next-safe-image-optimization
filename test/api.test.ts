@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
 import { describe, test } from 'node:test'
 
-import { BluntError, Pipeline, blunt } from '../dist/index.js'
+import { BluntError, Pipeline, blunt, defaultPool } from '../dist/index.js'
 import type { InputFormat } from '../dist/index.js'
 import { fromRaw, pattern } from './helpers.ts'
 
 const png = () => fromRaw(pattern(40, 30, 4)).png().toBuffer()
 
-test('loads the expected binding', () => {
-  // So that CI can't silently test the native binding instead of the wasm one, or vice versa.
-  const binding = createRequire(import.meta.url)('../binding.js') as { __napiBindingTarget: string }
-  const expected = process.env.NAPI_RS_FORCE_WASI ? 'wasm32-wasi' : 'native'
-  assert.equal(binding.__napiBindingTarget, expected)
+test('uses the expected backend', () => {
+  // So that CI can't silently test the native backend instead of the wasm one, or vice versa.
+  assert.equal(defaultPool().backend, process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND ?? 'native')
 })
 
 describe('input', () => {
@@ -58,13 +55,10 @@ describe('argument validation', () => {
     ['blur(2000)', (p) => p.blur(2000)],
     ['jpeg quality 0', (p) => p.jpeg({ quality: 0 })],
     ['jpeg quality 101', (p) => p.jpeg({ quality: 101 })],
-    ['jpeg chromaSubsampling', (p) => p.jpeg({ chromaSubsampling: '4:2:2' as never })],
-    ['jpeg quantizationTable', (p) => p.jpeg({ quantizationTable: 9 })],
     ['png compressionLevel', (p) => p.png({ compressionLevel: 10 })],
     ['webp effort', (p) => p.webp({ effort: 7 })],
     ['gif effort', (p) => p.gif({ effort: 0 })],
     ['toFormat avif', (p) => p.toFormat('avif' as never)],
-    ['timeout', (p) => p.timeout({ seconds: -1 })],
   ]
   for (const [name, call] of cases) {
     test(name, async () => {
@@ -77,7 +71,7 @@ describe('argument validation', () => {
     const input = await png()
     assert.throws(() => blunt(input, { limitInputPixels: -1 }), TypeError)
     assert.throws(() => blunt(input, { limitInputPixels: 1.5 }), TypeError)
-    assert.throws(() => blunt(input, { limitMemory: 0 }), TypeError)
+    assert.throws(() => blunt(input, { limitAllocatorMemory: 0 }), TypeError)
   })
 })
 

@@ -1,0 +1,41 @@
+[package]
+name = "blunt-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Requests are JSON options followed by the input (see `protocol.rs`).
+serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
+# `_exit`, for `ExitOnOom`.
+libc = { version = "0.2.190", default-features = false }
+
+# Decoders (memory-safe Rust). JPEG (zune-jpeg), PNG, WebP, GIF, and TIFF go through `image`, which
+# enables the default features of its codec dependencies (like zune-jpeg's SIMD, and tiff's JPEG
+# support). The worker's limits bound them (see AGENTS.md).
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff"] }
+# Vendored as a git subtree to disable rav1d's asm (see vendor/avif-decode/Cargo.toml).
+avif-decode = { path = "../../vendor/avif-decode", default-features = false }
+# Same version as avif-decode uses, to match on its errors.
+avif-parse = { version = "2.1.0", default-features = false }
+# Reuses avif-decode's output buffers.
+bytemuck = { version = "1.25.2", default-features = false, features = ["extern_crate_alloc"] }
+# ICC profile -> sRGB conversion. Same major version as `image` uses.
+moxcms = { version = "0.8.1", default-features = false, features = ["lut", "neon_shaper_paths", "sse_shaper_paths", "avx_shaper_paths"] }
+
+# Image operations
+fast_image_resize = { version = "6.1.0", default-features = false, features = ["std"] }
+
+# Encoders. Sandboxing encoders isn't a goal: they only ever see pixel buffers we produced.
+jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
+# `mozjpeg: true` (C). Without SIMD (asm), so builds don't need nasm. On wasm, it's compiled with
+# wasi-sdk, like libwebp.
+mozjpeg = { version = "0.10.13", default-features = false }
+png = { version = "0.18.1", default-features = false }
+# `color_quant` is needed for encoding.
+gif = { version = "0.14.2", default-features = false, features = ["std", "color_quant"] }
+# `image-webp` only supports lossless encoding, so lossy WebP comes from libwebp (C). Never use this
+# crate for decoding.
+libwebp-sys = { version = "0.14.4", default-features = false }

@@ -174,17 +174,10 @@ pub fn resize(
                 width: crop_width,
                 height: crop_height,
             };
-            resample(img, out_width, out_height, Some(crop), spec.kernel, limits)
+            resample(img, out_width, out_height, Some(crop), spec.kernel)
         }
         (Fit::Contain, Some(tw), Some(th)) => {
-            let resized = resample(
-                img,
-                resized_width,
-                resized_height,
-                None,
-                spec.kernel,
-                limits,
-            )?;
+            let resized = resample(img, resized_width, resized_height, None, spec.kernel)?;
             let (canvas_width, canvas_height) = (tw.max(resized_width), th.max(resized_height));
             // `embed` adds an alpha channel for transparent backgrounds.
             let adds_alpha = spec.background[3] != u8::MAX && !has_alpha(&resized);
@@ -200,14 +193,7 @@ pub fn resize(
                 spec.background,
             ))
         }
-        _ => resample(
-            img,
-            resized_width,
-            resized_height,
-            None,
-            spec.kernel,
-            limits,
-        ),
+        _ => resample(img, resized_width, resized_height, None, spec.kernel),
     }
 }
 
@@ -227,59 +213,16 @@ fn lanczos2(x: f64) -> f64 {
     }
 }
 
-/// An upper bound on what fast_image_resize allocates: filter coefficients for each axis (which
-/// grow with the source size, not the output size), an intermediate image between the horizontal
-/// and vertical passes, a premultiplied copy of the source for images with alpha, and the output.
-/// Extreme aspect ratios (e.g. 268M x 1) can otherwise allocate gigabytes from a tiny file.
-fn resample_bytes(
-    (src_width, src_height): (f64, f64),
-    (dst_width, dst_height): (u32, u32),
-    kernel: Kernel,
-    img: &DynamicImage,
-) -> f64 {
-    let support = match kernel {
-        Kernel::Nearest => 0.0,
-        Kernel::Linear => 1.0,
-        Kernel::Cubic | Kernel::Mitchell | Kernel::Lanczos2 => 2.0,
-        Kernel::Lanczos3 => 3.0,
-    };
-    let (dst_width, dst_height) = (f64::from(dst_width), f64::from(dst_height));
-    let coefficients = |src: f64, dst: f64| {
-        let scale = (src / dst).max(1.0);
-        // f64 coefficients, plus fixed-point copies.
-        dst * (2.0 * (support * scale).ceil() + 1.0) * 16.0
-    };
-    let bpp = f64::from(channels(img));
-    let intermediate = (src_width * dst_height).max(dst_width * src_height) * bpp;
-    let premultiplied = if has_alpha(img) {
-        src_width * src_height * bpp
-    } else {
-        0.0
-    };
-    coefficients(src_width, dst_width)
-        + coefficients(src_height, dst_height)
-        + intermediate
-        + premultiplied
-        + dst_width * dst_height * bpp
-}
-
 fn resample(
     img: DynamicImage,
     width: u32,
     height: u32,
     crop: Option<fir::CropBox>,
     kernel: Kernel,
-    limits: &Limits,
 ) -> Result<DynamicImage> {
     if crop.is_none() && (width, height) == (img.width(), img.height()) {
         return Ok(img);
     }
-    let src_dims = crop.as_ref().map_or_else(
-        || (f64::from(img.width()), f64::from(img.height())),
-        |c| (c.width, c.height),
-    );
-    // `as` saturates, so huge estimates still fail the check.
-    limits.check_alloc(resample_bytes(src_dims, (width, height), kernel, &img) as u64)?;
     let pixel_type = pixel_type(&img);
     let src = fir::images::ImageRef::new(img.width(), img.height(), img.as_bytes(), pixel_type)
         .map_err(|e| Error::Internal(e.to_string()))?;
@@ -386,7 +329,7 @@ fn gaussian_kernel(sigma: f64) -> Vec<u32> {
 /// A Gaussian blur. For large `sigma`, approximates it with three box blurs so that the cost is
 /// independent of `sigma`. With `sigma == None`, performs a single 3x3 box blur, like sharp's
 /// `blur()` without arguments.
-pub fn blur(img: DynamicImage, sigma: Option<f64>, limits: &Limits) -> Result<DynamicImage> {
+pub fn blur(img: DynamicImage, sigma: Option<f64>) -> Result<DynamicImage> {
     let passes: Vec<BlurPass> = match sigma {
         None => vec![BlurPass::Box { radius: 1 }],
         Some(sigma) if sigma < MIN_BOX_SIGMA => vec![BlurPass::Kernel(gaussian_kernel(sigma))],
@@ -418,8 +361,6 @@ pub fn blur(img: DynamicImage, sigma: Option<f64>, limits: &Limits) -> Result<Dy
         mul_div.multiply_alpha_inplace(&mut view).map_err(fir_err)?;
     }
 
-    // A temporary image, plus a row of u32 accumulators.
-    limits.check_alloc(buf.len() as u64 + (width * channels * 4) as u64)?;
     let mut tmp = vec![0u8; buf.len()];
     for pass in passes {
         match pass {
@@ -593,7 +534,7 @@ mod tests {
             image::Luma([if (x, y) == (2, 2) { 255 } else { 0 }])
         })
         .into();
-        let out = blur(img, Some(0.5), &Limits::default()).unwrap();
+        let out = blur(img, Some(0.5)).unwrap();
         let center = out.as_bytes()[12];
         assert!(center < 255 && center > 100, "{center}");
         assert!(out.as_bytes()[11] > 0);
@@ -602,14 +543,14 @@ mod tests {
     #[test]
     fn blur_preserves_constant_image() {
         let img: DynamicImage = RgbImage::from_pixel(17, 9, image::Rgb([10, 200, 30])).into();
-        let out = blur(img.clone(), Some(4.0), &Limits::default()).unwrap();
+        let out = blur(img.clone(), Some(4.0)).unwrap();
         assert_eq!(out.as_bytes(), img.as_bytes());
     }
 
     #[test]
     fn blur_large_radius() {
         let img: DynamicImage = GrayImage::from_fn(5, 3, |x, _| image::Luma([x as u8 * 50])).into();
-        let out = blur(img, Some(1000.0), &Limits::default()).unwrap();
+        let out = blur(img, Some(1000.0)).unwrap();
         assert_eq!(out.width(), 5);
     }
 

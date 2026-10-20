@@ -69,8 +69,6 @@ pub struct Options {
     /// Decoding threads. `None` uses the available parallelism (up to 32). With `Some(1)`,
     /// decoding happens on the calling thread.
     pub threads: Option<usize>,
-    /// Maximum `width * height` of each AV1 frame. 0 means unlimited.
-    pub frame_size_limit: u32,
 }
 
 /// AVIF decoder + converter
@@ -104,22 +102,12 @@ impl Decoder {
         &self.avif
     }
 
-    /// Options can be changed after parsing, e.g. to limit the frame size based on the sequence header
-    #[inline]
-    pub fn options_mut(&mut self) -> &mut Options {
-        &mut self.options
-    }
-
     #[inline(never)]
     pub fn to_image(mut self) -> Result<Image> {
         let threads = self.options.threads
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()).min(32));
-        let mut decoder = Rav1dDecoder::new(threads, self.options.frame_size_limit)?;
-        // rav1d reports some invalid input by panicking. Catch it here so that the decoder isn't
-        // dropped while unwinding: if closing it panicked too, the process would abort.
-        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.decode_with(&mut decoder)));
-        drop(decoder);
-        res.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        let mut decoder = Rav1dDecoder::new(threads)?;
+        self.decode_with(&mut decoder)
     }
 
     fn decode_with(&mut self, decoder: &mut Rav1dDecoder) -> Result<Image> {

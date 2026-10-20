@@ -10,12 +10,10 @@ pub(crate) struct Rav1dDecoder {
 
 impl Rav1dDecoder {
     #[inline]
-    pub(crate) fn new(threads: usize, frame_size_limit: u32) -> Result<Self> {
+    pub(crate) fn new(threads: usize) -> Result<Self> {
         let mut settings = Settings::new();
         // rav1d supports up to 256 threads; 0 means one per logical CPU
         settings.set_n_threads(threads.min(256) as u32);
-        // Maximum `width * height` of a frame; 0 means unlimited
-        settings.set_frame_size_limit(frame_size_limit);
         // Still images are decoded one frame at a time, so there's nothing to pipeline:
         // keep a single frame context to make each decoded frame available immediately
         // (tile decoding is still multi-threaded via `n_threads`).

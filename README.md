@@ -28,9 +28,9 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 
 | Layer | Status |
 | --- | --- |
-| Memory-safe decoders | `zune-jpeg`, `png`, `image-webp`, `gif`, `tiff` (via `image`), `avif-decode` (`avif-parse` and `rav1d`, without asm). |
-| Memory limits | `limitInputPixels` (default 268402689, like sharp). `limitAllocatorMemory` (default 512 MiB) bounds what each image may allocate: the worker's allocator tracks every Rust allocation, and the worker exits with `ERR_LIMIT_EXCEEDED` if they exceed it. Each stage (decode, resize, blur, encode) also estimates its memory up front, and the limit is passed to decoders as their allocation budget. The pool's `limitProcessMemory` (default 768 MiB) is a hard, OS-enforced limit per worker (`RLIMIT_DATA` on Linux, the memory's maximum size for wasm) that also covers libwebp, which the allocator can't see. macOS accepts `RLIMIT_DATA` but doesn't enforce it, and Windows has no equivalent yet. Decoder metadata buffers (ICC, EXIF) have a separate, smaller cap. Frames must match (or fit inside) the declared canvas. |
-| CPU limits | Work is bounded by the pixel and memory limits, plus format-specific bounds: at most 32 progressive JPEG scans, at most 4096 JPEG APP1 segments, and at most 8 AV1 frames per AVIF item. JPEG-compressed TIFFs are rejected. Blur cost is bounded regardless of sigma. `timeout()` bounds the wall time of each image, by killing its worker. There's no default, so set one for untrusted input. |
+| Memory-safe decoders | `zune-jpeg`, `png`, `image-webp`, `gif`, and `tiff` (all via `image`), and `avif-decode` (`avif-parse` and `rav1d`, without asm). |
+| Memory limits | `limitInputPixels` (default 268402689, like sharp). `limitAllocatorMemory` (default 512 MiB) bounds what each image may allocate: the worker's allocator tracks every Rust allocation, and the worker exits with `ERR_LIMIT_EXCEEDED` if they exceed it. The limit is also passed to decoders as their allocation budget, and libwebp's estimated memory is checked against it up front. The pool's `limitProcessMemory` (default 768 MiB) is a hard, OS-enforced limit per worker (`RLIMIT_DATA` on Linux, the memory's maximum size for wasm) that also covers libwebp, which the allocator can't see. macOS accepts `RLIMIT_DATA` but doesn't enforce it, and Windows has no equivalent yet. |
+| CPU limits | `timeout()` bounds the wall time of each image, by killing its worker. There's no default, so set one for untrusted input: decoders aren't configured to bound their own work (a small file can be slow to decode). Blur cost is bounded regardless of sigma. |
 | Process isolation | Images are processed in worker processes, never in the Node process. A panic, abort, or allocation failure only ends the worker, and is reported as an error (`ERR_WORKER_CRASHED` or `ERR_OUT_OF_MEMORY`). This covers rav1d, which calls its DSP routines and picture allocator through `extern "C"` function pointers, where panics can't unwind. Workers get an empty environment, and on Linux (x86_64 and aarch64) a seccomp filter blocks every syscall besides reading and writing already-open file descriptors (their pipes and stderr), memory management, and exiting: no opening files or sockets, and no spawning processes. Workers are reused, one image at a time, so a compromised worker could affect later images. The input is copied before processing, so JS can't mutate it mid-decode. |
 | Encoders | They only see pixels we produced. Lossy WebP uses libwebp (C), because `image-webp` only encodes lossless. |
 | wasm | The `wasm32-wasip1` build runs in worker threads. Its only imports are a few stubbed-out WASI functions (no filesystem, environment, or JS access), and the build fails if it imports anything else. Each instance's memory has a configurable maximum. |
@@ -42,6 +42,7 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 - Only in-memory input (never file paths). Exports `blunt()` instead of a default export.
 - `rotate(angle)` only supports multiples of 90. There is no `flip`, `extract`, `composite`, etc.
 - No HEIF or SVG input. No AVIF, HEIF, or animated output.
+- No YCbCr TIFF input, which includes most JPEG-compressed TIFFs.
 - PNG output is always lossless truecolor: `png({ quality })` is accepted but ignored (no palette quantization), and `adaptiveFiltering` defaults to `true`.
 - JPEG uses `jpeg-encoder`, not mozjpeg. `mozjpeg: true` approximates mozjpeg's settings, but without trellis quantization, so files are somewhat larger.
 - `blur(sigma)` uses a Gaussian kernel for σ < 3, and a three-pass box blur above that.
@@ -81,6 +82,5 @@ The native backend uses worker processes. Without a native binding for the platf
 ## Future work
 
 - wasm2c-sandboxed decoders for formats without a trustworthy Rust implementation (SVG, HEIF).
-- A per-process memory limit (via the workers' global allocator) to bound decoder memory that isn't covered by decoder options, such as lossless WebP's Huffman tables.
 - Sandboxing on macOS and Windows, and killing workers via a Job Object when the parent dies on Windows.
 - AVIF output, PNG palette quantization, and ICC-aware CMYK conversion.

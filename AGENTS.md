@@ -27,8 +27,7 @@ A Cargo workspace:
 - Disable `default-features` and enable exact features for dependencies.
 - Import with `crate::` paths, not `super::`. The only exception is `use super::*;` in `mod tests`.
 - Images are always 8-bit `Luma8`/`LumaA8`/`Rgb8`/`Rgba8` after `decode::normalize`.
-- Every allocation sized by input must be checked against `Limits` first. The pool's timeout and the worker boundary are a backstop, not a substitute: they turn a hang or crash into an error, but the limits give useful errors and keep workers alive.
-- Bound CPU work with input-proportional limits (like `max_scans`). Wall-time timeouts are per request, and kill the worker.
+- Rely on the worker's memory limits and the caller's timeout, instead of configuring each decoder defensively. Only the pixel limit is checked up front. Anything allocated outside Rust (libwebp) needs its own check against `Limits`.
 - Workers are untrusted. The shim and the JS wrapper validate every response, and kill a worker that sends a malformed one. Each worker handles one request at a time.
 - Workers are built with `panic = "abort"` (the `worker` and `worker-dev` profiles), so there's no `catch_unwind`. A panic, abort, or out-of-memory exit only ends the worker. Keep `crates/shim` panic-free: it runs inside Node.
 - Exit codes and the protocol are duplicated in `crates/core/src/protocol.rs`, `crates/shim/src/pool.rs`, and `js/protocol.ts`. Keep them in sync.
@@ -44,20 +43,16 @@ A Cargo workspace:
 - **Timeouts:** start when a worker picks up a request (not while it's queued). The watchdog kills the worker, which also unblocks the driver's pipe I/O.
 - **wasm:** each instance runs in its own worker thread, imports its memory (so JS sets the maximum), and is discarded after a trap, `proc_exit`, or timeout.
 
-## Why decoders are called directly
+## Decoders
 
-`image` doesn't expose these options, so decoders are called directly:
+Memory is bounded by the worker's limits (`limitAllocatorMemory` in the allocator, `limitProcessMemory` from the OS), and CPU by the caller's `timeout()`. So decoders aren't configured defensively: the only check before decoding is the pixel limit (`Limits::check_input`), which works the same way for every format.
 
-- **JPEG (zune-jpeg):** sets `max_scans` to 32 (default 100; each progressive scan is a full pass). A pre-scan counts raw `FF E1` byte pairs and rejects more than 4096, because zune's extended-XMP reassembly is O(n²). It counts raw bytes rather than parsing segments, so it can't disagree with zune's parser. Memory checks include progressive (or multi-scan) DCT coefficient buffers.
-- **PNG:** `image` uses the full allocation budget as png's metadata limit, so a small iCCP chunk could inflate to 512 MiB. We cap metadata at 16 MiB, skip text chunks, and use `STRIP_16`.
-- **GIF:** `check_frame_consistency(true)`. Otherwise a 1x1 screen can hold a 65535x65535 frame.
-- **WebP:** `set_memory_limit`. Otherwise metadata chunks are allocated from declared sizes (up to 4 GiB). image-webp limits-checks the VP8X canvas, but allocates from the VP8/VP8L/ANMF frame headers, so we check that the first frame matches the canvas. Known gap: VP8L Huffman tables aren't bounded.
-- **AVIF (vendored avif-decode → avif-parse + rav1d):** rav1d is a git dependency on an unreleased revision for its Rust API. Its `dav1d_*` C API is `extern "C"`, so a panic there (rav1d panics on some invalid input) aborts, which only ends the worker. One thread (decoding happens on the calling thread, nothing is spawned on wasm), `frame_size_limit` from the sequence header, and the decoded size must match it. A pre-scan walks the OBUs the way rav1d does and rejects more than 8 frame headers per item: each frame (even a few-byte `show_existing_frame`) is a full decode. Known gap: avif-parse pre-allocates from declared box sizes and entry counts (bounded only by `try_reserve`, which now exits the worker). rav1d logs errors to stderr (`rust_api::Settings` can't disable its logger), which release builds discard.
-- **TIFF:** still decoded through `image`. A pre-scan rejects JPEG compression (6/7): each tile gets an unbounded JPEG decoder, and tiles can share one tiny JPEG. It also checks tile area against the memory limit.
+- **JPEG (zune-jpeg), PNG, GIF, WebP, TIFF:** through `image` (`decode/generic.rs`), with `limitAllocatorMemory` as `image`'s `max_alloc`. GIF frames always decode as RGBA, so we drop the alpha channel if the first frame is opaque. `image`'s TIFF decoder doesn't support YCbCr, which is how sharp and most encoders write JPEG-compressed TIFFs.
+- **AVIF (vendored avif-decode → avif-parse + rav1d):** not through `image`, whose AVIF decoder is dav1d (C). rav1d is a git dependency on an unreleased revision for its Rust API. One thread (decoding happens on the calling thread, nothing is spawned on wasm), and the decoded size must match the sequence header. rav1d logs errors to stderr (`rust_api::Settings` can't disable its logger), which release builds discard.
 
 ## Encoders
 
-`encode::bytes_per_pixel` estimates each encoder's working memory. The numbers are measured (peak RSS on noisy 16 MP images), so re-measure when changing encoders or their settings.
+libwebp (C) is the only encoder the allocator can't see, so `encode::libwebp_bytes_per_pixel` estimates its working memory, and checks it against `limitAllocatorMemory` before encoding. The numbers are measured (peak RSS on noisy 16 MP images), so re-measure when changing libwebp's settings.
 
 ## Commands
 

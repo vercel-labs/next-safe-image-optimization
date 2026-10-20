@@ -1,12 +1,8 @@
-//! Decoders. Each format calls its decoder crate directly (except TIFF) so that we can configure
-//! safety options that `image` doesn't expose. See `AGENTS.md` for the rationale per format.
+//! Decoders. Everything but AVIF goes through `image`. AVIF uses avif-decode, because `image`'s
+//! AVIF decoder is dav1d (C).
 
 mod avif;
-mod gif;
-mod jpeg;
-mod png;
-mod tiff;
-mod webp;
+mod generic;
 
 use image::DynamicImage;
 use image::metadata::Orientation;
@@ -110,12 +106,8 @@ pub fn decode(input: &[u8], limits: &Limits) -> Result<Decoded> {
 
 fn run(input: &[u8], limits: &Limits, pixels: bool) -> Result<(Header, Option<DynamicImage>)> {
     match detect(input)? {
-        InputFormat::Jpeg => jpeg::decode(input, limits, pixels),
-        InputFormat::Png => png::decode(input, limits, pixels),
-        InputFormat::Webp => webp::decode(input, limits, pixels),
-        InputFormat::Gif => gif::decode(input, limits, pixels),
-        InputFormat::Tiff => tiff::decode(input, limits, pixels),
         InputFormat::Avif => avif::decode(input, limits, pixels),
+        format => generic::decode(input, format, limits, pixels),
     }
 }
 
@@ -130,41 +122,6 @@ pub fn normalize(img: DynamicImage) -> DynamicImage {
         _ if img.color().has_alpha() => D::ImageRgba8(img.to_rgba8()),
         _ => D::ImageRgb8(img.to_rgb8()),
     }
-}
-
-/// Builds an image from a decoder's output buffer. `channels` must be 1-4.
-fn from_raw_u8(width: u32, height: u32, channels: u8, data: Vec<u8>) -> Result<DynamicImage> {
-    let invalid = || Error::Decode("decoder output size doesn't match dimensions".into());
-    Ok(match channels {
-        1 => image::GrayImage::from_raw(width, height, data)
-            .ok_or_else(invalid)?
-            .into(),
-        2 => image::GrayAlphaImage::from_raw(width, height, data)
-            .ok_or_else(invalid)?
-            .into(),
-        3 => image::RgbImage::from_raw(width, height, data)
-            .ok_or_else(invalid)?
-            .into(),
-        4 => image::RgbaImage::from_raw(width, height, data)
-            .ok_or_else(invalid)?
-            .into(),
-        _ => {
-            return Err(Error::Decode(format!(
-                "unexpected channel count {channels}"
-            )));
-        }
-    })
-}
-
-/// Allocates a zeroed output buffer after checking it against the memory limit.
-fn alloc(limits: &Limits, bytes: usize) -> Result<Vec<u8>> {
-    limits.check_alloc(bytes as u64)?;
-    Ok(vec![0; bytes])
-}
-
-fn orientation_from_exif(exif: Option<&[u8]>) -> Orientation {
-    exif.and_then(Orientation::from_exif_chunk)
-        .unwrap_or(Orientation::NoTransforms)
 }
 
 #[cfg(test)]

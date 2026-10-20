@@ -41,40 +41,30 @@ pub struct Encoded {
     pub channels: u8,
 }
 
-/// Roughly how many bytes per pixel an encoder allocates, on top of the image itself. Measured with
-/// peak RSS on noisy 16 MP images, rounded up.
-fn bytes_per_pixel(img: &DynamicImage, spec: &OutputSpec) -> u64 {
-    let has_alpha = img.color().has_alpha();
-    let channels = u64::from(img.color().channel_count());
-    match spec {
-        // Flattening or converting to RGB, then a `u8` plane and `i16` coefficients per component.
-        OutputSpec::Jpeg(_) => match img {
-            DynamicImage::ImageLuma8(_) => 3,
-            DynamicImage::ImageRgb8(_) => 9 + 2,
-            _ => 3 + 9 + 2,
-        },
-        // Output can be about as large as the input, and the output buffer grows by doubling.
-        OutputSpec::Png(_) => 2 * channels,
-        // libwebp's ARGB copy, plus YUV planes for lossy. Lossless needs hash chains and backward
-        // references. Lossy alpha is compressed losslessly, with more memory at higher efforts.
-        OutputSpec::Webp(spec) if spec.lossless || spec.near_lossless => 42,
-        OutputSpec::Webp(spec) if has_alpha => {
-            if spec.effort <= 4 {
-                32
-            } else {
-                44
-            }
-        }
-        OutputSpec::Webp(_) => 10,
-        // An RGBA copy, palette indices, and the output.
-        OutputSpec::Gif(_) => 6,
+/// Roughly how many bytes per pixel libwebp allocates, on top of the image itself: its ARGB copy,
+/// plus YUV planes for lossy. Lossless needs hash chains and backward references. Lossy alpha is
+/// compressed losslessly, with more memory at higher efforts. Measured with peak RSS on noisy 16 MP
+/// images, rounded up.
+///
+/// libwebp (C) allocates with `malloc`, so the worker's allocator doesn't count it, and
+/// `limitProcessMemory` isn't enforced everywhere. The other encoders are Rust, so the allocator
+/// limits them.
+fn libwebp_bytes_per_pixel(img: &DynamicImage, spec: &WebpSpec) -> u64 {
+    if spec.lossless || spec.near_lossless {
+        42
+    } else if img.color().has_alpha() {
+        if spec.effort <= 4 { 32 } else { 44 }
+    } else {
+        10
     }
 }
 
 pub fn encode(img: DynamicImage, spec: &OutputSpec, limits: &Limits) -> Result<Encoded> {
     let (width, height) = (img.width(), img.height());
-    let pixels = u64::from(width) * u64::from(height);
-    limits.check_alloc(pixels.saturating_mul(bytes_per_pixel(&img, spec)))?;
+    if let OutputSpec::Webp(webp) = spec {
+        let pixels = u64::from(width) * u64::from(height);
+        limits.check_alloc(pixels.saturating_mul(libwebp_bytes_per_pixel(&img, webp)))?;
+    }
     let (data, channels) = match spec {
         OutputSpec::Jpeg(spec) => jpeg::encode(img, spec)?,
         OutputSpec::Png(spec) => png::encode(&img, spec)?,

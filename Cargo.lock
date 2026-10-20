@@ -112,7 +112,6 @@ dependencies = [
  "fast_image_resize",
  "gif",
  "image",
- "image-webp",
  "jpeg-encoder",
  "libc",
  "libwebp-sys",
@@ -120,8 +119,6 @@ dependencies = [
  "png",
  "serde",
  "serde_json",
- "tiff",
- "zune-jpeg",
 ]
 
 [[package]]

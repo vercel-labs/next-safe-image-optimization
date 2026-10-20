@@ -31,12 +31,6 @@ function pngWithDimensions(width: number, height: number): Buffer {
   ])
 }
 
-function jpegSegment(marker: number, payload: Buffer): Buffer {
-  const header = Buffer.from([0xff, marker, 0, 0])
-  header.writeUInt16BE(payload.length + 2, 2)
-  return Buffer.concat([header, payload])
-}
-
 /** Deterministic PRNG (mulberry32). */
 function random(seed: number) {
   return () => {
@@ -155,7 +149,7 @@ describe('limits', () => {
     assert.ok(performance.now() - start < 5000)
   })
 
-  test('GIF frames must fit inside the logical screen', async () => {
+  test('GIF frames larger than the logical screen are bounded by the memory limit', async () => {
     const gif = Buffer.concat([
       Buffer.from('GIF89a', 'latin1'),
       // 1x1 screen with a 2-color global palette.
@@ -164,14 +158,7 @@ describe('limits', () => {
       Buffer.from([0x2c, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0]),
       Buffer.from([2, 2, 0x4c, 0x01, 0, 0x3b]),
     ])
-    await assertRejectsWithCode(blunt(gif).toBuffer(), 'ERR_DECODE_FAILED')
-  })
-
-  test('JPEGs with excessive metadata segments are rejected', async () => {
-    const valid = await fromRaw(pattern(8, 8)).jpeg().toBuffer()
-    const segments = Array.from({ length: 5000 }, () => jpegSegment(0xe1, Buffer.from('http://ns.adobe.com/xmp/extension/\0')))
-    const input = Buffer.concat([valid.subarray(0, 2), ...segments, valid.subarray(2)])
-    await assertRejectsWithCode(blunt(input).toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await assertRejectsWithCode(blunt(gif).toBuffer(), 'ERR_LIMIT_EXCEEDED')
   })
 
   test('progressive JPEGs with many empty scans do bounded work', async () => {
@@ -206,7 +193,9 @@ describe('limits', () => {
     await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).png().toBuffer()
   })
 
-  test('JPEG-compressed TIFFs are rejected', async () => {
+  test('YCbCr TIFFs are rejected', async () => {
+    // sharp (like most encoders) writes JPEG-compressed TIFFs as YCbCr, which `image` doesn't
+    // support.
     const input = await fromRaw(pattern(64, 64)).tiff({ compression: 'jpeg' }).toBuffer()
     await assertRejectsWithCode(blunt(input).png().toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
   })

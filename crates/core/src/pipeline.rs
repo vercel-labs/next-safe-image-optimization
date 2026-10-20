@@ -49,7 +49,7 @@ pub fn run(input: Vec<u8>, pipeline: &Pipeline) -> Result<Output> {
     }
     img.apply_orientation(transform.to_orientation());
     if let Some(sigma) = pipeline.blur {
-        img = ops::blur(img, sigma, &pipeline.limits)?;
+        img = ops::blur(img, sigma)?;
     }
 
     let encoded = encode::encode(img, &output, &pipeline.limits)?;

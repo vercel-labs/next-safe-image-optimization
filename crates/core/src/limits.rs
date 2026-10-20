@@ -4,19 +4,14 @@ use crate::error::{Error, Result};
 pub const DEFAULT_INPUT_PIXELS: u64 = 0x3FFF * 0x3FFF;
 /// Same as `image::Limits::default()`.
 pub const DEFAULT_MEMORY: u64 = 512 * 1024 * 1024;
-/// Cap for buffered metadata (ICC profiles, EXIF, etc). Decoders often inflate or pre-allocate
-/// metadata chunks based on sizes declared in the file, so this is much smaller than the pixel
-/// budget.
-const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Limits {
     /// Maximum `width * height` of the input image.
     pub input_pixels: u64,
     /// Maximum memory in bytes that the worker may allocate while processing the request (enforced
-    /// by `ExitOnOom`, for Rust allocations). Also the maximum estimated memory for each stage
-    /// (decode, resize, blur, encode), checked before the stage runs so that the error is clearer,
-    /// and the allocation budget passed to decoders that support one.
+    /// by `ExitOnOom`, for Rust allocations). Also passed to `image`'s decoders, and checked
+    /// against the output size and libwebp's estimated memory, which `ExitOnOom` can't see.
     pub memory: u64,
 }
 
@@ -67,10 +62,6 @@ impl Limits {
             )));
         }
         Ok(())
-    }
-
-    pub fn metadata_bytes(&self) -> u64 {
-        self.memory.min(MAX_METADATA_BYTES)
     }
 
     pub fn image_limits(&self) -> image::Limits {

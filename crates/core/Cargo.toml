@@ -12,13 +12,10 @@ serde_json = { version = "1.0.151", default-features = false, features = ["std"]
 # `_exit`, for `ExitOnOom`.
 libc = { version = "0.2.190", default-features = false }
 
-# Decoders (memory-safe Rust). We call most decoders directly to configure safety options that
-# `image` doesn't expose (see AGENTS.md). Note that `image` enables the default features of its codec
-# dependencies regardless of what we specify here.
+# Decoders (memory-safe Rust). JPEG (zune-jpeg), PNG, WebP, GIF, and TIFF go through `image`, which
+# enables the default features of its codec dependencies (like zune-jpeg's SIMD, and tiff's JPEG
+# support). The worker's limits bound them (see AGENTS.md).
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff"] }
-zune-jpeg = { version = "0.5.15", default-features = false, features = ["std", "x86", "neon"] }
-image-webp = { version = "0.2.4", default-features = false }
-tiff = { version = "0.11.3", default-features = false }
 # Vendored as a git subtree to disable rav1d's asm (see vendor/avif-decode/Cargo.toml).
 avif-decode = { path = "../../vendor/avif-decode", default-features = false }
 # Same version as avif-decode uses, to match on its errors.
@@ -33,9 +30,8 @@ fast_image_resize = { version = "6.1.0", default-features = false, features = ["
 
 # Encoders. Sandboxing encoders isn't a goal: they only ever see pixel buffers we produced.
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
-# Also used for decoding.
 png = { version = "0.18.1", default-features = false }
-# Also used for decoding. `color_quant` is needed for encoding.
+# `color_quant` is needed for encoding.
 gif = { version = "0.14.2", default-features = false, features = ["std", "color_quant"] }
 # `image-webp` only supports lossless encoding, so lossy WebP comes from libwebp (C). Never use this
 # crate for decoding.

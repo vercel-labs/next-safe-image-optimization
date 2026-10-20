@@ -57,8 +57,8 @@ export interface BluntOptions {
   limitInputPixels?: number | boolean
   /**
    * The maximum memory in bytes that processing may allocate, including the input. The worker's
-   * allocator enforces this, by exiting the worker, which doesn't cover libwebp (C); see the
-   * pool's `limitProcessMemory` for that. Each stage (decode, resize, blur, encode) also estimates
+   * allocator enforces this, by exiting the worker, which doesn't cover the C encoders (libwebp and
+   * mozjpeg); see the pool's `limitProcessMemory` for that. Each stage (decode, resize, blur, encode) also estimates
    * its memory before it runs, for a clearer error. Default: 512 MiB.
    */
   limitAllocatorMemory?: number
@@ -83,8 +83,9 @@ export interface PoolOptions {
   idleTimeout?: number
   /**
    * The maximum memory of each worker in bytes, enforced by the OS: `RLIMIT_DATA` on Linux, and the
-   * memory's maximum size for wasm. There's no limit on macOS or Windows. This is a backstop for `limitAllocatorMemory`, and unlike it, covers libwebp (C).
-   * It's per worker, not per image, so it should be larger than `limitAllocatorMemory`. `false` or
+   * memory's maximum size for wasm. There's no limit on macOS or Windows. This is a backstop for
+   * `limitAllocatorMemory`, and unlike it, covers the C encoders (libwebp and mozjpeg). It's per
+   * worker, not per image, so it should be larger than `limitAllocatorMemory`. `false` or
    * `0` removes the limit (not recommended). Default: 768 MiB.
    */
   limitProcessMemory?: number | false
@@ -105,21 +106,15 @@ export interface ResizeOptions {
   withoutReduction?: boolean
 }
 
+/** Output is always 4:2:0, with optimized Huffman tables, like sharp's defaults. */
 export interface JpegOptions {
   /** 1-100. Default: 80. */
   quality?: number
   progressive?: boolean
-  /** Default: `'4:2:0'`. */
-  chromaSubsampling?: '4:2:0' | '4:4:4'
-  /** Optimize Huffman tables. Default: `true`. */
-  optimiseCoding?: boolean
-  optimizeCoding?: boolean
-  /** mozjpeg's quantization table index, 0-8. Default: 0. */
-  quantisationTable?: number
-  quantizationTable?: number
   /**
-   * Approximates sharp's mozjpeg preset (progressive, optimized coding, quantization table 3). There
-   * is no trellis quantization, so output is somewhat larger than real mozjpeg.
+   * Encode with mozjpeg instead of `jpeg-encoder`, with sharp's mozjpeg preset: progressive, trellis
+   * quantization, overshoot deringing, scan optimization, and quantization table 3. Smaller files,
+   * but slower. Default: `false`.
    */
   mozjpeg?: boolean
 }
@@ -512,20 +507,11 @@ export class Pipeline {
   }
 
   jpeg(options: JpegOptions = {}): this {
-    const { chromaSubsampling } = options
-    if (chromaSubsampling !== undefined) {
-      checkOneOf('chromaSubsampling', chromaSubsampling, ['4:2:0', '4:4:4'])
-    }
-    const optimizeCoding = options.optimizeCoding ?? options.optimiseCoding
-    const quantizationTable = options.quantizationTable ?? options.quantisationTable
     this.#output = {
       format: 'jpeg',
       jpeg: {
         quality: optional(options.quality, (v) => checkInteger('quality', v, 1, 100)),
         progressive: optional(options.progressive, (v) => checkBoolean('progressive', v)),
-        chromaSubsampling: chromaSubsampling === undefined ? undefined : chromaSubsampling === '4:2:0',
-        optimizeCoding: optional(optimizeCoding, (v) => checkBoolean('optimizeCoding', v)),
-        quantizationTable: optional(quantizationTable, (v) => checkInteger('quantizationTable', v, 0, 8)),
         mozjpeg: optional(options.mozjpeg, (v) => checkBoolean('mozjpeg', v)),
       },
     }

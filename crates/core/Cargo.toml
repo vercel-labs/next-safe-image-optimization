@@ -30,6 +30,9 @@ fast_image_resize = { version = "6.1.0", default-features = false, features = ["
 
 # Encoders. Sandboxing encoders isn't a goal: they only ever see pixel buffers we produced.
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
+# `mozjpeg: true` (C). Without SIMD (asm), so builds don't need nasm. On wasm, it's compiled with
+# wasi-sdk, like libwebp.
+mozjpeg = { version = "0.10.13", default-features = false }
 png = { version = "0.18.1", default-features = false }
 # `color_quant` is needed for encoding.
 gif = { version = "0.14.2", default-features = false, features = ["std", "color_quant"] }

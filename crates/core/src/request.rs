@@ -3,7 +3,7 @@
 
 use serde::Deserialize;
 
-use crate::encode::{GifSpec, JpegSpec, OutputSpec, PngSpec, QuantizationTable, WebpSpec};
+use crate::encode::{GifSpec, JpegSpec, OutputSpec, PngSpec, WebpSpec};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 use crate::ops::{self, ResizeSpec};
@@ -85,10 +85,6 @@ struct BlurOptions {
 struct JpegOptions {
     quality: Option<f64>,
     progressive: Option<bool>,
-    /// `true` for 4:2:0 (the default), `false` for 4:4:4.
-    chroma_subsampling: Option<bool>,
-    optimize_coding: Option<bool>,
-    quantization_table: Option<f64>,
     mozjpeg: Option<bool>,
 }
 
@@ -242,13 +238,6 @@ fn parse_output(options: &mut TransformOptions) -> Result<Option<OutputSpec>> {
                     spec.quality = int("jpeg.quality", q, 1.0, 100.0)? as u8;
                 }
                 spec.progressive = o.progressive.unwrap_or(spec.progressive);
-                spec.chroma_subsampling = o.chroma_subsampling.unwrap_or(spec.chroma_subsampling);
-                spec.optimize_coding = o.optimize_coding.unwrap_or(spec.optimize_coding);
-                if let Some(t) = o.quantization_table {
-                    let index = int("jpeg.quantizationTable", t, 0.0, 8.0)? as u32;
-                    spec.quantization_table =
-                        QuantizationTable::from_index(index).expect("index is in range");
-                }
             }
             OutputSpec::Jpeg(spec)
         }

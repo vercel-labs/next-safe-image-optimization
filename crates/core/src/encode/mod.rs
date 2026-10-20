@@ -9,7 +9,7 @@ mod webp;
 use image::DynamicImage;
 
 pub use self::gif::GifSpec;
-pub use self::jpeg::{JpegSpec, QuantizationTable};
+pub use self::jpeg::JpegSpec;
 pub use self::png::PngSpec;
 pub use self::webp::WebpSpec;
 use crate::error::{Error, Result};
@@ -41,30 +41,42 @@ pub struct Encoded {
     pub channels: u8,
 }
 
-/// Roughly how many bytes per pixel libwebp allocates, on top of the image itself: its ARGB copy,
-/// plus YUV planes for lossy. Lossless needs hash chains and backward references. Lossy alpha is
-/// compressed losslessly, with more memory at higher efforts. Measured with peak RSS on noisy 16 MP
-/// images, rounded up.
-///
-/// libwebp (C) allocates with `malloc`, so the worker's allocator doesn't count it, and
-/// `limitProcessMemory` isn't enforced everywhere. The other encoders are Rust, so the allocator
-/// limits them.
-fn libwebp_bytes_per_pixel(img: &DynamicImage, spec: &WebpSpec) -> u64 {
-    if spec.lossless || spec.near_lossless {
-        42
-    } else if img.color().has_alpha() {
-        if spec.effort <= 4 { 32 } else { 44 }
-    } else {
-        10
+/// Roughly how many bytes per pixel the C encoders (libwebp and mozjpeg) allocate, on top of the
+/// image itself and their output. They allocate with `malloc`, so the worker's allocator doesn't
+/// count it, and `limitProcessMemory` isn't enforced everywhere. The other encoders are Rust, so
+/// the allocator limits them. Measured with peak RSS on noisy 16 MP images, rounded up.
+fn c_encoder_bytes_per_pixel(img: &DynamicImage, spec: &OutputSpec) -> u64 {
+    match spec {
+        // Its ARGB copy, plus YUV planes for lossy. Lossless needs hash chains and backward
+        // references. Lossy alpha is compressed losslessly, with more memory at higher efforts.
+        OutputSpec::Webp(spec) if spec.lossless || spec.near_lossless => 42,
+        OutputSpec::Webp(spec) if img.color().has_alpha() => {
+            if spec.effort <= 4 {
+                32
+            } else {
+                44
+            }
+        }
+        OutputSpec::Webp(_) => 10,
+        // Trellis quantization keeps the whole image's DCT coefficients. Scan optimization also
+        // buffers each candidate scan, which grows with quality.
+        OutputSpec::Jpeg(spec) if spec.mozjpeg => {
+            let gray = matches!(img.color(), image::ColorType::L8 | image::ColorType::La8);
+            match (gray, spec.progressive) {
+                (true, false) => 5,
+                (true, true) => 12,
+                (false, false) => 7,
+                (false, true) => 16,
+            }
+        }
+        _ => 0,
     }
 }
 
 pub fn encode(img: DynamicImage, spec: &OutputSpec, limits: &Limits) -> Result<Encoded> {
     let (width, height) = (img.width(), img.height());
-    if let OutputSpec::Webp(webp) = spec {
-        let pixels = u64::from(width) * u64::from(height);
-        limits.check_alloc(pixels.saturating_mul(libwebp_bytes_per_pixel(&img, webp)))?;
-    }
+    let pixels = u64::from(width) * u64::from(height);
+    limits.check_alloc(pixels.saturating_mul(c_encoder_bytes_per_pixel(&img, spec)))?;
     let (data, channels) = match spec {
         OutputSpec::Jpeg(spec) => jpeg::encode(img, spec)?,
         OutputSpec::Png(spec) => png::encode(&img, spec)?,

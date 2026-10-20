@@ -23,11 +23,11 @@ A Cargo workspace:
 
 ## Rules
 
-- Never decode with C libraries. libwebp is only for encoding.
+- Never decode with C libraries. libwebp and mozjpeg are only for encoding.
 - Disable `default-features` and enable exact features for dependencies.
 - Import with `crate::` paths, not `super::`. The only exception is `use super::*;` in `mod tests`.
 - Images are always 8-bit `Luma8`/`LumaA8`/`Rgb8`/`Rgba8` after `decode::normalize`.
-- Rely on the worker's memory limits and the caller's timeout, instead of configuring each decoder defensively. Only the pixel limit is checked up front. Anything allocated outside Rust (libwebp) needs its own check against `Limits`.
+- Rely on the worker's memory limits and the caller's timeout, instead of configuring each decoder defensively. Only the pixel limit is checked up front. Anything allocated outside Rust (libwebp, mozjpeg) needs its own check against `Limits`.
 - Workers are untrusted. The shim and the JS wrapper validate every response, and kill a worker that sends a malformed one. Each worker handles one request at a time.
 - Workers are built with `panic = "abort"` (the `worker` and `worker-dev` profiles), so there's no `catch_unwind`. A panic, abort, or out-of-memory exit only ends the worker. Keep `crates/shim` panic-free: it runs inside Node.
 - Exit codes and the protocol are duplicated in `crates/core/src/protocol.rs`, `crates/shim/src/pool.rs`, and `js/protocol.ts`. Keep them in sync.
@@ -39,7 +39,7 @@ A Cargo workspace:
 - **Spawning:** the shim spawns workers with `<version> <parent pid>` arguments (the worker exits with `EXIT_VERSION_MISMATCH` if the version differs), an empty environment, and piped stdin/stdout. stderr is inherited in debug builds, and discarded in release builds.
 - **Parent death:** a reader thread in the worker exits the process as soon as stdin closes, even mid-request. On Linux, `PR_SET_PDEATHSIG` also kills the worker when its driver thread exits, so the driver must outlive its worker.
 - **seccomp (Linux x86_64/aarch64):** after startup, only I/O on existing fds, memory management, futexes, and aborting are allowed. Anything else fails with `EPERM`. The filter uses `TSYNC`, after the reader thread has started (glibc's thread setup needs `rseq` and `set_robust_list`). If a decoder starts needing a new syscall, it'll show up as a confusing error, not a crash.
-- **Memory limits:** `ExitOnOom` counts live Rust allocations. While a request runs, it exits with `EXIT_MEMORY_LIMIT` (reported as `ERR_LIMIT_EXCEEDED`) if they exceed the request's `limitAllocatorMemory`, which includes the request buffer itself. Between requests, there's no limit, because the next request is read before its limit is known. libwebp (C) allocates with `malloc` directly, so only the hard limit sees it: the pool's `limitProcessMemory`, which the worker applies as `RLIMIT_DATA` at startup (Linux only: macOS's `RLIMIT_DATA` counts reserved address space, so any useful limit fails), or the wasm memory's maximum. When an allocation fails (including `try_reserve`), `ExitOnOom` exits with `EXIT_OUT_OF_MEMORY`. On wasm, exits go through `proc_exit`.
+- **Memory limits:** `ExitOnOom` counts live Rust allocations. While a request runs, it exits with `EXIT_MEMORY_LIMIT` (reported as `ERR_LIMIT_EXCEEDED`) if they exceed the request's `limitAllocatorMemory`, which includes the request buffer itself. Between requests, there's no limit, because the next request is read before its limit is known. libwebp and mozjpeg (C) allocate with `malloc` directly, so only the hard limit sees it: the pool's `limitProcessMemory`, which the worker applies as `RLIMIT_DATA` at startup (Linux only: macOS's `RLIMIT_DATA` counts reserved address space, so any useful limit fails), or the wasm memory's maximum. When an allocation fails (including `try_reserve`), `ExitOnOom` exits with `EXIT_OUT_OF_MEMORY`. On wasm, exits go through `proc_exit`.
 - **Timeouts:** start when a worker picks up a request (not while it's queued). The watchdog kills the worker, which also unblocks the driver's pipe I/O.
 - **wasm:** each instance runs in its own worker thread, imports its memory (so JS sets the maximum), and is discarded after a trap, `proc_exit`, or timeout.
 
@@ -54,7 +54,9 @@ Every format goes through `image`'s `ImageReader` (`decode/mod.rs`), which detec
 
 ## Encoders
 
-libwebp (C) is the only encoder the allocator can't see, so `encode::libwebp_bytes_per_pixel` estimates its working memory, and checks it against `limitAllocatorMemory` before encoding. The numbers are measured (peak RSS on noisy 16 MP images), so re-measure when changing libwebp's settings.
+JPEG uses `jpeg-encoder` by default, and mozjpeg (C) with `mozjpeg: true`. mozjpeg's defaults are sharp's mozjpeg preset (trellis quantization, overshoot deringing, scan optimization). It reports errors by unwinding, which aborts the worker, so check anything it would reject (like dimensions over 65500) before encoding.
+
+libwebp and mozjpeg (C) are the only encoders the allocator can't see, so `encode::c_encoder_bytes_per_pixel` estimates their working memory, and checks it against `limitAllocatorMemory` before encoding. The numbers are measured (peak RSS on noisy 16 MP images), so re-measure when changing their settings.
 
 ## Commands
 
@@ -66,7 +68,7 @@ WASI_SDK_PATH=... pnpm build:wasm && pnpm test:wasm
 
 ## Gotchas
 
-- **wasm:** wasi-sdk only compiles libwebp. Rust links with its own bundled wasi-libc. Rust 1.100+ links wasi-libc's reactor startup (an `_initialize` export) and older versions don't, so `js/wasm-worker.ts` calls `_initialize` only if it exists.
+- **wasm:** wasi-sdk only compiles libwebp and mozjpeg. Rust links with its own bundled wasi-libc. Rust 1.100+ links wasi-libc's reactor startup (an `_initialize` export) and older versions don't, so `js/wasm-worker.ts` calls `_initialize` only if it exists.
 - **Linux CI:** builds use cargo-zigbuild (glibc 2.28, matching Node), for both the shim and the worker.
 - **CI artifacts** don't keep file permissions, so test jobs `chmod +x` the worker.
 - **Publishing:** the worker belongs in each platform package, next to the `.node` file (`js/native.ts` looks there), but `napi prepublish` doesn't know about it yet.

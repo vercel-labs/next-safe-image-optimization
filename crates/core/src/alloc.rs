@@ -8,7 +8,7 @@ use crate::protocol::{EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY};
 /// [`EXIT_OUT_OF_MEMORY`]), so that the parent can tell these apart from other crashes. The default
 /// would abort, which looks like any other panic.
 ///
-/// This only sees Rust allocations: libwebp (C) allocates with `malloc` directly. The OS-level
+/// This only sees Rust allocations: libwebp and mozjpeg (C) allocate with `malloc` directly. The OS-level
 /// limit (`RLIMIT_DATA`, set by the worker) covers that.
 ///
 /// Fallible allocations (`try_reserve`) also exit. That's fine: the request fails either way, and

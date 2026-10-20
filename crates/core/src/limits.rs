@@ -11,7 +11,7 @@ pub struct Limits {
     pub input_pixels: u64,
     /// Maximum memory in bytes that the worker may allocate while processing the request (enforced
     /// by `ExitOnOom`, for Rust allocations). Also passed to `image`'s decoders, and checked
-    /// against the output size and libwebp's estimated memory, which `ExitOnOom` can't see.
+    /// against the output size and the C encoders' estimated memory, which `ExitOnOom` can't see.
     pub memory: u64,
 }
 

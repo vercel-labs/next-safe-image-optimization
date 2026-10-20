@@ -52,6 +52,14 @@ const wasi = {
     view().setUint32(written, total, true)
     return ERRNO_SUCCESS
   },
+  // Linked in by mozjpeg's use of stdio (`fprintf(stderr, ...)`), but there are no files to close
+  // or seek.
+  fd_close(): number {
+    return ERRNO_BADF
+  },
+  fd_seek(): number {
+    return ERRNO_BADF
+  },
   proc_exit(code: number): never {
     throw new ProcExit(code)
   },

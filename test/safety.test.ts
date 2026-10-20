@@ -107,10 +107,16 @@ describe('limits', () => {
 
   test('encoder memory counts against the memory limit', async () => {
     const input = await fromRaw(pattern(256, 256)).png().toBuffer()
-    // Lossless WebP needs much more memory than PNG for the same image.
+    // Lossless WebP and mozjpeg need much more memory than PNG and jpeg-encoder for the same image.
     await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).png().toBuffer()
+    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).jpeg().toBuffer()
     await assertRejectsWithCode(
       blunt(input, { limitAllocatorMemory: 1024 * 1024 }).webp({ lossless: true }).toBuffer(),
+      'ERR_LIMIT_EXCEEDED',
+    )
+    // Progressive mozjpeg needs ~16 bytes per pixel, exactly 1 MiB here.
+    await assertRejectsWithCode(
+      blunt(input, { limitAllocatorMemory: 1000 * 1000 }).jpeg({ mozjpeg: true }).toBuffer(),
       'ERR_LIMIT_EXCEEDED',
     )
   })

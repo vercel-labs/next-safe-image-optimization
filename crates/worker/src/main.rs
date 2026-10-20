@@ -100,7 +100,7 @@ fn read_requests(sender: mpsc::SyncSender<Vec<u8>>) -> ! {
 }
 
 /// Sets the hard (and soft) `RLIMIT_DATA`. Unlike the allocator's limit, this also covers libwebp
-/// (C), but it can't distinguish going over the limit from any other allocation failure.
+/// and mozjpeg (C), but it can't distinguish going over the limit from any other allocation failure.
 ///
 /// Linux counts private writable mappings (so all of `malloc`'s memory, but not code or address
 /// space that's only reserved). Not on macOS, which counts all reserved address space (hundreds of

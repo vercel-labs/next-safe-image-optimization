@@ -2,7 +2,7 @@
 // Builds the wasm module (`crates/wasm`) for `wasm32-wasip1`, checks its imports against an
 // allowlist, and copies it to the package root as `blunt-image-optimization.wasm`.
 //
-// wasi-sdk is only needed to compile libwebp (C). Rust links with its own wasi-libc.
+// wasi-sdk is only needed to compile libwebp and mozjpeg (C). Rust links with its own wasi-libc.
 //
 // Usage: WASI_SDK_PATH=/path/to/wasi-sdk node scripts/build-wasm.mjs
 
@@ -40,7 +40,17 @@ const allowedImports = new Map([
   ['env', new Set(['memory'])],
   [
     'wasi_snapshot_preview1',
-    new Set(['clock_time_get', 'environ_get', 'environ_sizes_get', 'fd_write', 'proc_exit', 'random_get', 'sched_yield']),
+    new Set([
+      'clock_time_get',
+      'environ_get',
+      'environ_sizes_get',
+      'fd_close',
+      'fd_seek',
+      'fd_write',
+      'proc_exit',
+      'random_get',
+      'sched_yield',
+    ]),
   ],
 ])
 const file = join(root, 'target', target, profile, 'blunt_wasm.wasm')

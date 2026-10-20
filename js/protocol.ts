@@ -50,10 +50,6 @@ export interface TransformOptions {
   jpeg?: {
     quality?: number
     progressive?: boolean
-    /** `true` for 4:2:0 (the default), `false` for 4:4:4. */
-    chromaSubsampling?: boolean
-    optimizeCoding?: boolean
-    quantizationTable?: number
     mozjpeg?: boolean
   }
   png?: { compressionLevel?: number; adaptiveFiltering?: boolean }

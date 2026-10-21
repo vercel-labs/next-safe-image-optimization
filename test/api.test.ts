@@ -3,7 +3,7 @@ import { describe, test } from 'node:test'
 
 import { BluntError, Pipeline, blunt, defaultPool } from '../dist/index.js'
 import type { InputFormat } from '../dist/index.js'
-import { fromRaw, pattern } from './helpers.ts'
+import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
 const png = () => fromRaw(pattern(40, 30, 4)).png().toBuffer()
 
@@ -72,6 +72,31 @@ describe('argument validation', () => {
     assert.throws(() => blunt(input, { limitInputPixels: -1 }), TypeError)
     assert.throws(() => blunt(input, { limitInputPixels: 1.5 }), TypeError)
     assert.throws(() => blunt(input, { limitAllocatorMemory: 0 }), TypeError)
+    assert.throws(() => blunt(input, { allowedInputFormats: [] }), TypeError)
+    assert.throws(() => blunt(input, { allowedInputFormats: ['bmp' as never] }), TypeError)
+    assert.throws(() => blunt(input, { allowedInputFormats: 'png' as never }), TypeError)
+    assert.throws(() => blunt(input, { allowAnimated: 1 as never }), TypeError)
+  })
+})
+
+describe('allowedInputFormats', () => {
+  test('rejects other formats before decoding', async () => {
+    const input = await png()
+    await blunt(input, { allowedInputFormats: ['png'] }).toBuffer()
+    await blunt(input, { allowedInputFormats: ['jpeg', 'png'] }).metadata()
+    for (const formats of [['jpeg'], ['jpeg', 'webp', 'svg']] as InputFormat[][]) {
+      await assertRejectsWithCode(blunt(input, { allowedInputFormats: formats }).toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
+      await assertRejectsWithCode(blunt(input, { allowedInputFormats: formats }).metadata(), 'ERR_UNSUPPORTED_FORMAT')
+    }
+  })
+
+  test('applies to svg', async () => {
+    const input = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>')
+    await blunt(input, { allowedInputFormats: ['svg'] }).png().toBuffer()
+    await assertRejectsWithCode(
+      blunt(input, { allowedInputFormats: ['png'] }).png().toBuffer(),
+      'ERR_UNSUPPORTED_FORMAT',
+    )
   })
 })
 

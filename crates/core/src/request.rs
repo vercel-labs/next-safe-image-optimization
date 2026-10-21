@@ -3,6 +3,7 @@
 
 use serde::Deserialize;
 
+use crate::decode::InputFormat;
 use crate::encode::{GifSpec, JpegSpec, OutputSpec, PngSpec, WebpSpec};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
@@ -117,6 +118,8 @@ pub struct LimitOptions {
     /// 0 disables the limit.
     limit_input_pixels: Option<f64>,
     limit_allocator_memory: Option<f64>,
+    allowed_input_formats: Option<Vec<InputFormat>>,
+    allow_animated: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -174,6 +177,13 @@ pub fn parse_limits(options: Option<LimitOptions>) -> Result<Limits> {
         if let Some(memory) = options.limit_allocator_memory {
             limits.memory = int("limitAllocatorMemory", memory, 1.0, MAX_SAFE_INTEGER)? as u64;
         }
+        if let Some(formats) = options.allowed_input_formats {
+            if formats.is_empty() {
+                return Err(invalid("allowedInputFormats must not be empty".into()));
+            }
+            limits.input_formats = formats;
+        }
+        limits.animated = options.allow_animated.unwrap_or(limits.animated);
     }
     Ok(limits)
 }
@@ -337,6 +347,8 @@ mod tests {
             r#"{"transform":{"format":"avif"}}"#,
             r#"{"transform":{"unknown":1}}"#,
             r#"{"metadata":{"limitAllocatorMemory":0}}"#,
+            r#"{"metadata":{"allowedInputFormats":[]}}"#,
+            r#"{"metadata":{"allowedInputFormats":["bmp"]}}"#,
             r#"{"other":{}}"#,
         ] {
             let result = parse(json.as_bytes()).and_then(|request| match request {

@@ -17,6 +17,7 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 ## Features
 
 - **Input:** JPEG, PNG, WebP, GIF, TIFF, AVIF, SVG. Only the first frame of animations is decoded. AVIF ICC profiles, orientation (`irot`/`imir`), and cropping (`clap`) are ignored, and grid (tiled) AVIFs and AVIF sequences are rejected.
+- `allowedInputFormats` restricts the input formats (detected from the contents, never a file extension or content type), and `allowAnimated: false` rejects animated images with `ERR_ANIMATED`. Both are checked before decoding, and also apply to `metadata()`.
 - **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp).
 - **Operations:** auto-orient, rotate (multiples of 90°), resize (all of sharp's `fit` modes, gravity, kernels), blur.
 - `metadata()` reads the header without decoding pixels.
@@ -85,3 +86,4 @@ The native backend uses worker processes. Without a native binding for the platf
 - wasm2c-sandboxed decoders for formats without a trustworthy Rust implementation (HEIF).
 - Sandboxing on macOS and Windows, and killing workers via a Job Object when the parent dies on Windows.
 - AVIF output, PNG palette quantization, and ICC-aware CMYK conversion.
+- Animated output: with `allowAnimated: true` (the default), transforming every frame of an animated image when the output format supports animation (e.g. GIF or WebP), instead of only the first frame.

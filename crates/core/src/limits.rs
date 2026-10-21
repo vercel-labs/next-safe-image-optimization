@@ -1,3 +1,4 @@
+use crate::decode::InputFormat;
 use crate::error::{Error, Result};
 
 /// Same as sharp's default `limitInputPixels`.
@@ -13,6 +14,13 @@ pub struct Limits {
     /// by `ExitOnOom`, for Rust allocations). Also passed to `image`'s decoders, and checked
     /// against the output size and the C encoders' estimated memory, which `ExitOnOom` can't see.
     pub memory: u64,
+    /// Checked right after detecting the format, before any decoding.
+    pub input_formats: Vec<InputFormat>,
+    /// If false, animated images are rejected (see `decode::raster_decoder`). Otherwise, only their
+    /// first frame is decoded, for now. In the future, transforms may keep every frame when the
+    /// output format supports animation (e.g. GIF or WebP), which would decode with `image`'s
+    /// `AnimationDecoder::into_frames`.
+    pub animated: bool,
 }
 
 impl Default for Limits {
@@ -20,12 +28,26 @@ impl Default for Limits {
         Self {
             input_pixels: DEFAULT_INPUT_PIXELS,
             memory: DEFAULT_MEMORY,
+            input_formats: InputFormat::ALL.to_vec(),
+            animated: true,
         }
     }
 }
 
 impl Limits {
-    pub fn check_input(&self, width: u32, height: u32) -> Result<()> {
+    pub fn check_format(&self, format: InputFormat) -> Result<()> {
+        if !self.input_formats.contains(&format) {
+            let allowed: Vec<_> = self.input_formats.iter().map(|f| f.name()).collect();
+            return Err(Error::UnsupportedFormat(format!(
+                "input is {}, which is not one of the allowed input formats ({})",
+                format.name(),
+                allowed.join(", ")
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn check_input_pixels(&self, width: u32, height: u32) -> Result<()> {
         if width == 0 || height == 0 {
             return Err(Error::Decode("image has zero width or height".into()));
         }

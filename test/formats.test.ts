@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, test } from 'node:test'
-import { gzipSync } from 'node:zlib'
+import { crc32, gzipSync } from 'node:zlib'
 
 import sharp from 'sharp'
 
@@ -273,26 +273,59 @@ describe('encoder options', () => {
 })
 
 describe('animated input', () => {
-  test('decodes the first frame of an animated gif', async () => {
+  /** Two frames, so the first frame is distinguishable. */
+  async function animated(format: 'gif' | 'webp'): Promise<Buffer> {
     const frames = [pattern(32, 32), pattern(32, 32)].map((raw, i) =>
       fromRaw({ ...raw, data: i === 0 ? raw.data : Buffer.alloc(raw.data.length, 128) }).png().toBuffer(),
     )
-    const animated = await sharp(await Promise.all(frames), { join: { animated: true } })
-      .gif()
-      .toBuffer()
-    assert.equal((await sharp(animated).metadata()).pages, 2)
-    const output = await blunt(animated).png().toBuffer()
-    await assertSimilar(output, await sharp(animated).png().toBuffer(), 4)
+    const image = sharp(await Promise.all(frames), { join: { animated: true } })
+    return format === 'gif' ? image.gif().toBuffer() : image.webp({ lossless: true }).toBuffer()
+  }
+
+  /** sharp can't write APNGs, so this inserts an `acTL` chunk (2 frames) before the `IDAT`. */
+  async function apng(): Promise<Buffer> {
+    const png = await fromRaw(pattern(32, 32)).png().toBuffer()
+    const idat = png.indexOf('IDAT') - 4
+    const chunk = Buffer.alloc(20)
+    chunk.writeUInt32BE(8, 0)
+    chunk.write('acTL', 4, 'latin1')
+    chunk.writeUInt32BE(2, 8)
+    chunk.writeUInt32BE(crc32(chunk.subarray(4, 16)), 16)
+    return Buffer.concat([png.subarray(0, idat), chunk, png.subarray(idat)])
+  }
+
+  test('decodes the first frame of an animated gif', async () => {
+    const input = await animated('gif')
+    assert.equal((await sharp(input).metadata()).pages, 2)
+    const output = await blunt(input).png().toBuffer()
+    await assertSimilar(output, await sharp(input).png().toBuffer(), 4)
   })
 
   test('decodes the first frame of an animated webp', async () => {
-    const frames = [pattern(32, 32), pattern(32, 32)].map((raw, i) =>
-      fromRaw({ ...raw, data: i === 0 ? raw.data : Buffer.alloc(raw.data.length, 128) }).png().toBuffer(),
-    )
-    const animated = await sharp(await Promise.all(frames), { join: { animated: true } })
-      .webp({ lossless: true })
-      .toBuffer()
-    const output = await blunt(animated).png().toBuffer()
-    await assertSimilar(output, await sharp(animated).png().toBuffer(), 1, 4)
+    const input = await animated('webp')
+    const output = await blunt(input).png().toBuffer()
+    await assertSimilar(output, await sharp(input).png().toBuffer(), 1, 4)
+  })
+
+  test('decodes the default image of an apng', async () => {
+    const input = await apng()
+    assert.equal((await blunt(input).metadata()).format, 'png')
+    await assertSimilar(await blunt(input).png().toBuffer(), input, 0)
+  })
+
+  test('allowAnimated: false rejects animations', async () => {
+    // sharp can't write AVIF sequences either. The brand is checked before parsing anything else.
+    const avis = await fromRaw(pattern(32, 32)).avif().toBuffer()
+    avis.write('avis', 8, 'latin1')
+    for (const input of [await animated('gif'), await animated('webp'), await apng(), avis]) {
+      await assertRejectsWithCode(blunt(input, { allowAnimated: false }).png().toBuffer(), 'ERR_ANIMATED')
+      await assertRejectsWithCode(blunt(input, { allowAnimated: false }).metadata(), 'ERR_ANIMATED')
+    }
+  })
+
+  test('allowAnimated: false accepts still images', async () => {
+    for (const name of ['png', 'gif', 'lossy webp', 'lossy webp with alpha', 'avif', 'baseline jpeg', 'tiff']) {
+      await blunt(await inputs[name](), { allowAnimated: false }).png().toBuffer()
+    }
   })
 })

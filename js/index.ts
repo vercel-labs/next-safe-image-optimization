@@ -1,7 +1,7 @@
 import { availableParallelism } from 'node:os'
 
 import { NativeBackend, loadBinding } from './native.js'
-import { InvalidResponseError, decodeResponse, encodeOptions, maxResponseBytes } from './protocol.js'
+import { FORMATS, InvalidResponseError, decodeResponse, encodeOptions, maxResponseBytes } from './protocol.js'
 import type {
   Backend,
   LimitOptions,
@@ -66,6 +66,21 @@ export interface BluntOptions {
    * its memory before it runs, for a clearer error. Default: 512 MiB.
    */
   limitAllocatorMemory?: number
+  /**
+   * Reject input in any other format with `ERR_UNSUPPORTED_FORMAT`, before decoding it. The format
+   * is always detected from the input's contents. Must not be empty. Default: every `InputFormat`.
+   */
+  allowedInputFormats?: readonly InputFormat[]
+  /**
+   * `false` rejects animated input with `ERR_ANIMATED`, before decoding it. Otherwise, only the
+   * first frame is decoded. PNG (APNG), WebP, and AVIF count as animated if their header declares an
+   * animation, and GIF if it has more than one frame. Default: `true`.
+   *
+   * A future version may transform every frame of an animated image when this is `true`, depending
+   * on the output format (e.g. GIF or WebP). Set this to `false` if you rely on only the first frame
+   * being decoded.
+   */
+  allowAnimated?: boolean
   /** Equivalent to calling `autoOrient()`. */
   autoOrient?: boolean
   /** The pool of workers that processes the image. Default: `defaultPool()`. */
@@ -187,6 +202,8 @@ export interface TimeoutOptions {
 
 export type ErrorCode =
   | 'ERR_UNSUPPORTED_FORMAT'
+  /** The input is animated, with `allowAnimated: false`. */
+  | 'ERR_ANIMATED'
   | 'ERR_LIMIT_EXCEEDED'
   | 'ERR_DECODE_FAILED'
   | 'ERR_ENCODE_FAILED'
@@ -390,7 +407,7 @@ export class Pipeline {
 
   constructor(input: Input, options: BluntOptions = {}) {
     this.#input = toUint8Array(input)
-    const { limitInputPixels, limitAllocatorMemory, autoOrient, pool } = options
+    const { limitInputPixels, limitAllocatorMemory, allowedInputFormats, allowAnimated, autoOrient, pool } = options
     if (pool !== undefined && !(pool instanceof Pool)) {
       throw invalid('pool', 'Pool', pool)
     }
@@ -410,6 +427,15 @@ export class Pipeline {
     this.#limits.limitAllocatorMemory = optional(limitAllocatorMemory, (v) =>
       checkInteger('limitAllocatorMemory', v, 1, Number.MAX_SAFE_INTEGER),
     )
+    if (allowedInputFormats !== undefined) {
+      if (!Array.isArray(allowedInputFormats) || allowedInputFormats.length === 0) {
+        throw invalid('allowedInputFormats', 'non-empty array', allowedInputFormats)
+      }
+      this.#limits.allowedInputFormats = allowedInputFormats.map((v) =>
+        checkOneOf('allowedInputFormats', v, FORMATS),
+      )
+    }
+    this.#limits.allowAnimated = optional(allowAnimated, (v) => checkBoolean('allowAnimated', v))
     if (optional(autoOrient, (v) => checkBoolean('autoOrient', v))) {
       this.autoOrient()
     }

@@ -5,6 +5,8 @@ use std::fmt;
 #[derive(Debug)]
 pub enum Error {
     UnsupportedFormat(String),
+    /// An animated image, with `allowAnimated: false`.
+    Animated(String),
     LimitExceeded(String),
     Decode(String),
     Encode(String),
@@ -19,6 +21,7 @@ impl Error {
     pub fn code(&self) -> &'static str {
         match self {
             Error::UnsupportedFormat(_) => "ERR_UNSUPPORTED_FORMAT",
+            Error::Animated(_) => "ERR_ANIMATED",
             Error::LimitExceeded(_) => "ERR_LIMIT_EXCEEDED",
             Error::Decode(_) => "ERR_DECODE_FAILED",
             Error::Encode(_) => "ERR_ENCODE_FAILED",
@@ -31,6 +34,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::UnsupportedFormat(msg) => write!(f, "Unsupported format: {msg}"),
+            Error::Animated(msg) => write!(f, "Animated images are not allowed: {msg}"),
             Error::LimitExceeded(msg) => write!(f, "Limit exceeded: {msg}"),
             Error::Decode(msg) => write!(f, "Failed to decode image: {msg}"),
             Error::Encode(msg) => write!(f, "Failed to encode image: {msg}"),

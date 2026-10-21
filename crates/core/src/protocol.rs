@@ -33,12 +33,13 @@ pub const KIND_METADATA: u8 = 1;
 pub const KIND_ERROR: u8 = 2;
 
 pub const FORMATS: [&str; 7] = ["jpeg", "png", "webp", "gif", "tiff", "avif", "svg"];
-pub const ERROR_CODES: [&str; 5] = [
+pub const ERROR_CODES: [&str; 6] = [
     "ERR_UNSUPPORTED_FORMAT",
     "ERR_LIMIT_EXCEEDED",
     "ERR_DECODE_FAILED",
     "ERR_ENCODE_FAILED",
     "ERR_INTERNAL",
+    "ERR_ANIMATED",
 ];
 
 const LENGTH_PREFIX: usize = 8;

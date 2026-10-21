@@ -1,25 +1,33 @@
-//! Decoders. Raster formats go through `image`, which detects the format from its magic bytes (never
-//! file extensions or content types). AVIF is plugged in with hooks (see `avif.rs`). Anything else
-//! that looks like an SVG is rendered with resvg (see `svg.rs`).
+//! Decoders. `image` detects the format from its magic bytes (never file extensions or content
+//! types). Raster formats are decoded with `image`'s decoders, except AVIF (see `avif.rs`).
+//! Anything else that looks like an SVG is rendered with resvg (see `svg.rs`).
 //!
 //! The worker's memory limits and the caller's timeout bound what decoders can do, so the only
-//! check before decoding is the pixel limit.
+//! check before decoding is the pixel limit (and the caller's allowed formats, and animation).
 
 mod avif;
+mod gif;
 mod svg;
 
 use std::io::Cursor;
 use std::sync::Once;
 
+use image::codecs::gif::GifDecoder;
+use image::codecs::jpeg::JpegDecoder;
+use image::codecs::png::PngDecoder;
+use image::codecs::tiff::TiffDecoder;
+use image::codecs::webp::WebPDecoder;
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, hooks};
+use serde::Deserialize;
 
 use crate::decode::avif::AvifDecoder;
 use crate::decode::svg::Svg;
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum InputFormat {
     Jpeg,
     Png,
@@ -31,6 +39,16 @@ pub enum InputFormat {
 }
 
 impl InputFormat {
+    pub const ALL: [InputFormat; 7] = [
+        InputFormat::Jpeg,
+        InputFormat::Png,
+        InputFormat::Webp,
+        InputFormat::Gif,
+        InputFormat::Tiff,
+        InputFormat::Avif,
+        InputFormat::Svg,
+    ];
+
     pub fn name(self) -> &'static str {
         match self {
             InputFormat::Jpeg => "jpeg",
@@ -78,12 +96,10 @@ pub struct Decoded {
     pub image: DynamicImage,
 }
 
-/// Registers our AVIF decoder with `image` (hooks are global, so once per process).
+/// Registers our AVIF detection hook with `image` (hooks are global, so once per process).
 ///
-/// The detection hook is needed even though `image` detects AVIF on its own: its built-in
-/// detection selects its built-in AVIF decoder (dav1d, which we don't enable), and only formats
-/// detected by a hook are looked up in the decoding hooks. Detection hooks are checked before
-/// `image`'s own magic bytes, so ours wins.
+/// `image` detects AVIF on its own, but only with the `avif` major brand and a box size under
+/// 64 KiB. Detection hooks are checked before `image`'s own magic bytes.
 fn register_hooks() {
     static HOOKS: Once = Once::new();
     HOOKS.call_once(|| {
@@ -94,34 +110,31 @@ fn register_hooks() {
                 Some(avif::SIGNATURE_MASK),
             );
         }
-        hooks::register_decoding_hook(
-            avif::EXTENSION.into(),
-            Box::new(|reader| Ok(Box::new(AvifDecoder::new(reader)?))),
-        );
     });
 }
 
-enum Source<'a> {
-    Raster(ImageReader<Cursor<&'a [u8]>>),
-    Svg,
+/// Detects the format, and checks that it's allowed.
+fn open(input: &[u8], limits: &Limits) -> Result<InputFormat> {
+    let format = detect(input)?;
+    limits.check_format(format)?;
+    Ok(format)
 }
 
-fn open(input: &[u8]) -> Result<(Source<'_>, InputFormat)> {
+fn detect(input: &[u8]) -> Result<InputFormat> {
     register_hooks();
     let reader = ImageReader::new(Cursor::new(input))
         .with_guessed_format()
         .map_err(|err| Error::Decode(err.to_string()))?;
     if reader.format().is_none() && svg::is_svg(input) {
-        return Ok((Source::Svg, InputFormat::Svg));
+        return Ok(InputFormat::Svg);
     }
-    let format = InputFormat::from_image_format(reader.format())?;
-    Ok((Source::Raster(reader), format))
+    InputFormat::from_image_format(reader.format())
 }
 
 pub fn header(input: &[u8], limits: &Limits) -> Result<Header> {
-    match open(input)? {
-        (Source::Raster(reader), format) => Ok(run(reader, format, limits, false)?.0),
-        (Source::Svg, _) => Ok(Svg::parse(input, limits)?.header()),
+    match open(input, limits)? {
+        InputFormat::Svg => Ok(Svg::parse(input, limits)?.header()),
+        format => Ok(run(input, format, limits, false)?.0),
     }
 }
 
@@ -132,13 +145,8 @@ pub fn decode(
     limits: &Limits,
     vector_scale: impl FnOnce(u32, u32) -> f64,
 ) -> Result<Decoded> {
-    match open(input)? {
-        (Source::Raster(reader), format) => {
-            let (header, image) = run(reader, format, limits, true)?;
-            let image = normalize(image.expect("pixels were requested"));
-            Ok(Decoded { header, image })
-        }
-        (Source::Svg, _) => {
+    match open(input, limits)? {
+        InputFormat::Svg => {
             let svg = Svg::parse(input, limits)?;
             let image = svg.render(vector_scale(svg.width, svg.height), limits)?;
             Ok(Decoded {
@@ -146,19 +154,68 @@ pub fn decode(
                 image,
             })
         }
+        format => {
+            let (header, image) = run(input, format, limits, true)?;
+            let image = normalize(image.expect("pixels were requested"));
+            Ok(Decoded { header, image })
+        }
     }
 }
 
+/// Like `ImageReader::into_decoder`, but only for our formats, and with our AVIF decoder. Checks
+/// for animation with each format's decoder where it can, before decoding any pixels.
+fn raster_decoder<'a>(
+    input: &'a [u8],
+    format: InputFormat,
+    limits: &Limits,
+) -> Result<Box<dyn ImageDecoder + 'a>> {
+    let reject_animated = |is_animated: &mut dyn FnMut() -> Result<bool>| {
+        if !limits.animated && is_animated()? {
+            return Err(Error::Animated(format!(
+                "input is an animated {}",
+                format.name().to_uppercase()
+            )));
+        }
+        Ok(())
+    };
+    let reader = Cursor::new(input);
+    let mut decoder: Box<dyn ImageDecoder> = match format {
+        InputFormat::Jpeg => Box::new(JpegDecoder::new(reader)?),
+        InputFormat::Png => {
+            let decoder = PngDecoder::with_limits(reader, limits.image_limits())?;
+            reject_animated(&mut || Ok(decoder.is_apng()?))?;
+            Box::new(decoder)
+        }
+        InputFormat::Webp => {
+            let decoder = WebPDecoder::new(reader)?;
+            reject_animated(&mut || Ok(decoder.has_animation()))?;
+            Box::new(decoder)
+        }
+        InputFormat::Gif => {
+            reject_animated(&mut || gif::has_second_frame(input))?;
+            Box::new(GifDecoder::new(reader)?)
+        }
+        InputFormat::Tiff => Box::new(TiffDecoder::new(reader)?),
+        InputFormat::Avif => {
+            // Before parsing, which rejects sequences as unsupported.
+            reject_animated(&mut || Ok(avif::has_sequence_brand(input)))?;
+            Box::new(AvifDecoder::new(reader)?)
+        }
+        InputFormat::Svg => return Err(Error::Internal("SVG is not a raster format".into())),
+    };
+    decoder.set_limits(limits.image_limits())?;
+    Ok(decoder)
+}
+
 fn run(
-    mut reader: ImageReader<Cursor<&[u8]>>,
+    input: &[u8],
     format: InputFormat,
     limits: &Limits,
     pixels: bool,
 ) -> Result<(Header, Option<DynamicImage>)> {
-    reader.limits(limits.image_limits());
-    let mut decoder = reader.into_decoder()?;
+    let mut decoder = raster_decoder(input, format, limits)?;
     let (width, height) = decoder.dimensions();
-    limits.check_input(width, height)?;
+    limits.check_input_pixels(width, height)?;
     let header = Header {
         format,
         width,
@@ -205,10 +262,6 @@ pub fn normalize(img: DynamicImage) -> DynamicImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn detect(input: &[u8]) -> Result<InputFormat> {
-        open(input).map(|(_, format)| format)
-    }
 
     #[test]
     fn detects_formats() {

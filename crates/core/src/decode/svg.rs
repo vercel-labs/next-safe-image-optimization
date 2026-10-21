@@ -51,10 +51,10 @@ impl Svg {
         let tree = usvg::Tree::from_data(input, &options)
             .map_err(|err| Error::Decode(format!("invalid SVG: {err}")))?;
         let size = tree.size();
-        // Saturating casts, which `check_input` rejects.
+        // Saturating casts, which `check_input_pixels` rejects.
         let width = f64::from(size.width()).round() as u32;
         let height = f64::from(size.height()).round() as u32;
-        limits.check_input(width, height)?;
+        limits.check_input_pixels(width, height)?;
         Ok(Svg {
             tree,
             width,
@@ -81,7 +81,7 @@ impl Svg {
         limits.check_output(width, height, 4)?;
         let (width, height) = (width as u32, height as u32);
         // The pixel limit applies to what's rendered, too.
-        limits.check_input(width, height)?;
+        limits.check_input_pixels(width, height)?;
         let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or_else(|| {
             Error::LimitExceeded(format!("SVG can't be rendered at {width}x{height}"))
         })?;

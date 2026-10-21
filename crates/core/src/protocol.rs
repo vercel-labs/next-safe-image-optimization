@@ -10,37 +10,40 @@
 //! - `KIND_METADATA`: `[format u8][width u32][height u32][has_alpha u8][orientation u8][has_profile u8]`
 //! - `KIND_ERROR`: `[code u8][UTF-8 message]`
 //!
-//! Integers are little-endian. Formats and error codes are indexes into [`FORMATS`] and
-//! [`ERROR_CODES`].
+//! Integers are little-endian. Formats and error codes are indexes into [`InputFormat`] and
+//! [`ErrorCode`].
+//!
+//! Items marked `#[typeshare]` (here, and the request options in `request.rs`) are exported to
+//! `js/protocol.generated.ts` by `pnpm generate`.
+
+use typeshare_annotation::typeshare;
 
 use crate::alloc::set_memory_limit;
+use crate::decode::InputFormat;
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 use crate::pipeline;
 use crate::request::{self, Request};
 
-/// Worker exit codes, besides 0 (stdin closed). These must match `crates/shim/src/pool.rs` and
-/// `js/wasm-worker.ts`.
+/// Worker exit codes, besides 0 (stdin closed). These must match `crates/shim/src/pool.rs`.
+#[typeshare]
 pub const EXIT_OUT_OF_MEMORY: i32 = 86;
+#[typeshare]
 pub const EXIT_VERSION_MISMATCH: i32 = 87;
+#[typeshare]
 pub const EXIT_SANDBOX_FAILED: i32 = 88;
+#[typeshare]
 pub const EXIT_INVALID_FRAME: i32 = 89;
 /// Allocations exceeded the request's `limitAllocatorMemory` (see `alloc.rs`).
+#[typeshare]
 pub const EXIT_MEMORY_LIMIT: i32 = 90;
 
+#[typeshare]
 pub const KIND_TRANSFORM: u8 = 0;
+#[typeshare]
 pub const KIND_METADATA: u8 = 1;
+#[typeshare]
 pub const KIND_ERROR: u8 = 2;
-
-pub const FORMATS: [&str; 7] = ["jpeg", "png", "webp", "gif", "tiff", "avif", "svg"];
-pub const ERROR_CODES: [&str; 6] = [
-    "ERR_UNSUPPORTED_FORMAT",
-    "ERR_LIMIT_EXCEEDED",
-    "ERR_DECODE_FAILED",
-    "ERR_ENCODE_FAILED",
-    "ERR_INTERNAL",
-    "ERR_ANIMATED",
-];
 
 const LENGTH_PREFIX: usize = 8;
 
@@ -64,7 +67,7 @@ pub fn handle(request: Vec<u8>) -> Response {
     if let Err(err) = result {
         response.head.truncate(LENGTH_PREFIX);
         response.head.push(KIND_ERROR);
-        response.head.push(error_index(&err));
+        response.head.push(err.code() as u8);
         response.head.extend_from_slice(err.to_string().as_bytes());
         response.data = Vec::new();
     }
@@ -119,22 +122,16 @@ fn limit_allocator_memory(limits: &Limits) {
 }
 
 fn format_index(name: &str) -> u8 {
-    FORMATS
+    InputFormat::ALL
         .iter()
-        .position(|&format| format == name)
-        .expect("format is in FORMATS") as u8
-}
-
-fn error_index(err: &Error) -> u8 {
-    ERROR_CODES
-        .iter()
-        .position(|&code| code == err.code())
-        .expect("code is in ERROR_CODES") as u8
+        .position(|format| format.name() == name)
+        .expect("format is an InputFormat") as u8
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorCode;
 
     fn request(input: &[u8], json: &str) -> Vec<u8> {
         let mut request = input.to_vec();
@@ -162,7 +159,7 @@ mod tests {
         }
         let body = bytes(handle(request(&png, r#"{"transform":{"format":"jpeg"}}"#)));
         assert_eq!(body[0], KIND_TRANSFORM);
-        assert_eq!(FORMATS[usize::from(body[1])], "jpeg");
+        assert_eq!(InputFormat::ALL[usize::from(body[1])], InputFormat::Jpeg);
         assert_eq!(body[2..6], 3u32.to_le_bytes());
         assert_eq!(body[6..10], 2u32.to_le_bytes());
         assert_eq!(body[10], 3);
@@ -175,17 +172,17 @@ mod tests {
     #[test]
     fn errors() {
         for (request, code) in [
-            (Vec::new(), "ERR_INTERNAL"),
-            (vec![0, 0, 0, 0xFF], "ERR_INTERNAL"),
-            (request(b"not an image", "{}"), "ERR_INTERNAL"),
+            (Vec::new(), ErrorCode::Internal),
+            (vec![0, 0, 0, 0xFF], ErrorCode::Internal),
+            (request(b"not an image", "{}"), ErrorCode::Internal),
             (
                 request(b"not an image", r#"{"metadata":{}}"#),
-                "ERR_UNSUPPORTED_FORMAT",
+                ErrorCode::UnsupportedFormat,
             ),
         ] {
             let body = bytes(handle(request));
             assert_eq!(body[0], KIND_ERROR);
-            assert_eq!(ERROR_CODES[usize::from(body[1])], code);
+            assert_eq!(body[1], code as u8);
             assert!(std::str::from_utf8(&body[2..]).is_ok());
         }
     }

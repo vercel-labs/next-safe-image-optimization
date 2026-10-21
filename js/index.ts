@@ -10,12 +10,13 @@ import type {
   Response,
   TransformOptions,
 } from './protocol.js'
+import type * as generated from './protocol.generated.js'
 import { WasmBackend } from './wasm.js'
 
-export type InputFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'tiff' | 'avif' | 'svg'
-export type OutputFormat = 'jpeg' | 'png' | 'webp' | 'gif'
-export type Fit = 'cover' | 'contain' | 'fill' | 'inside' | 'outside'
-export type Kernel = 'nearest' | 'linear' | 'cubic' | 'mitchell' | 'lanczos2' | 'lanczos3'
+export type InputFormat = `${generated.InputFormat}`
+export type OutputFormat = `${generated.OutputFormat}`
+export type Fit = `${generated.Fit}`
+export type Kernel = `${generated.Kernel}`
 export type Position =
   | 'centre'
   | 'center'
@@ -201,13 +202,8 @@ export interface TimeoutOptions {
 }
 
 export type ErrorCode =
-  | 'ERR_UNSUPPORTED_FORMAT'
-  /** The input is animated, with `allowAnimated: false`. */
-  | 'ERR_ANIMATED'
-  | 'ERR_LIMIT_EXCEEDED'
-  | 'ERR_DECODE_FAILED'
-  | 'ERR_ENCODE_FAILED'
-  | 'ERR_INTERNAL'
+  /** Errors from the worker. `ERR_ANIMATED`: the input is animated, with `allowAnimated: false`. */
+  | `${generated.ErrorCode}`
   /** Processing took longer than `timeout()`. */
   | 'ERR_TIMEOUT'
   /** The worker ran out of memory. */

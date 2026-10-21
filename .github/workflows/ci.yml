@@ -46,6 +46,13 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      # typeshare only publishes Windows binaries.
+      - run: cargo install typeshare-cli --version 1.13.4 --locked
+      - name: Check that generated protocol types are up to date
+        run: |
+          set -euo pipefail
+          pnpm generate
+          git diff --exit-code -- js/protocol.generated.ts
       - run: pnpm build:js
       - run: pnpm typecheck
 

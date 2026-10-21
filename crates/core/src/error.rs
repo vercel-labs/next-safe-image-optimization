@@ -1,5 +1,8 @@
 use std::fmt;
 
+use serde::Serialize;
+use typeshare_annotation::typeshare;
+
 /// Errors are sent to JS as a code and a message (see `protocol.rs`), so that the JS wrapper can
 /// construct an `Error` with a stable `code` property.
 #[derive(Debug)]
@@ -17,15 +20,35 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// Responses send error codes as their index in this enum (see `protocol.rs`).
+#[typeshare]
+// `Serialize` is only for the `serde` attributes, which typeshare reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum ErrorCode {
+    #[serde(rename = "ERR_UNSUPPORTED_FORMAT")]
+    UnsupportedFormat,
+    #[serde(rename = "ERR_LIMIT_EXCEEDED")]
+    LimitExceeded,
+    #[serde(rename = "ERR_DECODE_FAILED")]
+    DecodeFailed,
+    #[serde(rename = "ERR_ENCODE_FAILED")]
+    EncodeFailed,
+    #[serde(rename = "ERR_INTERNAL")]
+    Internal,
+    /// The input is animated, with `allowAnimated: false`.
+    #[serde(rename = "ERR_ANIMATED")]
+    Animated,
+}
+
 impl Error {
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> ErrorCode {
         match self {
-            Error::UnsupportedFormat(_) => "ERR_UNSUPPORTED_FORMAT",
-            Error::Animated(_) => "ERR_ANIMATED",
-            Error::LimitExceeded(_) => "ERR_LIMIT_EXCEEDED",
-            Error::Decode(_) => "ERR_DECODE_FAILED",
-            Error::Encode(_) => "ERR_ENCODE_FAILED",
-            Error::Internal(_) => "ERR_INTERNAL",
+            Error::UnsupportedFormat(_) => ErrorCode::UnsupportedFormat,
+            Error::Animated(_) => ErrorCode::Animated,
+            Error::LimitExceeded(_) => ErrorCode::LimitExceeded,
+            Error::Decode(_) => ErrorCode::DecodeFailed,
+            Error::Encode(_) => ErrorCode::EncodeFailed,
+            Error::Internal(_) => ErrorCode::Internal,
         }
     }
 }

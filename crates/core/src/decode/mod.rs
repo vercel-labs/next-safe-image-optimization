@@ -20,12 +20,15 @@ use image::codecs::webp::WebPDecoder;
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, hooks};
 use serde::Deserialize;
+use typeshare_annotation::typeshare;
 
 use crate::decode::avif::AvifDecoder;
 use crate::decode::svg::Svg;
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 
+/// Responses send formats (input and output) as their index in this enum (see `protocol.rs`).
+#[typeshare]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InputFormat {

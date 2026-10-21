@@ -1,68 +1,21 @@
 // The worker protocol (see `crates/core/src/protocol.rs`). Requests are built by the backends, from
 // `input` and `encodeOptions()`. Responses come from a worker, so they're untrusted, and parsed
 // defensively.
+//
+// The request options and protocol constants are generated from the Rust code
+// (`protocol.generated.ts`, by `pnpm generate`).
 
 import type { InputFormat, OutputFormat, OutputInfo } from './index.js'
+import * as generated from './protocol.generated.js'
+import type { LimitOptions, TransformOptions } from './protocol.generated.js'
 
+export type { LimitOptions, ResizeOptions, TransformOptions } from './protocol.generated.js'
+export { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY } from './protocol.generated.js'
+
+/** `Request` in `crates/core/src/request.rs`, which typeshare can't export. Exactly one is set. */
 export interface RequestOptions {
   transform?: TransformOptions
   metadata?: LimitOptions
-}
-
-export interface LimitOptions {
-  /** 0 disables the limit. */
-  limitInputPixels?: number
-  limitAllocatorMemory?: number
-  allowedInputFormats?: InputFormat[]
-  allowAnimated?: boolean
-}
-
-export interface ColorOptions {
-  r: number
-  g: number
-  b: number
-  /** 0-1 */
-  alpha: number
-}
-
-export interface ResizeOptions {
-  width?: number
-  height?: number
-  fit?: string
-  /** 0 (left) to 1 (right). */
-  gravityX?: number
-  /** 0 (top) to 1 (bottom). */
-  gravityY?: number
-  kernel?: string
-  withoutEnlargement?: boolean
-  withoutReduction?: boolean
-  background?: ColorOptions
-}
-
-export interface TransformOptions {
-  limits?: LimitOptions
-  autoOrient?: boolean
-  /** Clockwise degrees, a multiple of 90. */
-  rotate?: number
-  resize?: ResizeOptions
-  /** Omit `sigma` for a mild 3x3 box blur. */
-  blur?: { sigma?: number }
-  /** Defaults to the input format. */
-  format?: OutputFormat
-  jpeg?: {
-    quality?: number
-    mozjpeg?: boolean
-  }
-  png?: { compressionLevel?: number; adaptiveFiltering?: boolean }
-  webp?: {
-    quality?: number
-    alphaQuality?: number
-    lossless?: boolean
-    nearLossless?: boolean
-    smartSubsample?: boolean
-    effort?: number
-  }
-  gif?: { effort?: number }
 }
 
 export interface RunOptions {
@@ -88,21 +41,10 @@ export interface Backend {
   run(input: Uint8Array, options: string, runOptions: RunOptions): Promise<RunResult>
 }
 
-/** These must match `crates/core/src/protocol.rs`. */
-export const EXIT_OUT_OF_MEMORY = 86
-export const EXIT_MEMORY_LIMIT = 90
-const KIND_TRANSFORM = 0
-const KIND_METADATA = 1
-const KIND_ERROR = 2
-export const FORMATS: readonly InputFormat[] = ['jpeg', 'png', 'webp', 'gif', 'tiff', 'avif', 'svg']
-const ERROR_CODES = [
-  'ERR_UNSUPPORTED_FORMAT',
-  'ERR_LIMIT_EXCEEDED',
-  'ERR_DECODE_FAILED',
-  'ERR_ENCODE_FAILED',
-  'ERR_INTERNAL',
-  'ERR_ANIMATED',
-] as const
+/** In order: responses send formats and error codes as indexes. */
+export const FORMATS: readonly InputFormat[] = Object.values(generated.InputFormat)
+const OUTPUT_FORMATS: readonly OutputFormat[] = Object.values(generated.OutputFormat)
+const ERROR_CODES: readonly `${generated.ErrorCode}`[] = Object.values(generated.ErrorCode)
 
 /** Room for everything in a response besides the encoded image. */
 const RESPONSE_OVERHEAD = 64 * 1024
@@ -134,12 +76,12 @@ export type Response =
     }
   | { kind: 'error'; code: (typeof ERROR_CODES)[number]; message: string }
 
-function format(index: number, allowed: readonly string[] = FORMATS): InputFormat {
+function format<T extends InputFormat>(index: number, allowed: readonly T[]): T {
   const name = FORMATS[index]
-  if (name === undefined || !allowed.includes(name)) {
+  if (name === undefined || !(allowed as readonly string[]).includes(name)) {
     throw new InvalidResponseError(`invalid format ${index}`)
   }
-  return name
+  return name as T
 }
 
 function boolean(value: number): boolean {
@@ -159,7 +101,7 @@ export function decodeResponse(response: Uint8Array): Response {
   }
   fixed(1)
   switch (response[0]) {
-    case KIND_TRANSFORM: {
+    case generated.KIND_TRANSFORM: {
       fixed(11)
       const channels = response[10]
       if (channels < 1 || channels > 4) {
@@ -167,7 +109,7 @@ export function decodeResponse(response: Uint8Array): Response {
       }
       const data = Buffer.from(response.buffer, response.byteOffset + 11, response.length - 11)
       const info: OutputInfo = {
-        format: format(response[1], ['jpeg', 'png', 'webp', 'gif']) as OutputFormat,
+        format: format(response[1], OUTPUT_FORMATS),
         width: view.getUint32(2, true),
         height: view.getUint32(6, true),
         channels,
@@ -175,7 +117,7 @@ export function decodeResponse(response: Uint8Array): Response {
       }
       return { kind: 'transform', data, info }
     }
-    case KIND_METADATA: {
+    case generated.KIND_METADATA: {
       fixed(13)
       if (response.length !== 13) {
         throw new InvalidResponseError('metadata response is too long')
@@ -186,7 +128,7 @@ export function decodeResponse(response: Uint8Array): Response {
       }
       return {
         kind: 'metadata',
-        format: format(response[1]),
+        format: format(response[1], FORMATS),
         width: view.getUint32(2, true),
         height: view.getUint32(6, true),
         hasAlpha: boolean(response[10]),
@@ -194,7 +136,7 @@ export function decodeResponse(response: Uint8Array): Response {
         hasProfile: boolean(response[12]),
       }
     }
-    case KIND_ERROR: {
+    case generated.KIND_ERROR: {
       fixed(2)
       const code = ERROR_CODES[response[1]]
       if (code === undefined) {

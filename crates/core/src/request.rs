@@ -2,6 +2,7 @@
 //! We validate again, since the wrapper isn't a security boundary.
 
 use serde::Deserialize;
+use typeshare_annotation::typeshare;
 
 use crate::decode::InputFormat;
 use crate::encode::{GifSpec, JpegSpec, OutputSpec, PngSpec, WebpSpec};
@@ -17,6 +18,7 @@ pub enum Request {
     Metadata(LimitOptions),
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Fit {
@@ -27,6 +29,7 @@ enum Fit {
     Outside,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Kernel {
@@ -38,6 +41,7 @@ enum Kernel {
     Lanczos3,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum OutputFormat {
@@ -47,6 +51,7 @@ enum OutputFormat {
     Gif,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Color {
@@ -58,6 +63,7 @@ struct Color {
     alpha: f64,
 }
 
+#[typeshare]
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResizeOptions {
@@ -74,6 +80,7 @@ struct ResizeOptions {
     background: Option<Color>,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BlurOptions {
@@ -81,6 +88,7 @@ struct BlurOptions {
     sigma: Option<f64>,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct JpegOptions {
@@ -88,6 +96,7 @@ struct JpegOptions {
     mozjpeg: Option<bool>,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PngOptions {
@@ -95,6 +104,7 @@ struct PngOptions {
     adaptive_filtering: Option<bool>,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WebpOptions {
@@ -106,12 +116,14 @@ struct WebpOptions {
     effort: Option<f64>,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GifOptions {
     effort: Option<f64>,
 }
 
+#[typeshare]
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LimitOptions {
@@ -122,6 +134,7 @@ pub struct LimitOptions {
     allow_animated: Option<bool>,
 }
 
+#[typeshare]
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TransformOptions {

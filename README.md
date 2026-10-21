@@ -62,6 +62,9 @@ pnpm test           # e2e tests (fixtures are generated with sharp, never commit
 cargo test          # unit tests
 pnpm lint
 
+# After changing request options in crates/core (needs `cargo install typeshare-cli --version 1.13.4 --locked`)
+pnpm generate
+
 # wasm (needs https://github.com/WebAssembly/wasi-sdk to compile libwebp and mozjpeg)
 rustup target add wasm32-wasip1
 WASI_SDK_PATH=/path/to/wasi-sdk pnpm build:wasm

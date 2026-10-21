@@ -1,0 +1,9 @@
+# `pnpm generate` (see crates/core/src/protocol.rs).
+
+# typeshare exports unit enums as TypeScript enums. Fields use their values instead, so that string
+# literals type check.
+[typescript.type_mappings]
+InputFormat = "`${InputFormat}`"
+OutputFormat = "`${OutputFormat}`"
+Fit = "`${Fit}`"
+Kernel = "`${Kernel}`"

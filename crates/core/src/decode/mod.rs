@@ -1,10 +1,12 @@
-//! Decoders. Everything goes through `image`, which detects the format from its magic bytes (never
-//! file extensions or content types). AVIF is plugged in with hooks (see `avif.rs`).
+//! Decoders. Raster formats go through `image`, which detects the format from its magic bytes (never
+//! file extensions or content types). AVIF is plugged in with hooks (see `avif.rs`). Anything else
+//! that looks like an SVG is rendered with resvg (see `svg.rs`).
 //!
 //! The worker's memory limits and the caller's timeout bound what decoders can do, so the only
 //! check before decoding is the pixel limit.
 
 mod avif;
+mod svg;
 
 use std::io::Cursor;
 use std::sync::Once;
@@ -13,6 +15,7 @@ use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, hooks};
 
 use crate::decode::avif::AvifDecoder;
+use crate::decode::svg::Svg;
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 
@@ -24,6 +27,7 @@ pub enum InputFormat {
     Gif,
     Tiff,
     Avif,
+    Svg,
 }
 
 impl InputFormat {
@@ -35,6 +39,7 @@ impl InputFormat {
             InputFormat::Gif => "gif",
             InputFormat::Tiff => "tiff",
             InputFormat::Avif => "avif",
+            InputFormat::Svg => "svg",
         }
     }
 
@@ -51,7 +56,7 @@ impl InputFormat {
             Some(ImageFormat::Avif) => InputFormat::Avif,
             _ => {
                 return Err(Error::UnsupportedFormat(
-                    "input is not a JPEG, PNG, WebP, GIF, TIFF, or AVIF image".into(),
+                    "input is not a JPEG, PNG, WebP, GIF, TIFF, AVIF, or SVG image".into(),
                 ));
             }
         })
@@ -96,27 +101,60 @@ fn register_hooks() {
     });
 }
 
-fn reader(input: &[u8]) -> Result<(ImageReader<Cursor<&[u8]>>, InputFormat)> {
+enum Source<'a> {
+    Raster(ImageReader<Cursor<&'a [u8]>>),
+    Svg,
+}
+
+fn open(input: &[u8]) -> Result<(Source<'_>, InputFormat)> {
     register_hooks();
     let reader = ImageReader::new(Cursor::new(input))
         .with_guessed_format()
         .map_err(|err| Error::Decode(err.to_string()))?;
+    if reader.format().is_none() && svg::is_svg(input) {
+        return Ok((Source::Svg, InputFormat::Svg));
+    }
     let format = InputFormat::from_image_format(reader.format())?;
-    Ok((reader, format))
+    Ok((Source::Raster(reader), format))
 }
 
 pub fn header(input: &[u8], limits: &Limits) -> Result<Header> {
-    Ok(run(input, limits, false)?.0)
+    match open(input)? {
+        (Source::Raster(reader), format) => Ok(run(reader, format, limits, false)?.0),
+        (Source::Svg, _) => Ok(Svg::parse(input, limits)?.header()),
+    }
 }
 
-pub fn decode(input: &[u8], limits: &Limits) -> Result<Decoded> {
-    let (header, image) = run(input, limits, true)?;
-    let image = normalize(image.expect("pixels were requested"));
-    Ok(Decoded { header, image })
+/// `vector_scale` is called with the natural size of a vector image (SVG), and returns the scale
+/// to render it at.
+pub fn decode(
+    input: &[u8],
+    limits: &Limits,
+    vector_scale: impl FnOnce(u32, u32) -> f64,
+) -> Result<Decoded> {
+    match open(input)? {
+        (Source::Raster(reader), format) => {
+            let (header, image) = run(reader, format, limits, true)?;
+            let image = normalize(image.expect("pixels were requested"));
+            Ok(Decoded { header, image })
+        }
+        (Source::Svg, _) => {
+            let svg = Svg::parse(input, limits)?;
+            let image = svg.render(vector_scale(svg.width, svg.height), limits)?;
+            Ok(Decoded {
+                header: svg.header(),
+                image,
+            })
+        }
+    }
 }
 
-fn run(input: &[u8], limits: &Limits, pixels: bool) -> Result<(Header, Option<DynamicImage>)> {
-    let (mut reader, format) = reader(input)?;
+fn run(
+    mut reader: ImageReader<Cursor<&[u8]>>,
+    format: InputFormat,
+    limits: &Limits,
+    pixels: bool,
+) -> Result<(Header, Option<DynamicImage>)> {
     reader.limits(limits.image_limits());
     let mut decoder = reader.into_decoder()?;
     let (width, height) = decoder.dimensions();
@@ -169,7 +207,7 @@ mod tests {
     use super::*;
 
     fn detect(input: &[u8]) -> Result<InputFormat> {
-        reader(input).map(|(_, format)| format)
+        open(input).map(|(_, format)| format)
     }
 
     #[test]
@@ -183,9 +221,15 @@ mod tests {
         // Including box sizes that `image`'s own signature doesn't allow.
         assert_eq!(detect(b"\0\0\0\x1cftypavif").unwrap(), InputFormat::Avif);
         assert_eq!(detect(b"\x01\0\0\x1cftypavis").unwrap(), InputFormat::Avif);
+        assert_eq!(
+            detect(b"<?xml version=\"1.0\"?><svg").unwrap(),
+            InputFormat::Svg
+        );
+        // Magic bytes win over text.
+        assert_eq!(detect(b"GIF89a<svg").unwrap(), InputFormat::Gif);
         for unsupported in [
             &b"\0\0\0\x1cftypheic"[..],
-            b"<svg",
+            b"<html>",
             b"",
             b"BM",
             b"P6\n1 1\n255\n",

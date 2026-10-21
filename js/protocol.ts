@@ -92,7 +92,7 @@ export const EXIT_MEMORY_LIMIT = 90
 const KIND_TRANSFORM = 0
 const KIND_METADATA = 1
 const KIND_ERROR = 2
-const FORMATS: readonly InputFormat[] = ['jpeg', 'png', 'webp', 'gif', 'tiff', 'avif']
+const FORMATS: readonly InputFormat[] = ['jpeg', 'png', 'webp', 'gif', 'tiff', 'avif', 'svg']
 const ERROR_CODES = [
   'ERR_UNSUPPORTED_FORMAT',
   'ERR_LIMIT_EXCEEDED',

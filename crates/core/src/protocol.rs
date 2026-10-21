@@ -32,7 +32,7 @@ pub const KIND_TRANSFORM: u8 = 0;
 pub const KIND_METADATA: u8 = 1;
 pub const KIND_ERROR: u8 = 2;
 
-pub const FORMATS: [&str; 6] = ["jpeg", "png", "webp", "gif", "tiff", "avif"];
+pub const FORMATS: [&str; 7] = ["jpeg", "png", "webp", "gif", "tiff", "avif", "svg"];
 pub const ERROR_CODES: [&str; 5] = [
     "ERR_UNSUPPORTED_FORMAT",
     "ERR_LIMIT_EXCEEDED",

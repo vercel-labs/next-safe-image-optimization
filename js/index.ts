@@ -12,7 +12,7 @@ import type {
 } from './protocol.js'
 import { WasmBackend } from './wasm.js'
 
-export type InputFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'tiff' | 'avif'
+export type InputFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'tiff' | 'avif' | 'svg'
 export type OutputFormat = 'jpeg' | 'png' | 'webp' | 'gif'
 export type Fit = 'cover' | 'contain' | 'fill' | 'inside' | 'outside'
 export type Kernel = 'nearest' | 'linear' | 'cubic' | 'mitchell' | 'lanczos2' | 'lanczos3'
@@ -53,6 +53,10 @@ export interface BluntOptions {
   /**
    * Reject input images where `width * height` exceeds this. `true` uses the default; `false` or
    * `0` removes the limit (not recommended). Default: `268402689` (`0x3FFF * 0x3FFF`), like sharp.
+   *
+   * For SVGs, this applies to the natural size and the rendered size, but **not** to raster images
+   * embedded in the SVG (`<image href="data:...">`). Those are only bounded by
+   * `limitAllocatorMemory`, `limitProcessMemory`, and `timeout()`.
    */
   limitInputPixels?: number | boolean
   /**

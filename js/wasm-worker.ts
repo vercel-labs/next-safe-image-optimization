@@ -60,6 +60,29 @@ const wasi = {
   fd_seek(): number {
     return ERRNO_BADF
   },
+  // Linked in by usvg's default `<image href>` resolver (`std::fs`), which we replace. There are no
+  // preopened directories, so wasi-libc can't resolve any path, and there are no files to read.
+  fd_prestat_get(): number {
+    return ERRNO_BADF
+  },
+  fd_prestat_dir_name(): number {
+    return ERRNO_BADF
+  },
+  path_open(): number {
+    return ERRNO_BADF
+  },
+  path_filestat_get(): number {
+    return ERRNO_BADF
+  },
+  fd_fdstat_get(): number {
+    return ERRNO_BADF
+  },
+  fd_filestat_get(): number {
+    return ERRNO_BADF
+  },
+  fd_read(): number {
+    return ERRNO_BADF
+  },
   proc_exit(code: number): never {
     throw new ProcExit(code)
   },

@@ -16,7 +16,7 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 
 ## Features
 
-- **Input:** JPEG, PNG, WebP, GIF, TIFF, AVIF. Only the first frame of animations is decoded. AVIF ICC profiles, orientation (`irot`/`imir`), and cropping (`clap`) are ignored, and grid (tiled) AVIFs and AVIF sequences are rejected.
+- **Input:** JPEG, PNG, WebP, GIF, TIFF, AVIF, SVG. Only the first frame of animations is decoded. AVIF ICC profiles, orientation (`irot`/`imir`), and cropping (`clap`) are ignored, and grid (tiled) AVIFs and AVIF sequences are rejected.
 - **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp).
 - **Operations:** auto-orient, rotate (multiples of 90°), resize (all of sharp's `fit` modes, gravity, kernels), blur.
 - `metadata()` reads the header without decoding pixels.
@@ -28,8 +28,8 @@ const output = await blunt(input, { limitInputPixels: 268402689 })
 
 | Layer | Status |
 | --- | --- |
-| Memory-safe decoders | `zune-jpeg`, `png`, `image-webp`, `gif`, and `tiff` (all via `image`), and `avif-decode` (`avif-parse` and `rav1d`, without asm). |
-| Memory limits | `limitInputPixels` (default 268402689, like sharp). `limitAllocatorMemory` (default 512 MiB) bounds what each image may allocate: the worker's allocator tracks every Rust allocation, and the worker exits with `ERR_LIMIT_EXCEEDED` if they exceed it. The limit is also passed to decoders as their allocation budget, and the C encoders' (libwebp and mozjpeg) estimated memory is checked against it up front. The pool's `limitProcessMemory` (default 768 MiB) is a hard, OS-enforced limit per worker (`RLIMIT_DATA` on Linux, the memory's maximum size for wasm) that also covers the C encoders, which the allocator can't see. It has no effect on macOS (whose `RLIMIT_DATA` counts reserved address space, so it rejects any useful limit) or Windows yet. |
+| Memory-safe decoders | `zune-jpeg`, `png`, `image-webp`, `gif`, and `tiff` (all via `image`), `avif-decode` (`avif-parse` and `rav1d`, without asm), and `resvg` (SVG, which only loads embedded `data:` URLs, never files). |
+| Memory limits | `limitInputPixels` (default 268402689, like sharp). For SVGs, it applies to the natural and rendered sizes, but **not to raster images embedded in the SVG**, which are only bounded by the memory limits and `timeout()`. `limitAllocatorMemory` (default 512 MiB) bounds what each image may allocate: the worker's allocator tracks every Rust allocation, and the worker exits with `ERR_LIMIT_EXCEEDED` if they exceed it. The limit is also passed to decoders as their allocation budget, and the C encoders' (libwebp and mozjpeg) estimated memory is checked against it up front. The pool's `limitProcessMemory` (default 768 MiB) is a hard, OS-enforced limit per worker (`RLIMIT_DATA` on Linux, the memory's maximum size for wasm) that also covers the C encoders, which the allocator can't see. It has no effect on macOS (whose `RLIMIT_DATA` counts reserved address space, so it rejects any useful limit) or Windows yet. |
 | CPU limits | `timeout()` bounds the wall time of each image, by killing its worker. There's no default, so set one for untrusted input: decoders aren't configured to bound their own work (a small file can be slow to decode). Blur cost is bounded regardless of sigma. |
 | Process isolation | Images are processed in worker processes, never in the Node process. A panic, abort, or allocation failure only ends the worker, and is reported as an error (`ERR_WORKER_CRASHED` or `ERR_OUT_OF_MEMORY`). This covers rav1d, which calls its DSP routines and picture allocator through `extern "C"` function pointers, where panics can't unwind. Workers get an empty environment, and on Linux (x86_64 and aarch64) a seccomp filter blocks every syscall besides reading and writing already-open file descriptors (their pipes and stderr), memory management, and exiting: no opening files or sockets, and no spawning processes. Workers are reused, one image at a time, so a compromised worker could affect later images. The input is copied before processing, so JS can't mutate it mid-decode. |
 | Encoders | They only see pixels we produced. Lossy WebP uses libwebp (C), because `image-webp` only encodes lossless. JPEG uses `jpeg-encoder`, or mozjpeg (C) with `mozjpeg: true`. |
@@ -41,13 +41,14 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 
 - Only in-memory input (never file paths). Exports `blunt()` instead of a default export.
 - `rotate(angle)` only supports multiples of 90. There is no `flip`, `extract`, `composite`, etc.
-- No HEIF or SVG input. No AVIF, HEIF, or animated output.
+- No HEIF input. No AVIF, HEIF, or animated output.
+- SVGs are rendered with resvg, not librsvg. Text isn't rendered (there are no fonts), `<image>` only loads `data:` URLs, and SVGZ isn't supported. That covers Next.js's OG images, whose text Satori has already converted to paths.
 - No YCbCr TIFF input, which includes most JPEG-compressed TIFFs.
 - PNG output is always lossless truecolor: `png({ quality })` is accepted but ignored (no palette quantization), and `adaptiveFiltering` defaults to `true`.
 - JPEG uses `jpeg-encoder` by default, not mozjpeg, so files are somewhat larger than sharp's. `mozjpeg: true` uses mozjpeg, like sharp, but built without its SIMD assembly, so it's slower than sharp's. `progressive`, `chromaSubsampling` (always 4:2:0), `optimiseCoding` (always on), and `quantisationTable` aren't supported. JPEGs may be progressive: they always are with `mozjpeg: true` (its defaults, like sharp's preset), and never are without it.
 - `blur(sigma)` uses a Gaussian kernel for σ < 3, and a three-pass box blur above that.
 - CMYK JPEGs are converted to RGB naively, ignoring their ICC profile.
-- `limitInputPixels` also applies to `metadata()`.
+- `limitInputPixels` also applies to `metadata()`, and to the size an SVG is rendered at. It doesn't apply to raster images embedded in an SVG (neither does sharp's).
 
 ## Development
 
@@ -81,6 +82,6 @@ The native backend uses worker processes. Without a native binding for the platf
 
 ## Future work
 
-- wasm2c-sandboxed decoders for formats without a trustworthy Rust implementation (SVG, HEIF).
+- wasm2c-sandboxed decoders for formats without a trustworthy Rust implementation (HEIF).
 - Sandboxing on macOS and Windows, and killing workers via a Job Object when the parent dies on Windows.
 - AVIF output, PNG palette quantization, and ICC-aware CMYK conversion.

@@ -131,6 +131,24 @@ fn resolve_shrink(
     (hshrink.min(width), vshrink.min(height))
 }
 
+/// The scale to render a vector image at, given its natural size. Like sharp, this is the common
+/// part of both axes' shrink factors, so that [`resize`] only has the rest left to do (if
+/// anything).
+pub fn vector_scale((width, height): (u32, u32), spec: &ResizeSpec, transform: Transform) -> f64 {
+    let targets = transform.input_dims((spec.width, spec.height));
+    if targets == (None, None) {
+        return 1.0;
+    }
+    let (hshrink, vshrink) = resolve_shrink(
+        (width, height),
+        targets,
+        spec.fit,
+        spec.without_enlargement,
+        spec.without_reduction,
+    );
+    1.0 / hshrink.min(vshrink)
+}
+
 fn scaled_dim(dim: u32, shrink: f64) -> f64 {
     (f64::from(dim) / shrink).round().max(1.0)
 }

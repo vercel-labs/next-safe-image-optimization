@@ -25,7 +25,13 @@ pub struct Output {
 }
 
 pub fn run(input: Vec<u8>, pipeline: &Pipeline) -> Result<Output> {
-    let decoded = decode::decode(&input, &pipeline.limits)?;
+    // Vector images have no orientation, so only the rotation applies.
+    let decoded = decode::decode(&input, &pipeline.limits, |width, height| {
+        pipeline.resize.as_ref().map_or(1.0, |spec| {
+            let transform = Transform::from_rotation(pipeline.rotate);
+            ops::vector_scale((width, height), spec, transform)
+        })
+    })?;
     drop(input);
 
     let output = match &pipeline.output {
@@ -62,7 +68,8 @@ pub fn run(input: Vec<u8>, pipeline: &Pipeline) -> Result<Output> {
 fn default_output(format: InputFormat) -> Result<OutputSpec> {
     Ok(match format {
         InputFormat::Jpeg => OutputSpec::Jpeg(JpegSpec::default()),
-        InputFormat::Png => OutputSpec::Png(PngSpec::default()),
+        // Like sharp.
+        InputFormat::Png | InputFormat::Svg => OutputSpec::Png(PngSpec::default()),
         InputFormat::Webp => OutputSpec::Webp(WebpSpec::default()),
         InputFormat::Gif => OutputSpec::Gif(GifSpec::default()),
         InputFormat::Tiff | InputFormat::Avif => {

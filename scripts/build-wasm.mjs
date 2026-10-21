@@ -35,7 +35,8 @@ if (cargo.status !== 0) {
 }
 
 // What the module may import, by import module. These are exactly what `js/wasm-worker.ts`
-// provides: there are no WASI filesystem functions, and nothing that calls into JS.
+// provides: the WASI filesystem functions always fail (there are no preopened directories), and
+// nothing calls into JS.
 const allowedImports = new Map([
   ['env', new Set(['memory'])],
   [
@@ -45,8 +46,15 @@ const allowedImports = new Map([
       'environ_get',
       'environ_sizes_get',
       'fd_close',
+      'fd_fdstat_get',
+      'fd_filestat_get',
+      'fd_prestat_dir_name',
+      'fd_prestat_get',
+      'fd_read',
       'fd_seek',
       'fd_write',
+      'path_filestat_get',
+      'path_open',
       'proc_exit',
       'random_get',
       'sched_yield',

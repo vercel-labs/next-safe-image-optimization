@@ -247,9 +247,9 @@ describe('limits', () => {
   })
 
   test('unsupported formats are rejected', async () => {
-    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>')
+    const html = Buffer.from('<!doctype html><html></html>')
     const heif = Buffer.from('000000186674797068656963000000006d696631', 'hex')
-    for (const input of [svg, heif, Buffer.alloc(0), Buffer.from('RIFF')]) {
+    for (const input of [html, heif, Buffer.alloc(0), Buffer.from('RIFF')]) {
       await assertRejectsWithCode(blunt(input).toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
     }
   })
@@ -265,6 +265,12 @@ describe('malformed input never crashes or panics', () => {
     gif: () => fromRaw(pattern(64, 48)).gif().toBuffer(),
     tiff: () => fromRaw(pattern(64, 48)).tiff({ compression: 'lzw' }).toBuffer(),
     avif: () => fromRaw(pattern(64, 48, 4)).avif().toBuffer(),
+    svg: async () =>
+      Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48">
+        <defs><filter id="f"><feGaussianBlur stdDeviation="2"/></filter></defs>
+        <rect width="64" height="48" fill="#08f" filter="url(#f)"/>
+        <image width="32" height="24" href="data:image/png;base64,${(await fromRaw(pattern(8, 6)).png().toBuffer()).toString('base64')}"/>
+      </svg>`),
   }
   const allowed = new Set(['ERR_DECODE_FAILED', 'ERR_LIMIT_EXCEEDED', 'ERR_UNSUPPORTED_FORMAT'])
 

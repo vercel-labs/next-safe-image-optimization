@@ -22,6 +22,9 @@ avif-decode = { path = "../../vendor/avif-decode", default-features = false }
 avif-parse = { version = "2.1.0", default-features = false }
 # Reuses avif-decode's output buffers.
 bytemuck = { version = "1.25.2", default-features = false, features = ["extern_crate_alloc"] }
+# SVG. Without `text` (and fonts) and `svgz`. `raster-images` renders embedded (`data:` URL) JPEG,
+# PNG, GIF, and WebP images, with the same decoder crates that `image` uses (see AGENTS.md).
+resvg = { version = "0.48.1", default-features = false, features = ["raster-images"] }
 # ICC profile -> sRGB conversion. Same major version as `image` uses.
 moxcms = { version = "0.8.1", default-features = false, features = ["lut", "neon_shaper_paths", "sse_shaper_paths", "avx_shaper_paths"] }
 

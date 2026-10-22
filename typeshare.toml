@@ -5,5 +5,4 @@
 [typescript.type_mappings]
 InputFormat = "`${InputFormat}`"
 OutputFormat = "`${OutputFormat}`"
-Fit = "`${Fit}`"
 Kernel = "`${Kernel}`"

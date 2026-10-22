@@ -1,6 +1,6 @@
 # AGENTS.md
 
-A safer replacement for sharp in Next.js: decode (untrusted) → auto-orient/rotate → resize → blur → encode. A sharp-like TypeScript wrapper sends each image to a pool of workers: native worker processes (managed by a small napi-rs binding), or worker threads running a wasm build.
+A safer replacement for sharp in Next.js: decode (untrusted) → auto-orient/rotate → resize → encode. A sharp-like TypeScript wrapper sends each image to a pool of workers: native worker processes (managed by a small napi-rs binding), or worker threads running a wasm build.
 
 ## Layout
 
@@ -8,8 +8,8 @@ A Cargo workspace:
 
 - `crates/core` (`blunt-core`): everything that touches images. Only ever runs in a worker.
   - `protocol.rs`: the request/response format (the other side is `js/protocol.ts`), and worker exit codes. `request.rs`: request options, validated again (the JS wrapper isn't a security boundary). Items marked `#[typeshare]` (request options, `InputFormat`, `ErrorCode`, and constants) are exported to `js/protocol.generated.ts`.
-  - `pipeline.rs`: stage order. Resizes *before* rotating (cheaper), so `orientation.rs` maps targets and gravity back to the input frame. ICC → sRGB (`color.rs`, moxcms) runs after resizing.
-  - `decode/`: one file per format. `encode/`: one file per format. `ops.rs`: resize (fast_image_resize), embed, blur.
+  - `pipeline.rs`: stage order. Resizes *before* rotating (cheaper), so `orientation.rs` maps targets back to the input frame (crops are always centered, so they're the same in either frame). ICC → sRGB (`color.rs`, moxcms) runs after resizing.
+  - `decode/`: one file per format. `encode/`: one file per format. `ops.rs`: resize (`image::imageops`, with alpha premultiplied around it). Only what Next.js uses: sharp's default `fit: 'cover'` (centered), plus `kernel`, `withoutEnlargement`, and `withoutReduction`.
   - `limits.rs`: memory limits. `alloc.rs`: `ExitOnOom`, the workers' global allocator.
 - `crates/worker` (`blunt-image-optimization-worker`): the worker process. Reads requests from stdin, writes responses to stdout. Sandboxed with seccomp on Linux. With `--fork-server` (unix), it forks workers instead (`fork_server.rs`).
 - `crates/wasm`: the same, as a `wasm32-wasip1` module with raw exports (no wasm-bindgen, no napi).

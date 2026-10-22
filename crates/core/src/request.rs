@@ -18,17 +18,7 @@ pub enum Request {
     Metadata(LimitOptions),
 }
 
-#[typeshare]
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Fit {
-    Cover,
-    Contain,
-    Fill,
-    Inside,
-    Outside,
-}
-
+/// The filters that `image` implements, named like sharp's.
 #[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -36,8 +26,6 @@ enum Kernel {
     Nearest,
     Linear,
     Cubic,
-    Mitchell,
-    Lanczos2,
     Lanczos3,
 }
 
@@ -51,41 +39,16 @@ enum OutputFormat {
     Gif,
 }
 
-#[typeshare]
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Color {
-    /// 0-255
-    r: f64,
-    g: f64,
-    b: f64,
-    /// 0-1
-    alpha: f64,
-}
-
+/// Like sharp's `fit: 'cover'`: with both dimensions, the excess is cropped, centered.
 #[typeshare]
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResizeOptions {
     width: Option<f64>,
     height: Option<f64>,
-    fit: Option<Fit>,
-    /// 0 (left) to 1 (right).
-    gravity_x: Option<f64>,
-    /// 0 (top) to 1 (bottom).
-    gravity_y: Option<f64>,
     kernel: Option<Kernel>,
     without_enlargement: Option<bool>,
     without_reduction: Option<bool>,
-    background: Option<Color>,
-}
-
-#[typeshare]
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BlurOptions {
-    /// Omit for a mild 3x3 box blur.
-    sigma: Option<f64>,
 }
 
 #[typeshare]
@@ -143,7 +106,6 @@ pub struct TransformOptions {
     /// Clockwise degrees, a multiple of 90.
     rotate: Option<f64>,
     resize: Option<ResizeOptions>,
-    blur: Option<BlurOptions>,
     /// Defaults to the input format.
     format: Option<OutputFormat>,
     jpeg: Option<JpegOptions>,
@@ -164,15 +126,6 @@ fn int(name: &str, value: f64, min: f64, max: f64) -> Result<f64> {
     if value.fract() != 0.0 || !(min..=max).contains(&value) {
         return Err(invalid(format!(
             "{name} must be an integer between {min} and {max}, got {value}"
-        )));
-    }
-    Ok(value)
-}
-
-fn number(name: &str, value: f64, min: f64, max: f64) -> Result<f64> {
-    if !(min..=max).contains(&value) {
-        return Err(invalid(format!(
-            "{name} must be between {min} and {max}, got {value}"
         )));
     }
     Ok(value)
@@ -207,41 +160,17 @@ fn parse_resize(options: ResizeOptions) -> Result<ResizeSpec> {
             .map(|v| int(name, v, 1.0, f64::from(u32::MAX)).map(|v| v as u32))
             .transpose()
     };
-    let gravity = |name, value: Option<f64>| number(name, value.unwrap_or(0.5), 0.0, 1.0);
-    let background = match options.background {
-        None => [0, 0, 0, u8::MAX],
-        Some(c) => [
-            int("background.r", c.r, 0.0, 255.0)? as u8,
-            int("background.g", c.g, 0.0, 255.0)? as u8,
-            int("background.b", c.b, 0.0, 255.0)? as u8,
-            (number("background.alpha", c.alpha, 0.0, 1.0)? * 255.0).round() as u8,
-        ],
-    };
     Ok(ResizeSpec {
         width: dim("width", options.width)?,
         height: dim("height", options.height)?,
-        fit: match options.fit.unwrap_or(Fit::Cover) {
-            Fit::Cover => ops::Fit::Cover,
-            Fit::Contain => ops::Fit::Contain,
-            Fit::Fill => ops::Fit::Fill,
-            Fit::Inside => ops::Fit::Inside,
-            Fit::Outside => ops::Fit::Outside,
-        },
-        gravity: (
-            gravity("gravityX", options.gravity_x)?,
-            gravity("gravityY", options.gravity_y)?,
-        ),
         kernel: match options.kernel.unwrap_or(Kernel::Lanczos3) {
             Kernel::Nearest => ops::Kernel::Nearest,
             Kernel::Linear => ops::Kernel::Linear,
             Kernel::Cubic => ops::Kernel::Cubic,
-            Kernel::Mitchell => ops::Kernel::Mitchell,
-            Kernel::Lanczos2 => ops::Kernel::Lanczos2,
             Kernel::Lanczos3 => ops::Kernel::Lanczos3,
         },
         without_enlargement: options.without_enlargement.unwrap_or(false),
         without_reduction: options.without_reduction.unwrap_or(false),
-        background,
     })
 }
 
@@ -314,18 +243,12 @@ pub fn parse_pipeline(mut options: Box<TransformOptions>) -> Result<Pipeline> {
             angle
         }
     };
-    let blur = match options.blur.take() {
-        None => None,
-        Some(BlurOptions { sigma: None }) => Some(None),
-        Some(BlurOptions { sigma: Some(s) }) => Some(Some(number("blur", s, 0.3, 1000.0)?)),
-    };
     let output = parse_output(&mut options)?;
     Ok(Pipeline {
         limits,
         auto_orient: options.auto_orient.unwrap_or(false),
         rotate,
         resize: options.resize.take().map(parse_resize).transpose()?,
-        blur,
         output,
     })
 }
@@ -338,7 +261,7 @@ mod tests {
     fn parses_transform() {
         let request = parse(
             br#"{"transform":{"limits":{"limitAllocatorMemory":1000},"rotate":90,"resize":{"width":10},
-                "blur":{},"format":"webp","webp":{"quality":50}}}"#,
+                "format":"webp","webp":{"quality":50}}}"#,
         )
         .unwrap();
         let Request::Transform(options) = request else {
@@ -348,7 +271,6 @@ mod tests {
         assert_eq!(pipeline.limits.memory, 1000);
         assert_eq!(pipeline.rotate, 90);
         assert_eq!(pipeline.resize.unwrap().width, Some(10));
-        assert_eq!(pipeline.blur, Some(None));
         assert!(matches!(pipeline.output, Some(OutputSpec::Webp(spec)) if spec.quality == 50.0));
     }
 
@@ -357,6 +279,9 @@ mod tests {
         for json in [
             r#"{"transform":{"rotate":45}}"#,
             r#"{"transform":{"resize":{"width":0}}}"#,
+            r#"{"transform":{"resize":{"width":1,"fit":"contain"}}}"#,
+            r#"{"transform":{"resize":{"width":1,"kernel":"mitchell"}}}"#,
+            r#"{"transform":{"blur":{}}}"#,
             r#"{"transform":{"format":"avif"}}"#,
             r#"{"transform":{"unknown":1}}"#,
             r#"{"metadata":{"limitAllocatorMemory":0}}"#,

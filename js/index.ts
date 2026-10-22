@@ -15,40 +15,9 @@ import { WasmBackend } from './wasm.js'
 
 export type InputFormat = `${generated.InputFormat}`
 export type OutputFormat = `${generated.OutputFormat}`
-export type Fit = `${generated.Fit}`
 export type Kernel = `${generated.Kernel}`
-export type Position =
-  | 'centre'
-  | 'center'
-  | 'north'
-  | 'northeast'
-  | 'east'
-  | 'southeast'
-  | 'south'
-  | 'southwest'
-  | 'west'
-  | 'northwest'
-  | 'top'
-  | 'right top'
-  | 'right'
-  | 'right bottom'
-  | 'bottom'
-  | 'left bottom'
-  | 'left'
-  | 'left top'
 
 export type Input = Uint8Array | ArrayBuffer | ArrayBufferView
-
-export interface Color {
-  /** 0-255 */
-  r: number
-  /** 0-255 */
-  g: number
-  /** 0-255 */
-  b: number
-  /** 0-1, defaults to 1. */
-  alpha?: number
-}
 
 export interface BluntOptions {
   /**
@@ -63,7 +32,7 @@ export interface BluntOptions {
   /**
    * The maximum memory in bytes that processing may allocate, including the input. The worker's
    * allocator enforces this, by exiting the worker, which doesn't cover the C encoders (libwebp and
-   * mozjpeg); see the pool's `limitProcessMemory` for that. Each stage (decode, resize, blur, encode) also estimates
+   * mozjpeg); see the pool's `limitProcessMemory` for that. Each stage (decode, resize, encode) also estimates
    * its memory before it runs, for a clearer error. Default: 512 MiB.
    */
   limitAllocatorMemory?: number
@@ -111,17 +80,15 @@ export interface PoolOptions {
   limitProcessMemory?: number | false
 }
 
+/**
+ * Always like sharp's default `fit: 'cover'`, with the default `position: 'centre'`: the aspect
+ * ratio is kept, and with both a width and a height, the excess is cropped, centered.
+ */
 export interface ResizeOptions {
   width?: number | null
   height?: number | null
-  /** Default: `'cover'`. */
-  fit?: Fit
-  /** Where to crop (`cover`) or embed (`contain`). Default: `'centre'`. */
-  position?: Position
   /** Default: `'lanczos3'`. */
   kernel?: Kernel
-  /** Background for `contain`. Default: opaque black. */
-  background?: Color
   withoutEnlargement?: boolean
   withoutReduction?: boolean
 }
@@ -224,29 +191,7 @@ export class BluntError extends Error {
   }
 }
 
-const GRAVITY: Record<Position, [number, number]> = {
-  centre: [0.5, 0.5],
-  center: [0.5, 0.5],
-  north: [0.5, 0],
-  top: [0.5, 0],
-  northeast: [1, 0],
-  'right top': [1, 0],
-  east: [1, 0.5],
-  right: [1, 0.5],
-  southeast: [1, 1],
-  'right bottom': [1, 1],
-  south: [0.5, 1],
-  bottom: [0.5, 1],
-  southwest: [0, 1],
-  'left bottom': [0, 1],
-  west: [0, 0.5],
-  left: [0, 0.5],
-  northwest: [0, 0],
-  'left top': [0, 0],
-}
-
-const FITS: readonly Fit[] = ['cover', 'contain', 'fill', 'inside', 'outside']
-const KERNELS: readonly Kernel[] = ['nearest', 'linear', 'cubic', 'mitchell', 'lanczos2', 'lanczos3']
+const KERNELS: readonly Kernel[] = ['nearest', 'linear', 'cubic', 'lanczos3']
 const DEFAULT_LIMIT_INPUT_PIXELS = 0x3fff * 0x3fff
 
 function invalid(name: string, expected: string, value: unknown): TypeError {
@@ -260,13 +205,6 @@ function isInteger(value: unknown, min: number, max: number): value is number {
 function checkInteger(name: string, value: unknown, min: number, max: number): number {
   if (!isInteger(value, min, max)) {
     throw invalid(name, `integer between ${min} and ${max}`, value)
-  }
-  return value
-}
-
-function checkNumber(name: string, value: unknown, min: number, max: number): number {
-  if (typeof value !== 'number' || !(value >= min && value <= max)) {
-    throw invalid(name, `number between ${min} and ${max}`, value)
   }
   return value
 }
@@ -388,7 +326,7 @@ export function defaultPool(): Pool {
 
 /**
  * A chainable image processing pipeline, similar to a sharp instance. Operations always run in this
- * order, regardless of call order: auto-orient, rotate, resize, blur.
+ * order, regardless of call order: auto-orient, rotate, resize.
  */
 export class Pipeline {
   #input: Uint8Array
@@ -398,7 +336,6 @@ export class Pipeline {
   #autoOrient = false
   #rotate: number | undefined
   #resize: NativeResizeOptions | undefined
-  #blur: TransformOptions['blur']
   #output: Pick<TransformOptions, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
 
   constructor(input: Input, options: BluntOptions = {}) {
@@ -493,41 +430,11 @@ export class Pipeline {
     const resize: NativeResizeOptions = {
       width: dimension('width', width),
       height: dimension('height', height),
-      fit: optional(options.fit, (v) => checkOneOf('fit', v, FITS)),
       kernel: optional(options.kernel, (v) => checkOneOf('kernel', v, KERNELS)),
       withoutEnlargement: optional(options.withoutEnlargement, (v) => checkBoolean('withoutEnlargement', v)),
       withoutReduction: optional(options.withoutReduction, (v) => checkBoolean('withoutReduction', v)),
     }
-    if (options.position !== undefined) {
-      const gravity = GRAVITY[checkOneOf('position', options.position, Object.keys(GRAVITY) as Position[])]
-      ;[resize.gravityX, resize.gravityY] = gravity
-    }
-    if (options.background !== undefined) {
-      const { r, g, b, alpha = 1 } = options.background
-      resize.background = {
-        r: checkInteger('background.r', r, 0, 255),
-        g: checkInteger('background.g', g, 0, 255),
-        b: checkInteger('background.b', b, 0, 255),
-        alpha: checkNumber('background.alpha', alpha, 0, 1),
-      }
-    }
     this.#resize = resize
-    return this
-  }
-
-  /**
-   * Without arguments (or `true`), performs a mild 3x3 box blur. With a sigma (0.3-1000), performs
-   * a Gaussian blur. `false` disables blurring.
-   */
-  blur(sigma?: number | boolean | { sigma: number }): this {
-    if (sigma === undefined || sigma === true) {
-      this.#blur = {}
-    } else if (sigma === false) {
-      this.#blur = undefined
-    } else {
-      const value = typeof sigma === 'object' && sigma !== null ? sigma.sigma : sigma
-      this.#blur = { sigma: checkNumber('sigma', value, 0.3, 1000) }
-    }
     return this
   }
 
@@ -609,7 +516,6 @@ export class Pipeline {
       autoOrient: this.#autoOrient,
       rotate: this.#rotate,
       resize: this.#resize,
-      blur: this.#blur,
       ...this.#output,
     }
     const response = await this.#run({ transform })

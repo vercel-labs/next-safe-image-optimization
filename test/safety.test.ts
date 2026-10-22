@@ -85,7 +85,8 @@ describe('limits', () => {
   })
 
   test('resampling buffers count against the memory limit', async () => {
-    // Resizing 4000000x2 to 100x100 needs a 1.2 GB intermediate buffer, and large filter tables.
+    // Resizing 4000000x2 to 3000000x2 needs a 128 MB intermediate buffer (16 bytes per pixel),
+    // much more than the decoded image (24 MB) and the output (18 MB).
     const width = 4_000_000
     const ihdr = Buffer.alloc(13)
     ihdr.writeUInt32BE(width, 0)
@@ -99,9 +100,10 @@ describe('limits', () => {
       pngChunk('IEND', Buffer.alloc(0)),
     ])
     assert.deepEqual(await blunt(input).metadata().then((m) => [m.width, m.height]), [width, 2])
-    await assertRejectsWithCode(
-      blunt(input).resize(100, 100, { fit: 'fill' }).png().toBuffer(),
-      'ERR_LIMIT_EXCEEDED',
+    await assert.rejects(
+      blunt(input, { limitAllocatorMemory: 96 * 1024 * 1024 }).resize(3_000_000).png().toBuffer(),
+      // Checked before resizing, not by the allocator.
+      (error: Error & { code?: string }) => error.code === 'ERR_LIMIT_EXCEEDED' && /byte buffer/.test(error.message),
     )
   })
 

@@ -4,13 +4,12 @@ import { describe, test } from 'node:test'
 import sharp from 'sharp'
 
 import { blunt } from '../dist/index.js'
-import type { Fit, Position } from '../dist/index.js'
 import { assertSimilar, fromRaw, pattern } from './helpers.ts'
 
 const photo = () => fromRaw(pattern(400, 300)).png().toBuffer()
 
+// Always sharp's default `fit: 'cover'` and `position: 'centre'`.
 describe('resize matches sharp', () => {
-  const fits: Fit[] = ['cover', 'contain', 'fill', 'inside', 'outside']
   const cases: [number | null, number | null][] = [
     [200, null],
     [null, 100],
@@ -21,23 +20,29 @@ describe('resize matches sharp', () => {
     [1, 1],
     [399, 7],
   ]
-  for (const fit of fits) {
-    for (const [width, height] of cases) {
-      for (const withoutEnlargement of [false, true]) {
-        const options = { fit, withoutEnlargement }
-        test(`${width}x${height} ${JSON.stringify(options)}`, async () => {
-          const input = await photo()
-          const ours = await blunt(input).resize(width, height, options).png().toBuffer({ resolveWithObject: true })
-          const theirs = await sharp(input).resize(width, height, options).png().toBuffer({ resolveWithObject: true })
-          assert.deepEqual([ours.info.width, ours.info.height], [theirs.info.width, theirs.info.height])
-          // Kernels and crop rounding differ slightly. The pattern has hard edges, which exaggerates
-          // small differences in tiny outputs.
-          const tolerance = Math.min(ours.info.width, ours.info.height) < 16 ? 25 : 6
-          await assertSimilar(ours.data, theirs.data, tolerance)
-        })
-      }
+  for (const [width, height] of cases) {
+    for (const withoutEnlargement of [false, true]) {
+      const options = { withoutEnlargement }
+      test(`${width}x${height} ${JSON.stringify(options)}`, async () => {
+        const input = await photo()
+        const ours = await blunt(input).resize(width, height, options).png().toBuffer({ resolveWithObject: true })
+        const theirs = await sharp(input).resize(width, height, options).png().toBuffer({ resolveWithObject: true })
+        assert.deepEqual([ours.info.width, ours.info.height], [theirs.info.width, theirs.info.height])
+        // Kernels and crop rounding differ slightly. The pattern has hard edges, which exaggerates
+        // small differences in tiny outputs.
+        const tolerance = Math.min(ours.info.width, ours.info.height) < 16 ? 25 : 6
+        await assertSimilar(ours.data, theirs.data, tolerance)
+      })
     }
   }
+
+  test('blur placeholder (like next-image-loader)', async () => {
+    const input = await fromRaw(pattern(400, 300)).jpeg().toBuffer()
+    const ours = await blunt(input).rotate().resize(8, 6).jpeg({ quality: 70 }).toBuffer({ resolveWithObject: true })
+    const theirs = await sharp(input).rotate().resize(8, 6).jpeg({ quality: 70 }).toBuffer({ resolveWithObject: true })
+    assert.deepEqual([ours.info.width, ours.info.height], [theirs.info.width, theirs.info.height])
+    await assertSimilar(ours.data, theirs.data, 25)
+  })
 
   test('withoutReduction', async () => {
     const input = await photo()
@@ -52,25 +57,7 @@ describe('resize matches sharp', () => {
     assert.deepEqual([info.width, info.height], [50, 38])
   })
 
-  const positions: Position[] = ['north', 'east', 'southwest', 'left top', 'centre']
-  for (const position of positions) {
-    test(`cover with position ${position}`, async () => {
-      const input = await photo()
-      const ours = await blunt(input).resize(100, 300, { position }).png().toBuffer()
-      const theirs = await sharp(input).resize(100, 300, { position }).png().toBuffer()
-      await assertSimilar(ours, theirs, 6)
-    })
-
-    test(`contain with position ${position} and transparent background`, async () => {
-      const input = await photo()
-      const background = { r: 255, g: 0, b: 0, alpha: 0.5 }
-      const ours = await blunt(input).resize(300, 100, { fit: 'contain', position, background }).png().toBuffer()
-      const theirs = await sharp(input).resize(300, 100, { fit: 'contain', position, background }).png().toBuffer()
-      await assertSimilar(ours, theirs, 6, 4)
-    })
-  }
-
-  for (const kernel of ['nearest', 'linear', 'cubic', 'mitchell', 'lanczos2', 'lanczos3'] as const) {
+  for (const kernel of ['nearest', 'linear', 'cubic', 'lanczos3'] as const) {
     test(`kernel ${kernel}`, async () => {
       const input = await photo()
       const ours = await blunt(input).resize(123, null, { kernel }).png().toBuffer()
@@ -110,13 +97,10 @@ describe('orientation matches sharp', () => {
       await assertSimilar(ours.data, theirs.data, 3)
     })
 
-    test(`auto-orients and resizes EXIF orientation ${orientation} with gravity`, async () => {
+    test(`auto-orients and resizes EXIF orientation ${orientation}`, async () => {
       const input = await fromRaw(pattern(120, 80)).withMetadata({ orientation }).jpeg({ quality: 95 }).toBuffer()
-      const options = { position: 'north' as const }
-      const ours = await blunt(input).rotate().resize(50, 30, options).png().toBuffer()
-      // sharp applies gravity before rotating, so orient first to get the expected output.
-      const oriented = await sharp(input).rotate().png().toBuffer()
-      const theirs = await sharp(oriented).resize(50, 30, options).png().toBuffer()
+      const ours = await blunt(input).rotate().resize(50, 30).png().toBuffer()
+      const theirs = await sharp(input).rotate().resize(50, 30).png().toBuffer()
       await assertSimilar(ours, theirs, 8)
     })
   }
@@ -147,48 +131,6 @@ describe('orientation matches sharp', () => {
     const input = await fromRaw(pattern(120, 80)).withMetadata({ orientation: 6 }).jpeg().toBuffer()
     const { info } = await blunt(input, { autoOrient: true }).png().toBuffer({ resolveWithObject: true })
     assert.deepEqual([info.width, info.height], [80, 120])
-  })
-})
-
-describe('blur', () => {
-  for (const sigma of [0.5, 2, 10, 50]) {
-    test(`sigma ${sigma} is close to sharp`, async () => {
-      const input = await photo()
-      const ours = await blunt(input).blur(sigma).png().toBuffer()
-      const theirs = await sharp(input).blur(sigma).png().toBuffer()
-      // Large sigmas use a box blur approximation, and edge handling differs.
-      await assertSimilar(ours, theirs, sigma > 3 ? 6 : 2)
-    })
-  }
-
-  test('mild blur without sigma', async () => {
-    const input = await photo()
-    const ours = await blunt(input).blur().png().toBuffer()
-    const theirs = await sharp(input).blur().png().toBuffer()
-    await assertSimilar(ours, theirs, 2)
-  })
-
-  test('blur(false) is a no-op', async () => {
-    const input = await photo()
-    await assertSimilar(await blunt(input).blur(5).blur(false).png().toBuffer(), input, 0)
-  })
-
-  test('blur placeholder pipeline (like next-image-loader)', async () => {
-    const input = await fromRaw(pattern(400, 300)).jpeg().toBuffer()
-    const { data, info } = await blunt(input)
-      .resize(8, 6)
-      .blur(1)
-      .jpeg({ quality: 70 })
-      .toBuffer({ resolveWithObject: true })
-    assert.deepEqual([info.width, info.height], [8, 6])
-    assert.ok(data.length < 1000)
-  })
-
-  test('large sigma on a large image is fast', async () => {
-    const input = await fromRaw(pattern(2000, 2000)).png({ compressionLevel: 1 }).toBuffer()
-    const start = performance.now()
-    await blunt(input).blur(1000).jpeg().toBuffer()
-    assert.ok(performance.now() - start < 10_000)
   })
 })
 

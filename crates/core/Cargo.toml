@@ -31,9 +31,6 @@ resvg = { version = "0.48.1", default-features = false, features = ["raster-imag
 # ICC profile -> sRGB conversion. Same major version as `image` uses.
 moxcms = { version = "0.8.1", default-features = false, features = ["lut", "neon_shaper_paths", "sse_shaper_paths", "avx_shaper_paths"] }
 
-# Image operations
-fast_image_resize = { version = "6.1.0", default-features = false, features = ["std"] }
-
 # Encoders. Sandboxing encoders isn't a goal: they only ever see pixel buffers we produced.
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
 # `mozjpeg: true` (C). Without SIMD (asm), so builds don't need nasm. On wasm, it's compiled with

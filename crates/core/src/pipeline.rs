@@ -13,8 +13,6 @@ pub struct Pipeline {
     /// Clockwise, a multiple of 90. Applied after auto-orientation.
     pub rotate: i32,
     pub resize: Option<ResizeSpec>,
-    /// `Some(None)` is a mild 3x3 box blur.
-    pub blur: Option<Option<f64>>,
     /// `None` uses the input format, with default options.
     pub output: Option<OutputSpec>,
 }
@@ -54,9 +52,6 @@ pub fn run(input: Vec<u8>, pipeline: &Pipeline) -> Result<Output> {
         img = color::to_srgb(img, icc);
     }
     img.apply_orientation(transform.to_orientation());
-    if let Some(sigma) = pipeline.blur {
-        img = ops::blur(img, sigma)?;
-    }
 
     let encoded = encode::encode(img, &output, &pipeline.limits)?;
     Ok(Output {

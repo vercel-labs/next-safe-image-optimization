@@ -131,9 +131,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "blunt-scm"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "blunt-shim"
 version = "0.1.0"
 dependencies = [
+ "blunt-scm",
+ "libc",
  "napi",
  "napi-build",
  "napi-derive",
@@ -151,6 +160,7 @@ name = "blunt-worker"
 version = "0.1.0"
 dependencies = [
  "blunt-core",
+ "blunt-scm",
  "libc",
 ]
 

@@ -4,6 +4,8 @@
 
 #![deny(clippy::all)]
 
+#[cfg(unix)]
+mod fork;
 mod pool;
 
 use std::path::PathBuf;
@@ -47,6 +49,9 @@ pub struct PoolOptions {
     pub idle_timeout_ms: u32,
     /// Each worker's `RLIMIT_DATA` in bytes (Linux only), or 0 for none.
     pub memory_limit: f64,
+    /// Fork workers from a fork server, instead of spawning each one (unix only). Defaults to
+    /// true.
+    pub fork_server: Option<bool>,
 }
 
 #[napi(object)]
@@ -93,6 +98,7 @@ impl WorkerPool {
             max_processes: options.max_processes as usize,
             idle_timeout: Duration::from_millis(u64::from(options.idle_timeout_ms)),
             memory_limit: options.memory_limit as u64,
+            fork_server: options.fork_server.unwrap_or(true),
         })
         .map_err(|err| {
             napi::Error::from_reason(format!("failed to start the watchdog thread: {err}"))

@@ -13,5 +13,9 @@ crate-type = ["cdylib"]
 napi = { version = "3.14.2", default-features = false, features = ["napi4", "dyn-symbols"] }
 napi-derive = { version = "3.6.12", default-features = false, features = ["type-def", "strict"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2.190", default-features = false }
+blunt-scm = { path = "../scm" }
+
 [build-dependencies]
 napi-build = "2.6.0"

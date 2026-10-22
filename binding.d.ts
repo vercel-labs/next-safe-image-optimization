@@ -26,6 +26,11 @@ export interface PoolOptions {
   idleTimeoutMs: number
   /** Each worker's `RLIMIT_DATA` in bytes (Linux only), or 0 for none. */
   memoryLimit: number
+  /**
+   * Fork workers from a fork server, instead of spawning each one (unix only). Defaults to
+   * true.
+   */
+  forkServer?: boolean
 }
 
 export interface RunError {

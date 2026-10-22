@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -91,8 +91,53 @@ describe('pool', () => {
   })
 })
 
+// Workers are forked from a fork server, except on Windows.
+describe('fork server', { skip: backend !== 'native' || process.platform === 'win32' }, () => {
+  function processes() {
+    return execFileSync('ps', ['-A', '-o', 'pid=,ppid=,args='])
+      .toString()
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const [, pid, ppid, args] = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/)!
+        return { pid: Number(pid), ppid: Number(ppid), args }
+      })
+  }
+  function servers() {
+    return processes().filter(({ ppid, args }) => ppid === process.pid && args.includes('--fork-server'))
+  }
+
+  test('workers are forked from a fork server', async () => {
+    const before = new Set(servers().map(({ pid }) => pid))
+    const pool = new Pool({ concurrency: 2 })
+    const input = await fromRaw(pattern(64, 64)).png().toBuffer()
+    await Promise.all([blunt(input, { pool }).png().toBuffer(), blunt(input, { pool }).png().toBuffer()])
+    const all = processes()
+    const added = servers().filter(({ pid }) => !before.has(pid))
+    assert.equal(added.length, 1)
+    assert.ok(all.some(({ ppid }) => ppid === added[0]!.pid))
+    // Nothing else is spawned directly.
+    assert.ok(!all.some(({ ppid, args }) => ppid === process.pid && args.includes('blunt-image-optimization-worker') && !args.includes('--fork-server')))
+  })
+
+  test('the pool replaces a fork server that exits', async () => {
+    const before = new Set(servers().map(({ pid }) => pid))
+    const pool = new Pool({ concurrency: 1 })
+    const input = await fromRaw(pattern(64, 64)).png().toBuffer()
+    await blunt(input, { pool }).png().toBuffer()
+    const [server] = servers().filter(({ pid }) => !before.has(pid))
+    for (const { pid } of processes().filter(({ ppid }) => ppid === server!.pid)) {
+      process.kill(pid, 'SIGKILL')
+    }
+    process.kill(server!.pid, 'SIGKILL')
+    // The idle worker is gone.
+    await assertRejectsWithCode(blunt(input, { pool }).png().toBuffer(), 'ERR_WORKER_CRASHED')
+    await blunt(input, { pool }).png().toBuffer()
+  })
+})
+
 // The native binding's handling of misbehaving workers, with shell scripts standing in for the
-// worker binary.
+// worker binary (or the fork server, which they fail to start).
 describe('native worker failures', { skip: backend !== 'native' || process.platform === 'win32' }, () => {
   interface RunResult {
     response?: Buffer
@@ -111,8 +156,8 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     chmodSync(path, 0o755)
     return path
   }
-  function run(workerPath: string, timeoutMs?: number): Promise<RunResult> {
-    const pool = new binding.WorkerPool({ workerPath, maxProcesses: 1, idleTimeoutMs: 1000, memoryLimit: 0 })
+  function run(workerPath: string, timeoutMs?: number, forkServer = false): Promise<RunResult> {
+    const pool = new binding.WorkerPool({ workerPath, maxProcesses: 1, idleTimeoutMs: 1000, memoryLimit: 0, forkServer })
     return pool.run(Buffer.alloc(16), '{}', { timeoutMs, maxResponseBytes: 1024 })
   }
   async function assertFails(result: Promise<RunResult>, code: string) {
@@ -137,6 +182,18 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
 
   test('a missing worker binary', async () => {
     await assertFails(run(join(dir, 'missing')), 'ERR_WORKER_SPAWN')
+    await assertFails(run(join(dir, 'missing'), undefined, true), 'ERR_WORKER_SPAWN')
+  })
+
+  test('a fork server that fails to start', async () => {
+    const fork = (script: string) => run(worker(script), undefined, true)
+    await assertFails(fork('exit 86'), 'ERR_OUT_OF_MEMORY')
+    await assertFails(fork('exit 87'), 'ERR_WORKER_SPAWN')
+    await assertFails(fork('exit 88'), 'ERR_WORKER_SPAWN')
+    await assertFails(fork('exit 0'), 'ERR_WORKER_CRASHED')
+    await assertFails(fork('kill -9 $$'), 'ERR_WORKER_CRASHED')
+    // Closes the socket, but keeps running.
+    await assertFails(fork('exec sleep 10 <&-'), 'ERR_WORKER_CRASHED')
   })
 
   test('a worker that never responds is killed', async () => {

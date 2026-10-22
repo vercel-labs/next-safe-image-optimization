@@ -2,16 +2,20 @@
 //! one request at a time, with blocking I/O. A watchdog thread kills workers that exceed their
 //! request's timeout, which also unblocks their driver.
 //!
-//! Workers are untrusted: a worker that sends a malformed response is killed.
+//! On unix, workers are forked from a fork server (see `fork.rs`), unless `Config::fork_server` is
+//! off. Workers are untrusted: a worker that sends a malformed response is killed.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use crate::fork::{self, ForkServer};
 
 /// These must match `crates/core/src/protocol.rs`.
 const EXIT_OUT_OF_MEMORY: i32 = 86;
@@ -25,6 +29,8 @@ pub struct Config {
     pub idle_timeout: Duration,
     /// The worker's `RLIMIT_DATA` in bytes, or 0 for none.
     pub memory_limit: u64,
+    /// Fork workers from a fork server, instead of spawning each one. Ignored on Windows.
+    pub fork_server: bool,
 }
 
 pub struct Failure {
@@ -33,7 +39,7 @@ pub struct Failure {
 }
 
 impl Failure {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
         Failure {
             code,
             message: message.into(),
@@ -56,6 +62,8 @@ pub struct Pool {
     config: Config,
     state: Mutex<State>,
     available: Condvar,
+    #[cfg(unix)]
+    fork_server: Option<ForkServer>,
 }
 
 #[derive(Default)]
@@ -67,7 +75,7 @@ struct State {
     live: usize,
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Nothing panics while holding these locks, but if something did, the state is still usable.
     mutex.lock().unwrap_or_else(|err| err.into_inner())
 }
@@ -76,6 +84,8 @@ impl Pool {
     pub fn new(config: Config) -> io::Result<Arc<Self>> {
         WATCHDOG.start()?;
         Ok(Arc::new(Pool {
+            #[cfg(unix)]
+            fork_server: config.fork_server.then(ForkServer::default),
             config,
             state: Mutex::default(),
             available: Condvar::new(),
@@ -126,14 +136,14 @@ impl Pool {
         }
     }
 
-    /// The driver thread. On Linux, the worker exits when the thread that spawned it exits (see
-    /// `crates/worker`), so this thread outlives its worker.
+    /// The driver thread. On Linux, a spawned (not forked) worker exits when the thread that
+    /// spawned it exits (see `crates/worker`), so this thread outlives its worker.
     fn drive(&self) {
         let mut worker: Option<Worker> = None;
         while let Some(job) = self.next_job() {
             let w = match &mut worker {
                 Some(w) => w,
-                None => match Worker::spawn(&self.config) {
+                None => match self.spawn() {
                     Ok(w) => worker.insert(w),
                     Err(failure) => {
                         (job.done)(Err(failure));
@@ -148,19 +158,89 @@ impl Pool {
             (job.done)(result);
         }
     }
+
+    fn spawn(&self) -> Result<Worker, Failure> {
+        #[cfg(unix)]
+        if let Some(fork_server) = &self.fork_server {
+            let (child, stdin, stdout) = fork_server.spawn(&self.config)?;
+            return Ok(Worker::new(Handle::Forked(child), stdin, stdout));
+        }
+        Worker::spawn(&self.config)
+    }
+}
+
+/// The worker's arguments are `<version> <parent pid> <memory limit>` (see `crates/worker`).
+pub(crate) fn command(config: &Config) -> Command {
+    let mut command = Command::new(&config.worker_path);
+    command
+        .arg(env!("CARGO_PKG_VERSION"))
+        .arg(std::process::id().to_string())
+        .arg(config.memory_limit.to_string())
+        .env_clear()
+        // rav1d logs errors to stderr. Debug builds show them (and anything else).
+        .stderr(if cfg!(debug_assertions) {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        });
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
+pub(crate) fn spawn_failure(path: &Path, err: io::Error) -> Failure {
+    let message = format!("failed to spawn {}: {err}", path.display());
+    Failure::new("ERR_WORKER_SPAWN", message)
+}
+
+/// For a worker (or fork server) that exited unexpectedly.
+pub(crate) fn exit_failure(status: ExitStatus) -> Failure {
+    match status.code() {
+        Some(EXIT_OUT_OF_MEMORY) => Failure::new("ERR_OUT_OF_MEMORY", "out of memory"),
+        Some(EXIT_MEMORY_LIMIT) => Failure::new(
+            "ERR_LIMIT_EXCEEDED",
+            "Limit exceeded: processing allocated more than limitAllocatorMemory",
+        ),
+        Some(EXIT_VERSION_MISMATCH) => Failure::new(
+            "ERR_WORKER_SPAWN",
+            "the worker binary doesn't match the native binding's version",
+        ),
+        Some(EXIT_SANDBOX_FAILED) => Failure::new(
+            "ERR_WORKER_SPAWN",
+            "the worker failed to set up its sandbox",
+        ),
+        _ => Failure::new(
+            "ERR_WORKER_CRASHED",
+            format!("the worker crashed ({status})"),
+        ),
+    }
+}
+
+enum Handle {
+    Spawned(Mutex<Child>),
+    #[cfg(unix)]
+    Forked(fork::Child),
 }
 
 struct Process {
-    child: Mutex<Child>,
+    handle: Handle,
     killed: AtomicBool,
 }
 
 impl Process {
     fn kill(&self) {
         self.killed.store(true, Ordering::SeqCst);
-        // Fails if the process already exited. std doesn't signal a process that it has reaped,
-        // so this can't hit a reused pid.
-        let _ = lock(&self.child).kill();
+        match &self.handle {
+            // Fails if the process already exited. std doesn't signal a process that it has
+            // reaped, so this can't hit a reused pid.
+            Handle::Spawned(child) => drop(lock(child).kill()),
+            #[cfg(unix)]
+            Handle::Forked(child) => child.kill(),
+        }
     }
 
     fn killed(&self) -> bool {
@@ -169,16 +249,22 @@ impl Process {
 
     /// Kills the process if it's still running, and waits for it to exit.
     fn wait(&self) -> io::Result<ExitStatus> {
-        let mut child = lock(&self.child);
-        let _ = child.kill();
-        child.wait()
+        match &self.handle {
+            Handle::Spawned(child) => {
+                let mut child = lock(child);
+                let _ = child.kill();
+                child.wait()
+            }
+            #[cfg(unix)]
+            Handle::Forked(child) => child.wait(),
+        }
     }
 }
 
 struct Worker {
     process: Arc<Process>,
-    stdin: ChildStdin,
-    stdout: ChildStdout,
+    stdin: Box<dyn Write>,
+    stdout: Box<dyn Read>,
 }
 
 enum ExchangeError {
@@ -193,42 +279,30 @@ impl From<io::Error> for ExchangeError {
 }
 
 impl Worker {
-    fn spawn(config: &Config) -> Result<Self, Failure> {
-        let path = &config.worker_path;
-        let mut command = Command::new(path);
-        command
-            .arg(env!("CARGO_PKG_VERSION"))
-            .arg(std::process::id().to_string())
-            .arg(config.memory_limit.to_string())
-            .env_clear()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // rav1d logs errors to stderr. Debug builds show them (and anything else).
-            .stderr(if cfg!(debug_assertions) {
-                Stdio::inherit()
-            } else {
-                Stdio::null()
-            });
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-        let mut child = command.spawn().map_err(|err| {
-            let message = format!("failed to spawn {}: {err}", path.display());
-            Failure::new("ERR_WORKER_SPAWN", message)
-        })?;
-        let stdin = child.stdin.take().expect("stdin is piped");
-        let stdout = child.stdout.take().expect("stdout is piped");
-        Ok(Worker {
+    fn new(handle: Handle, stdin: impl Write + 'static, stdout: impl Read + 'static) -> Self {
+        Worker {
             process: Arc::new(Process {
-                child: Mutex::new(child),
+                handle,
                 killed: AtomicBool::new(false),
             }),
+            stdin: Box::new(stdin),
+            stdout: Box::new(stdout),
+        }
+    }
+
+    fn spawn(config: &Config) -> Result<Self, Failure> {
+        let mut child = command(config)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|err| spawn_failure(&config.worker_path, err))?;
+        let stdin = child.stdin.take().expect("stdin is piped");
+        let stdout = child.stdout.take().expect("stdout is piped");
+        Ok(Worker::new(
+            Handle::Spawned(Mutex::new(child)),
             stdin,
             stdout,
-        })
+        ))
     }
 
     fn run(&mut self, job: &Job) -> Result<Vec<u8>, Failure> {
@@ -256,25 +330,7 @@ impl Worker {
                 "ERR_WORKER_CRASHED",
                 format!("the worker sent an invalid response: {message}"),
             ),
-            (ExchangeError::Io, Ok(status)) => match status.code() {
-                Some(EXIT_OUT_OF_MEMORY) => Failure::new("ERR_OUT_OF_MEMORY", "out of memory"),
-                Some(EXIT_MEMORY_LIMIT) => Failure::new(
-                    "ERR_LIMIT_EXCEEDED",
-                    "Limit exceeded: processing allocated more than limitAllocatorMemory",
-                ),
-                Some(EXIT_VERSION_MISMATCH) => Failure::new(
-                    "ERR_WORKER_SPAWN",
-                    "the worker binary doesn't match the native binding's version",
-                ),
-                Some(EXIT_SANDBOX_FAILED) => Failure::new(
-                    "ERR_WORKER_SPAWN",
-                    "the worker failed to set up its sandbox",
-                ),
-                _ => Failure::new(
-                    "ERR_WORKER_CRASHED",
-                    format!("the worker crashed ({status})"),
-                ),
-            },
+            (ExchangeError::Io, Ok(status)) => exit_failure(status),
             (ExchangeError::Io, Err(err)) => {
                 Failure::new("ERR_WORKER_CRASHED", format!("the worker crashed ({err})"))
             }

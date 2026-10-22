@@ -57,7 +57,7 @@ Requires Rust (version pinned in `rust-toolchain.toml`), Node.js 24, and pnpm (v
 
 ```sh
 pnpm install
-pnpm build:debug    # or `pnpm build` for release
+pnpm build          # or `pnpm build:release` for release
 pnpm test           # e2e tests (fixtures are generated with sharp, never committed)
 cargo test          # unit tests
 pnpm lint
@@ -68,6 +68,7 @@ pnpm generate
 # wasm (needs https://github.com/WebAssembly/wasi-sdk to compile libwebp and mozjpeg)
 rustup target add wasm32-wasip1
 WASI_SDK_PATH=/path/to/wasi-sdk pnpm build:wasm
+# Use build:wasm:release for release builds.
 pnpm test:wasm
 ```
 

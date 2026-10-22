@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           pnpm generate
           git diff --exit-code -- js/protocol.generated.ts
-      - run: pnpm build:js
+      - run: pnpm exec turbo run build:js
       - run: pnpm typecheck
 
   build:
@@ -142,7 +142,7 @@ jobs:
         run: |
           set -euo pipefail
           # shellcheck disable=SC2086 # FLAGS is intentionally word-split.
-          pnpm build:native --release --target "$TARGET" $FLAGS
+          pnpm exec turbo run build:native:release -- --target "$TARGET" $FLAGS
       - name: Check that generated bindings are up to date
         shell: bash
         run: git diff --exit-code -- binding.js binding.d.ts
@@ -206,7 +206,7 @@ jobs:
           tar -xzf "$dir/wasi-sdk.tar.gz" -C "$dir" --strip-components=1
           echo "WASI_SDK_PATH=$dir" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build:wasm
+      - run: pnpm exec turbo run build:wasm:release
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bindings-wasm32-wasip1
@@ -257,7 +257,7 @@ jobs:
           architecture: ${{ matrix.settings.architecture }}
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build:js
+      - run: pnpm exec turbo run build:js
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: bindings-${{ matrix.settings.target }}
@@ -297,7 +297,7 @@ jobs:
       - run: corepack enable
       # Install sharp's musl binaries (used to generate test images) for the Alpine container.
       - run: pnpm install --frozen-lockfile --libc glibc --libc musl
-      - run: pnpm build:js
+      - run: pnpm exec turbo run build:js
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: bindings-${{ matrix.target }}
@@ -334,7 +334,7 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build:js
+      - run: pnpm exec turbo run build:js
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: bindings-wasm32-wasip1

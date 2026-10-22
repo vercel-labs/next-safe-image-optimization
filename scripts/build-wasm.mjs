@@ -4,7 +4,7 @@
 //
 // wasi-sdk is only needed to compile libwebp and mozjpeg (C). Rust links with its own wasi-libc.
 //
-// Usage: WASI_SDK_PATH=/path/to/wasi-sdk node scripts/build-wasm.mjs
+// Usage: WASI_SDK_PATH=/path/to/wasi-sdk node scripts/build-wasm.mjs [--release]
 
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, readFileSync } from 'node:fs'
@@ -12,7 +12,7 @@ import { join } from 'node:path'
 
 const root = join(import.meta.dirname, '..')
 const target = 'wasm32-wasip1'
-const profile = 'worker'
+const profile = process.argv.includes('--release') ? 'worker' : 'worker-dev'
 
 const wasiSdk = process.env.WASI_SDK_PATH
 if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {

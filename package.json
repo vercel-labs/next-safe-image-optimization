@@ -29,10 +29,12 @@
     "node": ">= 20.9.0"
   },
   "scripts": {
-    "build": "pnpm build:native --release && pnpm build:js",
-    "build:debug": "pnpm build:native && pnpm build:js",
+    "build": "turbo run build:native build:js",
+    "build:release": "turbo run build:native:release build:js",
     "build:native": "node scripts/build-native.mjs",
+    "build:native:release": "node scripts/build-native.mjs --release",
     "build:wasm": "node scripts/build-wasm.mjs",
+    "build:wasm:release": "node scripts/build-wasm.mjs --release",
     "build:js": "tsc -p tsconfig.json",
     "generate": "typeshare crates/core --lang=typescript --output-file=js/protocol.generated.ts",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
@@ -47,6 +49,7 @@
     "@napi-rs/cli": "^3.10.8",
     "@types/node": "^26.6.5",
     "sharp": "^0.35.5",
+    "turbo": "^2.11.10",
     "typescript": "^7.0.2"
   }
 }

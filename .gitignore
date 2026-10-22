@@ -6,3 +6,4 @@
 /blunt-image-optimization-worker.*
 *.wasm
 *.tgz
+/.turbo

@@ -36,13 +36,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Uses the version and components from rust-toolchain.toml.
       - run: rustup toolchain install
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            target/
-          key: lint-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
@@ -104,13 +97,6 @@ jobs:
           set -euo pipefail
           rustup toolchain install
           rustup target add "$TARGET"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            target/
-          key: build-${{ matrix.settings.target }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
       - name: Install zig and cargo-zigbuild
         if: ${{ matrix.settings.flags == '-x' }}
         env:
@@ -187,13 +173,6 @@ jobs:
           set -euo pipefail
           rustup toolchain install
           rustup target add wasm32-wasip1
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            target/
-          key: build-wasm32-wasip1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
       # Used to compile libwebp (C). See scripts/build-wasm.mjs.
       - name: Install wasi-sdk
         run: |

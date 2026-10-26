@@ -9,7 +9,7 @@ import { Worker } from 'node:worker_threads'
 
 import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY } from './protocol.js'
 import type { Backend, RunOptions, RunResult } from './protocol.js'
-import type { WasmWorkerData, WasmWorkerMessage } from './wasm-worker.js'
+import type { WasmRequest, WasmWorkerData, WasmWorkerMessage } from './wasm-worker.js'
 
 export interface WasmOptions {
   maxWorkers: number
@@ -27,7 +27,7 @@ const MAX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 const MAX_TIMEOUT_MS = 2 ** 31 - 1
 
 interface Job {
-  request: Uint8Array
+  request: WasmRequest
   timeoutMs?: number
   resolve: (result: RunResult) => void
 }
@@ -65,7 +65,8 @@ export class WasmBackend implements Backend {
     request.set(json, input.length)
     new DataView(request.buffer).setUint32(input.length + json.length, json.length, true)
     return new Promise((resolve) => {
-      this.#queue.push({ request, timeoutMs: runOptions.timeoutMs, resolve })
+      const { timeoutMs, maxResponseBytes } = runOptions
+      this.#queue.push({ request: { request, maxResponseBytes }, timeoutMs, resolve })
       this.#dispatch()
     })
   }
@@ -154,7 +155,7 @@ export class WasmBackend implements Backend {
         this.#discard(slot)
       }, job.timeoutMs)
     }
-    slot.worker.postMessage(job.request, [job.request.buffer as ArrayBuffer])
+    slot.worker.postMessage(job.request, [job.request.request.buffer as ArrayBuffer])
   }
 
   #release(slot: Slot) {

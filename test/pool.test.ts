@@ -13,7 +13,7 @@ const backend = defaultPool().backend
 
 /** `Pool.run` is internal, but lets tests use timeouts shorter than a second. */
 interface InternalPool {
-  run(input: Uint8Array, options: object, limitAllocatorMemory: number | undefined, timeoutMs?: number): Promise<unknown>
+  run(input: Uint8Array, options: object, limitOutputBytes: number | undefined, timeoutMs?: number): Promise<unknown>
 }
 
 /** Noise compresses badly, so this takes a while to encode. */

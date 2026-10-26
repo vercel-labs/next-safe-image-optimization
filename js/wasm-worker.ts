@@ -10,6 +10,13 @@ export interface WasmWorkerData {
   maximumPages: number
 }
 
+/** A message from the pool. */
+export interface WasmRequest {
+  request: Uint8Array
+  /** A larger response is treated as a crash. */
+  maxResponseBytes: number
+}
+
 /** A message to the pool. Exactly one field is set. */
 export interface WasmWorkerMessage {
   /** Without the length prefix. */
@@ -117,13 +124,16 @@ const wasm = instance.exports as unknown as Exports
 // wasi-libc's reactor startup code, and has the linker call constructors from each export instead.
 wasm._initialize?.()
 
-function handle(request: Uint8Array): Uint8Array {
+function handle({ request, maxResponseBytes }: WasmRequest): Uint8Array {
   const ptr = wasm.blunt_alloc(request.length)
   new Uint8Array(memory.buffer, ptr, request.length).set(request)
   const parts = wasm.blunt_handle(ptr, request.length)
   const [headPtr, headLen, dataPtr, dataLen] = new Uint32Array(memory.buffer, parts, 4)
   if (headLen < 8) {
     throw new Error('invalid response')
+  }
+  if (headLen - 8 + dataLen > maxResponseBytes) {
+    throw new Error(`the response is ${headLen - 8 + dataLen} bytes, which exceeds the limit of ${maxResponseBytes} bytes`)
   }
   // These throw if the module returned out-of-bounds pointers. The head starts with a length
   // prefix, which only the native worker needs.
@@ -136,7 +146,7 @@ function handle(request: Uint8Array): Uint8Array {
   return response
 }
 
-parentPort!.on('message', (request: Uint8Array) => {
+parentPort!.on('message', (request: WasmRequest) => {
   let message: WasmWorkerMessage
   let transfer: ArrayBuffer[] = []
   try {

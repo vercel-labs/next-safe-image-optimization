@@ -7,7 +7,7 @@ use serde::Deserialize;
 use typeshare_annotation::typeshare;
 
 use crate::decode::InputFormat;
-use crate::encode::{GifSpec, JpegSpec, OutputSpec, PngSpec, WebpSpec};
+use crate::encode::{GifSpec, JpegSpec, OutputFormat, OutputSpec, PngSpec, WebpSpec};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 use crate::ops::{self, ResizeSpec};
@@ -29,16 +29,6 @@ enum Kernel {
     Linear,
     Cubic,
     Lanczos3,
-}
-
-#[typeshare]
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum OutputFormat {
-    Jpeg,
-    Png,
-    Webp,
-    Gif,
 }
 
 /// Like sharp's `fit: 'cover'`: with both dimensions, the excess is cropped, centered.
@@ -97,6 +87,7 @@ pub struct LimitOptions {
     /// 0 disables the limit.
     limit_input_pixels: Option<f64>,
     limit_allocator_memory: Option<f64>,
+    limit_output_bytes: Option<f64>,
     allowed_input_formats: Option<Vec<InputFormat>>,
     allow_animated: Option<bool>,
 }
@@ -164,6 +155,9 @@ pub fn parse_limits(options: Option<LimitOptions>) -> Result<Limits> {
         }
         if let Some(memory) = options.limit_allocator_memory {
             limits.memory = int("limitAllocatorMemory", memory, 1.0, f64::INFINITY)? as u64;
+        }
+        if let Some(bytes) = options.limit_output_bytes {
+            limits.output_bytes = int("limitOutputBytes", bytes, 1.0, f64::INFINITY)? as u64;
         }
         if let Some(formats) = options.allowed_input_formats {
             if formats.is_empty() {
@@ -344,6 +338,10 @@ mod tests {
             (
                 r#"{"metadata":{"limitAllocatorMemory":0}}"#,
                 "limitAllocatorMemory must be",
+            ),
+            (
+                r#"{"metadata":{"limitOutputBytes":0}}"#,
+                "limitOutputBytes must be",
             ),
             (
                 r#"{"metadata":{"allowedInputFormats":[]}}"#,

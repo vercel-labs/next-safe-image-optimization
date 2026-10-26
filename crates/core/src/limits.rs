@@ -5,6 +5,7 @@ use crate::error::{Error, Result};
 pub const DEFAULT_INPUT_PIXELS: u64 = 0x3FFF * 0x3FFF;
 /// Same as `image::Limits::default()`.
 pub const DEFAULT_MEMORY: u64 = 512 * 1024 * 1024;
+pub const DEFAULT_OUTPUT_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Limits {
@@ -14,6 +15,9 @@ pub struct Limits {
     /// by `ExitOnOom`, for Rust allocations). Also passed to `image`'s decoders, and checked
     /// against the output size and the C encoders' estimated memory, which `ExitOnOom` can't see.
     pub memory: u64,
+    /// Maximum size in bytes of the encoded image. The parent also enforces it, when it reads the
+    /// response.
+    pub output_bytes: u64,
     /// Checked right after detecting the format, before any decoding.
     pub input_formats: Vec<InputFormat>,
     /// If false, animated images are rejected (see `decode::raster_decoder`). Otherwise, only their
@@ -28,6 +32,7 @@ impl Default for Limits {
         Self {
             input_pixels: DEFAULT_INPUT_PIXELS,
             memory: DEFAULT_MEMORY,
+            output_bytes: DEFAULT_OUTPUT_BYTES,
             input_formats: InputFormat::ALL.to_vec(),
             animated: true,
         }
@@ -81,6 +86,16 @@ impl Limits {
             return Err(Error::LimitExceeded(format!(
                 "output image would be {width}x{height}, which exceeds the memory limit of {} bytes",
                 self.memory
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn check_output_bytes(&self, bytes: usize) -> Result<()> {
+        if bytes as u64 > self.output_bytes {
+            return Err(Error::LimitExceeded(format!(
+                "output image is {bytes} bytes, which exceeds the output limit of {} bytes",
+                self.output_bytes
             )));
         }
         Ok(())

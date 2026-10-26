@@ -7,7 +7,7 @@ A safer replacement for sharp in Next.js: decode (untrusted) → auto-orient/rot
 A Cargo workspace:
 
 - `crates/core` (`blunt-core`): everything that touches images. Only ever runs in a worker.
-  - `protocol.rs`: the request/response format (the other side is `js/protocol.ts`), and worker exit codes. `request.rs`: request options. The JS wrapper passes most of them through as the caller wrote them, so this is where they're validated, including unknown fields. The wrapper throws its errors (`ERR_INVALID_OPTIONS`) as `TypeError`s. Items marked `#[typeshare]` (request options, `InputFormat`, `ErrorCode`, and constants) are exported to `js/protocol.generated.ts`.
+  - `protocol.rs`: the request/response format (the other side is `js/protocol.ts`), and worker exit codes. Both are JSON plus binary data (the input, or the encoded image), in a frame with the JSON's length. A response's JSON is at most `MAX_JSON_BYTES` (the worker truncates long error messages), and its data at most the request's `limitOutputBytes`, so the parent knows how much it may have to buffer. `request.rs`: request options. The JS wrapper passes most of them through as the caller wrote them, so this is where they're validated, including unknown fields. The wrapper throws its errors (`ERR_INVALID_OPTIONS`) as `TypeError`s. Items marked `#[typeshare]` (request options, responses, `InputFormat`, `ErrorCode`, and constants) are exported to `js/protocol.generated.ts`.
   - `pipeline.rs`: stage order. Resizes *before* rotating (cheaper), so `orientation.rs` maps targets back to the input frame (crops are always centered, so they're the same in either frame). ICC → sRGB (`color.rs`, moxcms) runs after resizing.
   - `decode/`: one file per format. `encode/`: one file per format. `ops.rs`: resize (`image::imageops`, with alpha premultiplied around it). Only what Next.js uses: sharp's default `fit: 'cover'` (centered), plus `kernel`, `withoutEnlargement`, and `withoutReduction`.
   - `limits.rs`: memory limits. `alloc.rs`: `ExitOnOom`, the workers' global allocator.
@@ -30,12 +30,12 @@ A Cargo workspace:
 - Disable `default-features` and enable exact features for dependencies.
 - Never ship two copies of an image library. resvg decodes embedded images with its own direct dependencies on zune-jpeg, png (via tiny-skia), gif, and image-webp, which must resolve to the same versions as `image`'s. When upgrading `image` or resvg, upgrade the other to match. `decode::svg::tests::image_crates_are_deduplicated` checks `Cargo.lock`.
 - Import with `crate::` paths, not `super::`. The only exception is `use super::*;` in `mod tests`.
-- Validate options in `request.rs`, not in `js/index.ts`, unless the wrapper uses them itself (pool options, `timeout()`, `limitAllocatorMemory`).
+- Validate options in `request.rs`, not in `js/index.ts`, unless the wrapper uses them itself (pool options, `timeout()`, `limitOutputBytes`).
 - Images are always 8-bit `Luma8`/`LumaA8`/`Rgb8`/`Rgba8` after `decode::normalize`.
 - Rely on the worker's memory limits and the caller's timeout, instead of configuring each decoder defensively. Only the pixel limit is checked up front. Anything allocated outside Rust (libwebp, mozjpeg) needs its own check against `Limits`.
 - Workers are untrusted. The shim and the JS wrapper validate every response, and kill a worker that sends a malformed one. Each worker handles one request at a time.
 - Workers are built with `panic = "abort"` (the `worker` and `worker-dev` profiles), so there's no `catch_unwind`. A panic, abort, or out-of-memory exit only ends the worker. Keep `crates/shim` panic-free: it runs inside Node.
-- After changing a `#[typeshare]` item, run `pnpm generate` (needs `cargo install typeshare-cli --version 1.13.4 --locked`). The binary response format isn't generated, so keep `crates/core/src/protocol.rs` and `js/protocol.ts` in sync by hand, and the exit codes in `crates/shim/src/pool.rs` (which doesn't depend on `blunt-core`).
+- After changing a `#[typeshare]` item, run `pnpm generate` (needs `cargo install typeshare-cli --version 1.13.4 --locked`). The framing and the `Request` enum (externally tagged, which typeshare can't export) aren't generated, so keep `crates/core/src/protocol.rs` and `js/protocol.ts` in sync by hand, and the exit codes in `crates/shim/src/pool.rs` (which doesn't depend on `blunt-core`).
 - Tests generate fixtures with sharp. Never commit images. Compare against sharp for parity (dimensions exactly, pixels approximately).
 - Before changing CI, read `.github/AGENTS.md` (pinned SHAs, `permissions: {}`, corepack, etc).
 

@@ -22,9 +22,7 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Responses send error codes as their index in this enum (see `protocol.rs`).
 #[typeshare]
-// `Serialize` is only for the `serde` attributes, which typeshare reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum ErrorCode {
     #[serde(rename = "ERR_UNSUPPORTED_FORMAT")]

@@ -5,6 +5,8 @@ import { crc32, deflateSync } from 'node:zlib'
 import sharp from 'sharp'
 
 import { BluntError, blunt } from '../dist/index.js'
+import { MAX_JSON_BYTES } from '../dist/protocol.generated.js'
+import { InvalidResponseError, decodeResponse } from '../dist/protocol.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
 function pngChunk(type: string, data: Buffer): Buffer {
@@ -55,6 +57,16 @@ describe('limits', () => {
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
     await assertRejectsWithCode(blunt(input, { limitAllocatorMemory: 20_000 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
     await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).toBuffer()
+  })
+
+  test('limitOutputBytes', async () => {
+    const input = await fromRaw(pattern(100, 100)).png().toBuffer()
+    const { length } = await blunt(input).png().toBuffer()
+    await assertRejectsWithCode(blunt(input, { limitOutputBytes: length - 1 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await blunt(input, { limitOutputBytes: length }).png().toBuffer()
+    // It's validated immediately, because the pool uses it too.
+    assert.throws(() => blunt(input, { limitOutputBytes: 0 }), TypeError)
+    assert.throws(() => blunt(input, { limitOutputBytes: '1' as never }), TypeError)
   })
 
   test('limitAllocatorMemory counts actual allocations, not just estimates', async () => {
@@ -304,6 +316,67 @@ describe('malformed input never crashes or panics', () => {
       }
     })
   }
+})
+
+describe('malformed responses are rejected', () => {
+  function response(json: string | Buffer, data = Buffer.alloc(0)): Buffer {
+    const bytes = Buffer.from(json)
+    const length = Buffer.alloc(4)
+    length.writeUInt32LE(bytes.length)
+    return Buffer.concat([length, bytes, data])
+  }
+
+  test('valid responses', () => {
+    const transform = decodeResponse(
+      response('{"type":"transform","meta":{"format":"png","width":3,"height":2,"channels":4}}', Buffer.from('abc')),
+    )
+    assert.deepEqual(transform, {
+      kind: 'transform',
+      data: Buffer.from('abc'),
+      info: { format: 'png', width: 3, height: 2, channels: 4, size: 3 },
+    })
+    const error = decodeResponse(response('{"type":"error","meta":{"code":"ERR_DECODE_FAILED","message":"bad"}}'))
+    assert.deepEqual(error, { kind: 'error', code: 'ERR_DECODE_FAILED', message: 'bad' })
+  })
+
+  test('invalid responses', () => {
+    const tooLong = Buffer.alloc(4)
+    tooLong.writeUInt32LE(MAX_JSON_BYTES + 1)
+
+    const metadata = (fields: object) =>
+      JSON.stringify({
+        type: 'metadata',
+        meta: { format: 'png', width: 1, height: 1, hasAlpha: false, orientation: 1, hasProfile: false, ...fields },
+      })
+    assert.equal(decodeResponse(response(metadata({}))).kind, 'metadata')
+    for (const invalid of [
+      Buffer.alloc(3),
+      Buffer.from([0xff, 0, 0, 0, 0x7b, 0x7d]),
+      Buffer.concat([tooLong, Buffer.from(metadata({}).padEnd(MAX_JSON_BYTES + 1))]),
+      response('{'),
+      response('[]'),
+      response('{}'),
+      response('{"type":"transform"}'),
+      response('{"type":"transform","meta":[]}'),
+      response('{"type":"other","meta":{}}'),
+      response('{"type":"transform","meta":{"format":"svg","width":1,"height":1,"channels":3}}'),
+      response('{"type":"transform","meta":{"format":"png","width":1,"height":1,"channels":5}}'),
+      response('{"type":"error","meta":{"code":"ERR_OTHER","message":""}}'),
+      response('{"type":"error","meta":{"code":"ERR_INTERNAL","message":1}}'),
+      response('{"type":"error","meta":{"code":"ERR_INTERNAL","message":""}}', Buffer.from('abc')),
+      response(metadata({ width: -1 })),
+      response(metadata({ width: 1.5 })),
+      response(metadata({ width: 2 ** 32 })),
+      response(metadata({ orientation: 9 })),
+      response(metadata({ hasAlpha: 1 })),
+      response(metadata({ hasProfile: undefined })),
+      response(metadata({}), Buffer.from('abc')),
+      // Invalid UTF-8, in an otherwise valid response.
+      response(Buffer.from('{"type":"error","meta":{"code":"ERR_INTERNAL","message":"\xff"}}', 'latin1')),
+    ]) {
+      assert.throws(() => decodeResponse(invalid), InvalidResponseError, invalid.toString())
+    }
+  })
 })
 
 describe('concurrency', () => {

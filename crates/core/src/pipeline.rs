@@ -1,6 +1,8 @@
 use crate::color;
 use crate::decode::{self, Header, InputFormat};
-use crate::encode::{self, Encoded, GifSpec, JpegSpec, OutputSpec, PngSpec, WebpSpec};
+use crate::encode::{
+    self, Encoded, GifSpec, JpegSpec, OutputFormat, OutputSpec, PngSpec, WebpSpec,
+};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 use crate::ops::{self, ResizeSpec};
@@ -19,7 +21,7 @@ pub struct Pipeline {
 
 pub struct Output {
     pub encoded: Encoded,
-    pub format: &'static str,
+    pub format: OutputFormat,
 }
 
 pub fn run(input: Vec<u8>, pipeline: &Pipeline) -> Result<Output> {
@@ -54,9 +56,10 @@ pub fn run(input: Vec<u8>, pipeline: &Pipeline) -> Result<Output> {
     img.apply_orientation(transform.to_orientation());
 
     let encoded = encode::encode(img, &output, &pipeline.limits)?;
+    pipeline.limits.check_output_bytes(encoded.data.len())?;
     Ok(Output {
         encoded,
-        format: output.format_name(),
+        format: output.format(),
     })
 }
 

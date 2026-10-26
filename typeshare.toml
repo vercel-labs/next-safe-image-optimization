@@ -6,3 +6,4 @@
 InputFormat = "`${InputFormat}`"
 OutputFormat = "`${OutputFormat}`"
 Kernel = "`${Kernel}`"
+ErrorCode = "`${ErrorCode}`"

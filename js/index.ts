@@ -30,6 +30,12 @@ export interface BluntOptions {
    */
   limitAllocatorMemory?: number
   /**
+   * The maximum size in bytes of the encoded image. Larger output is rejected with
+   * `ERR_LIMIT_EXCEEDED`. The pool also enforces it when it reads the worker's response, so a
+   * misbehaving worker can't make it buffer more. Default: 128 MiB.
+   */
+  limitOutputBytes?: number
+  /**
    * Reject input in any other format with `ERR_UNSUPPORTED_FORMAT`, before decoding it. The format
    * is always detected from the input's contents. Must not be empty. Default: every `InputFormat`.
    */
@@ -178,7 +184,7 @@ export type ErrorCode =
 /**
  * Errors from processing an image. Invalid options are `TypeError`s instead. Most are only
  * validated by the worker, so `toBuffer()` or `metadata()` rejects with them. The input, the pool
- * and its options, `timeout()`, and `limitAllocatorMemory` throw immediately.
+ * and its options, `timeout()`, and `limitOutputBytes` throw immediately.
  */
 export class BluntError extends Error {
   readonly code: ErrorCode
@@ -241,8 +247,8 @@ function toUint8Array(input: Input): Uint8Array {
   throw invalid('input', 'Buffer, Uint8Array, ArrayBuffer, or ArrayBufferView', input)
 }
 
-/** Same as `DEFAULT_MEMORY` in `crates/core/src/limits.rs`. */
-const DEFAULT_LIMIT_ALLOCATOR_MEMORY = 512 * 1024 * 1024
+/** Same as `DEFAULT_OUTPUT_BYTES` in `crates/core/src/limits.rs`. */
+const DEFAULT_LIMIT_OUTPUT_BYTES = 128 * 1024 * 1024
 const DEFAULT_LIMIT_PROCESS_MEMORY = 768 * 1024 * 1024
 const BACKENDS: readonly BackendName[] = ['native', 'wasm']
 
@@ -296,12 +302,12 @@ export class Pool {
   async run(
     input: Uint8Array,
     options: RequestOptions,
-    limitAllocatorMemory: number | undefined,
+    limitOutputBytes: number | undefined,
     timeoutMs?: number,
   ): Promise<Response> {
     const result = await this.#backend.run(input, encodeOptions(options), {
       timeoutMs,
-      maxResponseBytes: maxResponseBytes(limitAllocatorMemory ?? DEFAULT_LIMIT_ALLOCATOR_MEMORY),
+      maxResponseBytes: maxResponseBytes(limitOutputBytes ?? DEFAULT_LIMIT_OUTPUT_BYTES),
     })
     if (result.error) {
       throw new BluntError(result.error.code as ErrorCode, result.error.message)
@@ -342,7 +348,7 @@ export class Pipeline {
   #pool: Pool | undefined
   #limits: Unchecked<LimitOptions>
   /** Validated here, because the response's maximum size depends on it. */
-  #limitAllocatorMemory: number | undefined
+  #limitOutputBytes: number | undefined
   #timeoutMs: number | undefined
   #autoOrient: unknown
   #rotate: unknown
@@ -352,21 +358,18 @@ export class Pipeline {
   constructor(input: Input, options?: BluntOptions) {
     this.#input = toUint8Array(input)
     // The rest are the worker's limits. `sequentialRead` is ignored.
-    const { pool, autoOrient, limitInputPixels, limitAllocatorMemory, sequentialRead, ...limits } =
-      copyOptions(options)
+    const { pool, autoOrient, limitInputPixels, limitOutputBytes, sequentialRead, ...limits } = copyOptions(options)
     if (pool !== undefined && !(pool instanceof Pool)) {
       throw invalid('pool', 'Pool', pool)
     }
     this.#pool = pool
-    this.#limitAllocatorMemory = optional(limitAllocatorMemory, (v) =>
-      checkInteger('limitAllocatorMemory', v, 1),
-    )
+    this.#limitOutputBytes = optional(limitOutputBytes, (v) => checkInteger('limitOutputBytes', v, 1))
     const { allowedInputFormats } = limits
     this.#limits = {
       ...limits,
       limitInputPixels:
         typeof limitInputPixels === 'boolean' ? (limitInputPixels ? DEFAULT_LIMIT_INPUT_PIXELS : 0) : limitInputPixels,
-      limitAllocatorMemory: this.#limitAllocatorMemory,
+      limitOutputBytes: this.#limitOutputBytes,
       allowedInputFormats: Array.isArray(allowedInputFormats) ? [...allowedInputFormats] : allowedInputFormats,
     }
     this.#autoOrient = autoOrient
@@ -500,7 +503,7 @@ export class Pipeline {
   }
 
   #run(options: RequestOptions): Promise<Response> {
-    return (this.#pool ?? defaultPool()).run(this.#input, options, this.#limitAllocatorMemory, this.#timeoutMs)
+    return (this.#pool ?? defaultPool()).run(this.#input, options, this.#limitOutputBytes, this.#timeoutMs)
   }
 }
 

@@ -55,7 +55,7 @@ pub struct Encoded {
 
 /// Roughly how many bytes per pixel the C encoders (libwebp and mozjpeg) allocate, on top of the
 /// image itself and their output. They allocate with `malloc`, so the worker's allocator doesn't
-/// count it, and `limitProcessMemory` isn't enforced everywhere. The other encoders are Rust, so
+/// count it, and `limitProcessMemoryBytes` isn't enforced everywhere. The other encoders are Rust, so
 /// the allocator limits them. Measured with peak RSS on noisy 16 MP images, rounded up.
 fn c_encoder_bytes_per_pixel(img: &DynamicImage, spec: &OutputSpec) -> u64 {
     match spec {

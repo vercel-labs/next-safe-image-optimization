@@ -121,7 +121,7 @@ export class WasmBackend implements Backend {
         job.resolve(failure('ERR_OUT_OF_MEMORY', 'out of memory'))
         this.#discard(slot)
       } else if (message.exit === EXIT_MEMORY_LIMIT) {
-        job.resolve(failure('ERR_LIMIT_EXCEEDED', 'Limit exceeded: processing allocated more than limitAllocatorMemory'))
+        job.resolve(failure('ERR_LIMIT_EXCEEDED', 'Limit exceeded: processing allocated more than limitAllocatorMemoryBytes'))
         this.#discard(slot)
       } else {
         const reason = message.exit === undefined ? message.crash : `exit code ${message.exit}`

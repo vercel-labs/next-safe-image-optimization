@@ -53,10 +53,10 @@ describe('limits', () => {
     await blunt(input, { limitInputPixels: 0 }).toBuffer()
   })
 
-  test('limitAllocatorMemory', async () => {
+  test('limitAllocatorMemoryBytes', async () => {
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
-    await assertRejectsWithCode(blunt(input, { limitAllocatorMemory: 20_000 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
-    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).toBuffer()
+    await assertRejectsWithCode(blunt(input, { limitAllocatorMemoryBytes: 20_000 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await blunt(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).toBuffer()
   })
 
   test('limitOutputBytes', async () => {
@@ -69,13 +69,13 @@ describe('limits', () => {
     assert.throws(() => blunt(input, { limitOutputBytes: '1' as never }), TypeError)
   })
 
-  test('limitAllocatorMemory counts actual allocations, not just estimates', async () => {
+  test('limitAllocatorMemoryBytes counts actual allocations, not just estimates', async () => {
     // The decoded image (30 KB) fits, but not with the decoder's and encoder's buffers.
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
-    await assert.rejects(blunt(input, { limitAllocatorMemory: 60_000 }).toBuffer(), (error: unknown) => {
+    await assert.rejects(blunt(input, { limitAllocatorMemoryBytes: 60_000 }).toBuffer(), (error: unknown) => {
       assert.ok(error instanceof BluntError)
       assert.equal(error.code, 'ERR_LIMIT_EXCEEDED')
-      assert.match(error.message, /allocated more than limitAllocatorMemory/)
+      assert.match(error.message, /allocated more than limitAllocatorMemoryBytes/)
       return true
     })
     // The worker that exceeded the limit was replaced.
@@ -113,7 +113,7 @@ describe('limits', () => {
     ])
     assert.deepEqual(await blunt(input).metadata().then((m) => [m.width, m.height]), [width, 2])
     await assert.rejects(
-      blunt(input, { limitAllocatorMemory: 96 * 1024 * 1024 }).resize(3_000_000).png().toBuffer(),
+      blunt(input, { limitAllocatorMemoryBytes: 96 * 1024 * 1024 }).resize(3_000_000).png().toBuffer(),
       // Checked before resizing, not by the allocator.
       (error: Error & { code?: string }) => error.code === 'ERR_LIMIT_EXCEEDED' && /byte buffer/.test(error.message),
     )
@@ -122,15 +122,15 @@ describe('limits', () => {
   test('encoder memory counts against the memory limit', async () => {
     const input = await fromRaw(pattern(256, 256)).png().toBuffer()
     // Lossless WebP and mozjpeg need much more memory than PNG and jpeg-encoder for the same image.
-    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).png().toBuffer()
-    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).jpeg().toBuffer()
+    await blunt(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).png().toBuffer()
+    await blunt(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).jpeg().toBuffer()
     await assertRejectsWithCode(
-      blunt(input, { limitAllocatorMemory: 1024 * 1024 }).webp({ lossless: true }).toBuffer(),
+      blunt(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).webp({ lossless: true }).toBuffer(),
       'ERR_LIMIT_EXCEEDED',
     )
     // mozjpeg needs ~16 bytes per pixel, exactly 1 MiB here.
     await assertRejectsWithCode(
-      blunt(input, { limitAllocatorMemory: 1000 * 1000 }).jpeg({ mozjpeg: true }).toBuffer(),
+      blunt(input, { limitAllocatorMemoryBytes: 1000 * 1000 }).jpeg({ mozjpeg: true }).toBuffer(),
       'ERR_LIMIT_EXCEEDED',
     )
   })
@@ -209,8 +209,8 @@ describe('limits', () => {
   test('AVIF decoder memory counts against the memory limit', async () => {
     // 4:4:4 frames are 3 bytes per pixel, counted twice for film grain, plus the RGB output.
     const input = await fromRaw(pattern(256, 256)).avif().toBuffer()
-    await assertRejectsWithCode(blunt(input, { limitAllocatorMemory: 400_000 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
-    await blunt(input, { limitAllocatorMemory: 1024 * 1024 }).png().toBuffer()
+    await assertRejectsWithCode(blunt(input, { limitAllocatorMemoryBytes: 400_000 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await blunt(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).png().toBuffer()
   })
 
   test('YCbCr TIFFs are rejected', async () => {
@@ -333,7 +333,7 @@ describe('malformed responses are rejected', () => {
     assert.deepEqual(transform, {
       kind: 'transform',
       data: Buffer.from('abc'),
-      info: { format: 'png', width: 3, height: 2, channels: 4, size: 3 },
+      info: { format: 'png', width: 3, height: 2, channels: 4 },
     })
     const error = decodeResponse(response('{"type":"error","meta":{"code":"ERR_DECODE_FAILED","message":"bad"}}'))
     assert.deepEqual(error, { kind: 'error', code: 'ERR_DECODE_FAILED', message: 'bad' })

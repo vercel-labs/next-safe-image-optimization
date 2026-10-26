@@ -155,7 +155,6 @@ export function decodeResponse(response: Uint8Array): Response {
         width: integer(meta.width, 'width', 0, U32_MAX),
         height: integer(meta.height, 'height', 0, U32_MAX),
         channels: integer(meta.channels, 'channels', 1, 4),
-        size: data.length,
       }
       return { kind, data, info }
     }

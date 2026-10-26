@@ -86,7 +86,7 @@ struct GifOptions {
 pub struct LimitOptions {
     /// 0 disables the limit.
     limit_input_pixels: Option<f64>,
-    limit_allocator_memory: Option<f64>,
+    limit_allocator_memory_bytes: Option<f64>,
     limit_output_bytes: Option<f64>,
     allowed_input_formats: Option<Vec<InputFormat>>,
     allow_animated: Option<bool>,
@@ -153,8 +153,8 @@ pub fn parse_limits(options: Option<LimitOptions>) -> Result<Limits> {
             let pixels = int("limitInputPixels", pixels, 0.0, f64::INFINITY)? as u64;
             limits.input_pixels = if pixels == 0 { u64::MAX } else { pixels };
         }
-        if let Some(memory) = options.limit_allocator_memory {
-            limits.memory = int("limitAllocatorMemory", memory, 1.0, f64::INFINITY)? as u64;
+        if let Some(memory) = options.limit_allocator_memory_bytes {
+            limits.memory = int("limitAllocatorMemoryBytes", memory, 1.0, f64::INFINITY)? as u64;
         }
         if let Some(bytes) = options.limit_output_bytes {
             limits.output_bytes = int("limitOutputBytes", bytes, 1.0, f64::INFINITY)? as u64;
@@ -280,7 +280,7 @@ mod tests {
     #[test]
     fn parses_transform() {
         let request = parse(
-            br#"{"transform":{"limits":{"limitAllocatorMemory":1000},"rotate":90,"resize":{"width":10},
+            br#"{"transform":{"limits":{"limitAllocatorMemoryBytes":1000},"rotate":90,"resize":{"width":10},
                 "format":"webp","webp":{"quality":50}}}"#,
         )
         .unwrap();
@@ -336,8 +336,8 @@ mod tests {
                 "unknown field `failOn`",
             ),
             (
-                r#"{"metadata":{"limitAllocatorMemory":0}}"#,
-                "limitAllocatorMemory must be",
+                r#"{"metadata":{"limitAllocatorMemoryBytes":0}}"#,
+                "limitAllocatorMemoryBytes must be",
             ),
             (
                 r#"{"metadata":{"limitOutputBytes":0}}"#,

@@ -77,7 +77,7 @@ describe('resize matches sharp', () => {
   test('rejects outputs over the memory limit', async () => {
     const input = await photo()
     await assert.rejects(
-      blunt(input, { limitAllocatorMemory: 1024 * 1024 }).resize(1000, 1000).toBuffer(),
+      blunt(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).resize(1000, 1000).toBuffer(),
       (error: { code?: string }) => error.code === 'ERR_LIMIT_EXCEEDED',
     )
   })
@@ -147,7 +147,7 @@ describe('color management', () => {
     assert.ok(Math.abs(p3Raw[0] - srgbRaw[0]) > 10)
 
     for (const format of ['png', 'jpeg', 'webp'] as const) {
-      const ours = await blunt(p3).toFormat(format).toBuffer()
+      const ours = await blunt(p3)[format]().toBuffer()
       assert.equal((await sharp(ours).metadata()).hasProfile, false, 'output has no ICC profile')
       await assertSimilar(ours, srgb, 3)
     }
@@ -160,7 +160,7 @@ describe('color management', () => {
       .jpeg()
       .toBuffer()
     for (const format of ['jpeg', 'png', 'webp'] as const) {
-      const meta = await sharp(await blunt(input).toFormat(format).toBuffer()).metadata()
+      const meta = await sharp(await blunt(input)[format]().toBuffer()).metadata()
       assert.equal(meta.exif, undefined)
       assert.equal(meta.icc, undefined)
       assert.equal(meta.orientation, undefined)

@@ -19,16 +19,16 @@ export interface BluntOptions {
    *
    * For SVGs, this applies to the natural size and the rendered size, but **not** to raster images
    * embedded in the SVG (`<image href="data:...">`). Those are only bounded by
-   * `limitAllocatorMemory`, `limitProcessMemory`, and `timeout()`.
+   * `limitAllocatorMemoryBytes`, `limitProcessMemoryBytes`, and `timeoutMs()`.
    */
   limitInputPixels?: number | boolean
   /**
    * The maximum memory in bytes that processing may allocate, including the input. The worker's
    * allocator enforces this, by exiting the worker, which doesn't cover the C encoders (libwebp and
-   * mozjpeg); see the pool's `limitProcessMemory` for that. Each stage (decode, resize, encode) also estimates
+   * mozjpeg); see the pool's `limitProcessMemoryBytes` for that. Each stage (decode, resize, encode) also estimates
    * its memory before it runs, for a clearer error. Default: 512 MiB.
    */
-  limitAllocatorMemory?: number
+  limitAllocatorMemoryBytes?: number
   /**
    * The maximum size in bytes of the encoded image. Larger output is rejected with
    * `ERR_LIMIT_EXCEEDED`. The pool also enforces it when it reads the worker's response, so a
@@ -70,15 +70,15 @@ export interface PoolOptions {
   /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
   concurrency?: number
   /** Milliseconds before an idle worker exits. Default: 10000. */
-  idleTimeout?: number
+  idleTimeoutMs?: number
   /**
    * The maximum memory of each worker in bytes, enforced by the OS: `RLIMIT_DATA` on Linux, and the
    * memory's maximum size for wasm. There's no limit on macOS or Windows. This is a backstop for
-   * `limitAllocatorMemory`, and unlike it, covers the C encoders (libwebp and mozjpeg). It's per
-   * worker, not per image, so it should be larger than `limitAllocatorMemory`. `false` or
+   * `limitAllocatorMemoryBytes`, and unlike it, covers the C encoders (libwebp and mozjpeg). It's per
+   * worker, not per image, so it should be larger than `limitAllocatorMemoryBytes`. `false` or
    * `0` removes the limit (not recommended). Default: 768 MiB.
    */
-  limitProcessMemory?: number | false
+  limitProcessMemoryBytes?: number | false
 }
 
 /**
@@ -135,14 +135,11 @@ export interface GifOptions {
   effort?: number
 }
 
-export type FormatOptions = JpegOptions | PngOptions | WebpOptions | GifOptions
-
 export interface OutputInfo {
   format: OutputFormat
   width: number
   height: number
   channels: number
-  size: number
 }
 
 export interface Metadata {
@@ -164,15 +161,10 @@ export interface ToBufferOptions {
   resolveWithObject?: boolean
 }
 
-export interface TimeoutOptions {
-  /** 0 (the default) waits indefinitely. */
-  seconds: number
-}
-
 export type ErrorCode =
   /** Errors from the worker. `ERR_ANIMATED`: the input is animated, with `allowAnimated: false`. */
   | Exclude<`${generated.ErrorCode}`, 'ERR_INVALID_OPTIONS'>
-  /** Processing took longer than `timeout()`. */
+  /** Processing took longer than `timeoutMs()`. */
   | 'ERR_TIMEOUT'
   /** The worker ran out of memory. */
   | 'ERR_OUT_OF_MEMORY'
@@ -184,7 +176,7 @@ export type ErrorCode =
 /**
  * Errors from processing an image. Invalid options are `TypeError`s instead. Most are only
  * validated by the worker, so `toBuffer()` or `metadata()` rejects with them. The input, the pool
- * and its options, `timeout()`, and `limitOutputBytes` throw immediately.
+ * and its options, `timeoutMs()`, and `limitOutputBytes` throw immediately.
  */
 export class BluntError extends Error {
   readonly code: ErrorCode
@@ -254,19 +246,19 @@ const BACKENDS: readonly BackendName[] = ['native', 'wasm']
 
 function createBackend(options: PoolOptions): Backend {
   const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1, 0xffffffff))
-  const idleTimeout = optional(options.idleTimeout, (v) => checkInteger('idleTimeout', v, 0, 0xffffffff))
+  const idleTimeoutMs =
+    optional(options.idleTimeoutMs, (v) => checkInteger('idleTimeoutMs', v, 0, 0xffffffff)) ?? 10_000
   const memoryLimit =
-    options.limitProcessMemory === false
+    options.limitProcessMemoryBytes === false
       ? 0
-      : (optional(options.limitProcessMemory, (v) =>
-          checkInteger('limitProcessMemory', v, 0),
+      : (optional(options.limitProcessMemoryBytes, (v) =>
+          checkInteger('limitProcessMemoryBytes', v, 0),
         ) ?? DEFAULT_LIMIT_PROCESS_MEMORY)
   const backend = options.backend ?? process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND
   if (backend !== undefined) {
     checkOneOf('backend', backend, BACKENDS)
   }
   const maxWorkers = concurrency ?? availableParallelism()
-  const idleTimeoutMs = idleTimeout ?? 10_000
   const wasm = () =>
     new WasmBackend({ maxWorkers, idleTimeoutMs, memoryLimit })
   if (backend === 'wasm') {
@@ -381,16 +373,18 @@ export class Pipeline {
   }
 
   /**
-   * Limits the wall time of processing (in whole seconds), like sharp. The time starts when a
-   * worker picks up the image, not while it waits for a free worker. The worker is killed when the
-   * time runs out, so this works even if a decoder hangs.
+   * Limits the wall time of processing, in milliseconds (like sharp's `timeout()`, which takes whole
+   * seconds). The time starts when a worker picks up the image, not while it waits for a free
+   * worker. The worker is killed when the time runs out, so this works even if a decoder hangs.
    *
-   * There's no timeout by default (like sharp), but you should set one for untrusted input.
-   * Otherwise, an image that's slow to process can occupy a worker indefinitely.
+   * 0 (the default, like sharp) or `Infinity` waits indefinitely, but you should set a timeout for
+   * untrusted input. Otherwise, an image that's slow to process can occupy a worker indefinitely.
    */
-  timeout(options: TimeoutOptions): this {
-    const seconds = checkInteger('timeout.seconds', options?.seconds, 0)
-    this.#timeoutMs = seconds === 0 ? undefined : seconds * 1000
+  timeoutMs(ms: number): this {
+    if (typeof ms !== 'number' || !(ms >= 0)) {
+      throw invalid('timeoutMs', 'number of at least 0', ms)
+    }
+    this.#timeoutMs = ms === 0 ? undefined : ms
     return this
   }
 
@@ -446,27 +440,6 @@ export class Pipeline {
     return this
   }
 
-  toFormat(format: 'jpeg' | 'jpg', options?: JpegOptions): this
-  toFormat(format: 'png', options?: PngOptions): this
-  toFormat(format: 'webp', options?: WebpOptions): this
-  toFormat(format: 'gif', options?: GifOptions): this
-  toFormat(format: OutputFormat | 'jpg', options?: FormatOptions): this
-  toFormat(format: OutputFormat | 'jpg', options?: FormatOptions): this {
-    switch (format) {
-      case 'jpeg':
-      case 'jpg':
-        return this.jpeg(options as JpegOptions)
-      case 'png':
-        return this.png(options as PngOptions)
-      case 'webp':
-        return this.webp(options as WebpOptions)
-      case 'gif':
-        return this.gif(options as GifOptions)
-      default:
-        throw invalid('format', 'one of jpeg, jpg, png, webp, gif', format)
-    }
-  }
-
   /** Processes the image. Without an explicit output format, uses the input format. */
   toBuffer(options?: ToBufferOptions & { resolveWithObject?: false }): Promise<Buffer>
   toBuffer(options: ToBufferOptions & { resolveWithObject: true }): Promise<{ data: Buffer; info: OutputInfo }>
@@ -486,7 +459,7 @@ export class Pipeline {
     return options.resolveWithObject ? { data, info } : data
   }
 
-  /** Reads the image header without decoding pixels. Ignores all operations except `timeout()`. */
+  /** Reads the image header without decoding pixels. Ignores all operations except `timeoutMs()`. */
   async metadata(): Promise<Metadata> {
     const metadata = await this.#run({ metadata: this.#limits })
     if (metadata.kind !== 'metadata') {

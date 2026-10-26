@@ -54,10 +54,9 @@ describe('decodes and re-encodes every format', () => {
     for (const format of outputs) {
       test(`${name} -> ${format}`, async () => {
         const input = await make()
-        const { data, info } = await blunt(input).toFormat(format).toBuffer({ resolveWithObject: true })
+        const { data, info } = await blunt(input)[format]().toBuffer({ resolveWithObject: true })
         assert.equal(formatOf(data), format)
         assert.equal(info.format, format)
-        assert.equal(info.size, data.length)
         assert.deepEqual([info.width, info.height], [rgb.width, rgb.height])
         const meta = await sharp(data).metadata()
         assert.deepEqual([meta.width, meta.height], [rgb.width, rgb.height])
@@ -91,7 +90,7 @@ describe('alpha', () => {
   test('is preserved for png and webp', async () => {
     const input = await inputs['rgba png']()
     for (const format of ['png', 'webp'] as const) {
-      const { data, info } = await blunt(input).toFormat(format).toBuffer({ resolveWithObject: true })
+      const { data, info } = await blunt(input)[format]().toBuffer({ resolveWithObject: true })
       assert.equal(info.channels, 4)
       await assertSimilar(data, input, 4, 4)
     }

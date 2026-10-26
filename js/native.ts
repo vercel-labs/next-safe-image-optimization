@@ -94,7 +94,7 @@ function exitFailure(code: number | null, signal: string | null): WorkerError {
     case EXIT_OUT_OF_MEMORY:
       return failure('ERR_OUT_OF_MEMORY', 'out of memory')
     case EXIT_MEMORY_LIMIT:
-      return failure('ERR_LIMIT_EXCEEDED', 'Limit exceeded: processing allocated more than limitAllocatorMemory')
+      return failure('ERR_LIMIT_EXCEEDED', 'Limit exceeded: processing allocated more than limitAllocatorMemoryBytes')
     case EXIT_VERSION_MISMATCH:
       return failure('ERR_WORKER_SPAWN', "the worker binary doesn't match the package's version")
     case EXIT_SANDBOX_FAILED:

@@ -29,19 +29,19 @@ function noise(width: number, height: number) {
 describe('pool', () => {
   test('options are validated', () => {
     assert.throws(() => new Pool({ concurrency: 0 }), TypeError)
-    assert.throws(() => new Pool({ idleTimeout: -1 }), TypeError)
+    assert.throws(() => new Pool({ idleTimeoutMs: -1 }), TypeError)
     assert.throws(() => new Pool({ backend: 'other' as never }), TypeError)
     assert.throws(() => blunt(Buffer.alloc(1), { pool: {} as never }), TypeError)
-    for (const seconds of [-1, 1.5, NaN, undefined]) {
-      assert.throws(() => blunt(Buffer.alloc(1)).timeout({ seconds } as never), TypeError)
+    for (const ms of [-1, -0.5, NaN, undefined, '10']) {
+      assert.throws(() => blunt(Buffer.alloc(1)).timeoutMs(ms as never), TypeError)
     }
   })
 
   test('very long timeouts never expire', async () => {
     const input = await fromRaw(pattern(8, 8)).png().toBuffer()
     // More than 2 ** 31 - 1 ms, which `setTimeout` would treat as 1ms, and more than a `Duration`.
-    for (const seconds of [3_000_000, Number.MAX_VALUE]) {
-      const { info } = await blunt(input).timeout({ seconds }).toBuffer({ resolveWithObject: true })
+    for (const ms of [3_000_000_000, Number.MAX_VALUE, Infinity]) {
+      const { info } = await blunt(input).timeoutMs(ms).toBuffer({ resolveWithObject: true })
       assert.equal(info.width, 8)
     }
   })
@@ -65,7 +65,7 @@ describe('pool', () => {
       'ERR_TIMEOUT',
     )
     assert.ok(performance.now() - start < 2000)
-    const { info } = await blunt(input, { pool }).timeout({ seconds: 60 }).resize(8).toBuffer({ resolveWithObject: true })
+    const { info } = await blunt(input, { pool }).timeoutMs(60_000).resize(8).toBuffer({ resolveWithObject: true })
     assert.equal(info.width, 8)
   })
 
@@ -74,7 +74,7 @@ describe('pool', () => {
       const { blunt, Pool } = require('./dist/index.js')
       // A 1x1 PNG.
       const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==', 'base64')
-      blunt(png, { pool: new Pool({ idleTimeout: 60000 }) }).toBuffer().then(() => console.log('done'))
+      blunt(png, { pool: new Pool({ idleTimeoutMs: 60000 }) }).toBuffer().then(() => console.log('done'))
     `
     const start = performance.now()
     const child = spawnSync(process.execPath, ['-e', script], { cwd: join(import.meta.dirname, '..'), timeout: 30_000 })
@@ -85,19 +85,19 @@ describe('pool', () => {
 
   // The OS enforces it on Linux, and wasm enforces it everywhere.
   const enforcesProcessMemory = backend === 'wasm' || process.platform === 'linux'
-  test('limitProcessMemory is enforced, and the worker is replaced', { skip: !enforcesProcessMemory }, async () => {
-    const pool = new Pool({ concurrency: 1, limitProcessMemory: 48 * 1024 * 1024 })
-    // 75 MB of pixels. `limitAllocatorMemory` allows it, so the allocator doesn't stop it first.
+  test('limitProcessMemoryBytes is enforced, and the worker is replaced', { skip: !enforcesProcessMemory }, async () => {
+    const pool = new Pool({ concurrency: 1, limitProcessMemoryBytes: 48 * 1024 * 1024 })
+    // 75 MB of pixels. `limitAllocatorMemoryBytes` allows it, so the allocator doesn't stop it first.
     const large = await fromRaw(pattern(5000, 5000)).png().toBuffer()
-    await assertRejectsWithCode(blunt(large, { pool, limitAllocatorMemory: 2 ** 30 }).png().toBuffer(), 'ERR_OUT_OF_MEMORY')
+    await assertRejectsWithCode(blunt(large, { pool, limitAllocatorMemoryBytes: 2 ** 30 }).png().toBuffer(), 'ERR_OUT_OF_MEMORY')
     const small = await fromRaw(pattern(30, 30)).png().toBuffer()
     await blunt(small, { pool }).png().toBuffer()
   })
 
-  test('limitProcessMemory is validated', () => {
-    assert.throws(() => new Pool({ limitProcessMemory: -1 }), TypeError)
-    assert.throws(() => new Pool({ limitProcessMemory: true as never }), TypeError)
-    new Pool({ limitProcessMemory: false })
+  test('limitProcessMemoryBytes is validated', () => {
+    assert.throws(() => new Pool({ limitProcessMemoryBytes: -1 }), TypeError)
+    assert.throws(() => new Pool({ limitProcessMemoryBytes: true as never }), TypeError)
+    new Pool({ limitProcessMemoryBytes: false })
   })
 })
 

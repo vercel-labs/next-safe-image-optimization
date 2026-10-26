@@ -41,7 +41,7 @@ export enum InputFormat {
 export interface LimitOptions {
 	/** 0 disables the limit. */
 	limitInputPixels?: number;
-	limitAllocatorMemory?: number;
+	limitAllocatorMemoryBytes?: number;
 	limitOutputBytes?: number;
 	allowedInputFormats?: `${InputFormat}`[];
 	allowAnimated?: boolean;

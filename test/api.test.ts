@@ -71,7 +71,6 @@ describe('argument validation', () => {
     ['webp quality', (p) => p.webp({ quality: () => 50 } as never), 'Expected a JSON value for quality but received a function'],
     ['webp quality bigint', (p) => p.webp({ quality: 50n } as never)],
     ['gif effort', (p) => p.gif({ effort: 0 })],
-    ['toFormat avif', (p) => p.toFormat('avif' as never)],
   ]
   for (const [name, call, message] of cases) {
     test(name, async () => {
@@ -85,7 +84,7 @@ describe('argument validation', () => {
     const invalid: [BluntOptions, string?][] = [
       [{ limitInputPixels: -1 }],
       [{ limitInputPixels: 1.5 }],
-      [{ limitAllocatorMemory: 0 }],
+      [{ limitAllocatorMemoryBytes: 0 }],
       [{ allowedInputFormats: [] }, 'allowedInputFormats must not be empty'],
       [{ allowedInputFormats: ['png', 'bmp' as never] }, 'unknown variant `bmp`'],
       [{ allowedInputFormats: 'png' as never }],
@@ -148,14 +147,7 @@ describe('output', () => {
       .webp()
       .toBuffer({ resolveWithObject: true })
     assert.ok(Buffer.isBuffer(data))
-    assert.deepEqual(info, { format: 'webp', width: 20, height: 15, channels: 4, size: data.length })
-  })
-
-  test('toFormat aliases', async () => {
-    const { info } = await blunt(await png())
-      .toFormat('jpg', { quality: 50 })
-      .toBuffer({ resolveWithObject: true })
-    assert.equal(info.format, 'jpeg')
+    assert.deepEqual(info, { format: 'webp', width: 20, height: 15, channels: 4 })
   })
 
   test('the last output format wins', async () => {

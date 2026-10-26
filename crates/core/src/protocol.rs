@@ -33,7 +33,7 @@ pub const EXIT_VERSION_MISMATCH: i32 = 87;
 pub const EXIT_SANDBOX_FAILED: i32 = 88;
 #[typeshare]
 pub const EXIT_INVALID_FRAME: i32 = 89;
-/// Allocations exceeded the request's `limitAllocatorMemory` (see `alloc.rs`).
+/// Allocations exceeded the request's `limitAllocatorMemoryBytes` (see `alloc.rs`).
 #[typeshare]
 pub const EXIT_MEMORY_LIMIT: i32 = 90;
 

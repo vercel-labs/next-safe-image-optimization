@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import { BluntError, Pipeline, blunt, defaultPool } from '../dist/index.js'
-import type { InputFormat } from '../dist/index.js'
+import type { BluntOptions, InputFormat, ResizeOptions } from '../dist/index.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
 const png = () => fromRaw(pattern(40, 30, 4)).png().toBuffer()
@@ -42,36 +42,81 @@ describe('input', () => {
 })
 
 describe('argument validation', () => {
-  const cases: [string, (p: Pipeline) => unknown][] = [
-    ['resize(0)', (p) => p.resize(0)],
+  // Most options are validated by the worker, so these may throw or reject.
+  const rejects = (run: () => Promise<unknown>, prefix = '') =>
+    assert.rejects(
+      async () => await run(),
+      (error) => error instanceof TypeError && error.message.startsWith(prefix),
+    )
+
+  const cases: [string, (p: Pipeline) => Pipeline, string?][] = [
+    ['resize(0)', (p) => p.resize(0), 'resize.width must be'],
     ['resize(-1)', (p) => p.resize(-1)],
     ['resize(1.5)', (p) => p.resize(1.5)],
+    ['resize("10")', (p) => p.resize('10' as never), 'invalid type: string'],
     ['resize kernel', (p) => p.resize(10, 10, { kernel: 'lanczos4' as never })],
     ['resize kernel mitchell', (p) => p.resize(10, 10, { kernel: 'mitchell' as never })],
+    ['resize fit', (p) => p.resize(10, 10, { fit: 'contain' } as never), 'unknown field `fit`'],
+    ['resize options', (p) => p.resize(10, 10, 'cover' as never)],
     ['rotate(45)', (p) => p.rotate(45)],
-    ['jpeg quality 0', (p) => p.jpeg({ quality: 0 })],
+    ['rotate("90")', (p) => p.rotate('90' as never)],
+    ['jpeg quality 0', (p) => p.jpeg({ quality: 0 }), 'jpeg.quality must be'],
     ['jpeg quality 101', (p) => p.jpeg({ quality: 101 })],
+    ['jpeg quality NaN', (p) => p.jpeg({ quality: NaN }), 'Expected a finite number for quality but received NaN'],
+    ['jpeg progressive', (p) => p.jpeg({ progressive: true } as never)],
+    ['jpeg mozjpeg', (p) => p.jpeg({ mozjpeg: 'yes' as never })],
     ['png compressionLevel', (p) => p.png({ compressionLevel: 10 })],
+    ['png quality', (p) => p.png({ quality: 0 })],
     ['webp effort', (p) => p.webp({ effort: 7 })],
+    ['webp quality', (p) => p.webp({ quality: () => 50 } as never), 'Expected a JSON value for quality but received a function'],
+    ['webp quality bigint', (p) => p.webp({ quality: 50n } as never)],
     ['gif effort', (p) => p.gif({ effort: 0 })],
     ['toFormat avif', (p) => p.toFormat('avif' as never)],
   ]
-  for (const [name, call] of cases) {
+  for (const [name, call, message] of cases) {
     test(name, async () => {
-      const pipeline = blunt(await png())
-      assert.throws(() => call(pipeline), TypeError)
+      const input = await png()
+      await rejects(() => call(blunt(input)).toBuffer(), message)
     })
   }
 
   test('constructor options', async () => {
     const input = await png()
-    assert.throws(() => blunt(input, { limitInputPixels: -1 }), TypeError)
-    assert.throws(() => blunt(input, { limitInputPixels: 1.5 }), TypeError)
-    assert.throws(() => blunt(input, { limitAllocatorMemory: 0 }), TypeError)
-    assert.throws(() => blunt(input, { allowedInputFormats: [] }), TypeError)
-    assert.throws(() => blunt(input, { allowedInputFormats: ['bmp' as never] }), TypeError)
-    assert.throws(() => blunt(input, { allowedInputFormats: 'png' as never }), TypeError)
-    assert.throws(() => blunt(input, { allowAnimated: 1 as never }), TypeError)
+    const invalid: [BluntOptions, string?][] = [
+      [{ limitInputPixels: -1 }],
+      [{ limitInputPixels: 1.5 }],
+      [{ limitAllocatorMemory: 0 }],
+      [{ allowedInputFormats: [] }, 'allowedInputFormats must not be empty'],
+      [{ allowedInputFormats: ['png', 'bmp' as never] }, 'unknown variant `bmp`'],
+      [{ allowedInputFormats: 'png' as never }],
+      [{ allowAnimated: 1 as never }],
+      [{ autoOrient: 'yes' as never }, 'invalid type: string'],
+      [{ failOn: 'none' } as never, 'unknown field `failOn`'],
+    ]
+    for (const [options, message] of invalid) {
+      await rejects(() => blunt(input, options).toBuffer(), message)
+    }
+    // Only the limits apply to metadata().
+    await rejects(() => blunt(input, { failOn: 'none' } as never).metadata())
+    await rejects(() => blunt(input, { limitInputPixels: -1 }).metadata())
+  })
+
+  test('accepts null and undefined as unset', async () => {
+    const input = await png()
+    const { info } = await blunt(input, { limitInputPixels: undefined, sequentialRead: true })
+      .resize(null, 15, { kernel: undefined })
+      .png(null as never)
+      .toBuffer({ resolveWithObject: true })
+    assert.deepEqual([info.width, info.height], [20, 15])
+  })
+
+  test('options are copied when passed', async () => {
+    const input = await png()
+    const options: ResizeOptions = { width: 20 }
+    const pipeline = blunt(input).resize(options)
+    options.kernel = 'invalid' as never
+    const { info } = await pipeline.toBuffer({ resolveWithObject: true })
+    assert.equal(info.width, 20)
   })
 })
 

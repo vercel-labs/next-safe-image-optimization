@@ -306,9 +306,11 @@ impl Worker {
     }
 
     fn run(&mut self, job: &Job) -> Result<Vec<u8>, Failure> {
+        // A deadline too far away to represent never arrives.
         let alarm = job
             .timeout
-            .map(|timeout| WATCHDOG.arm(Instant::now() + timeout, self.process.clone()));
+            .and_then(|timeout| Instant::now().checked_add(timeout))
+            .map(|deadline| WATCHDOG.arm(deadline, self.process.clone()));
         let result = self.exchange(&job.frame, job.max_response_bytes);
         if let Some(alarm) = alarm {
             WATCHDOG.disarm(alarm);

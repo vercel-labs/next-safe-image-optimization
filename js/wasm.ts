@@ -24,6 +24,7 @@ const PAGE_SIZE = 64 * 1024
 const INITIAL_PAGES = 512
 /** The most that wasm32 can address. */
 const MAX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
+const MAX_TIMEOUT_MS = 2 ** 31 - 1
 
 interface Job {
   request: Uint8Array
@@ -145,7 +146,8 @@ export class WasmBackend implements Backend {
     slot.job = job
     clearTimeout(slot.timer)
     slot.worker.ref()
-    if (job.timeoutMs !== undefined) {
+    // `setTimeout` treats longer delays as 1ms. They're over 24 days, so they never arrive.
+    if (job.timeoutMs !== undefined && job.timeoutMs <= MAX_TIMEOUT_MS) {
       slot.timer = setTimeout(() => {
         slot.job = undefined
         job.resolve(failure('ERR_TIMEOUT', `processing took longer than ${job.timeoutMs}ms`))

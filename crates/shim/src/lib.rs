@@ -118,13 +118,14 @@ impl WorkerPool {
         options_json: String,
         options: RunOptions,
     ) -> napi::Result<Object<'env>> {
-        let timeout = options
-            .timeout_ms
-            .map(|ms| {
-                Duration::try_from_secs_f64(ms / 1000.0)
-                    .map_err(|_| invalid(format!("invalid timeout: {ms}")))
-            })
-            .transpose()?;
+        let timeout = match options.timeout_ms {
+            None => None,
+            Some(ms) if ms.is_nan() || ms < 0.0 => {
+                return Err(invalid(format!("invalid timeout: {ms}")));
+            }
+            // Too long to represent, so it never arrives.
+            Some(ms) => Duration::try_from_secs_f64(ms / 1000.0).ok(),
+        };
         let json_len = u32::try_from(options_json.len())
             .map_err(|_| invalid("options are too large".into()))?;
         let request_len = input.len() + options_json.len() + 4;

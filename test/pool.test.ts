@@ -13,7 +13,7 @@ const backend = defaultPool().backend
 
 /** `Pool.run` is internal, but lets tests use timeouts shorter than a second. */
 interface InternalPool {
-  run(input: Uint8Array, options: object, limits: object, timeoutMs?: number): Promise<unknown>
+  run(input: Uint8Array, options: object, limitAllocatorMemory: number | undefined, timeoutMs?: number): Promise<unknown>
 }
 
 /** Noise compresses badly, so this takes a while to encode. */
@@ -31,8 +31,17 @@ describe('pool', () => {
     assert.throws(() => new Pool({ idleTimeout: -1 }), TypeError)
     assert.throws(() => new Pool({ backend: 'other' as never }), TypeError)
     assert.throws(() => blunt(Buffer.alloc(1), { pool: {} as never }), TypeError)
-    for (const seconds of [-1, 1.5, 3601, undefined]) {
+    for (const seconds of [-1, 1.5, NaN, undefined]) {
       assert.throws(() => blunt(Buffer.alloc(1)).timeout({ seconds } as never), TypeError)
+    }
+  })
+
+  test('very long timeouts never expire', async () => {
+    const input = await fromRaw(pattern(8, 8)).png().toBuffer()
+    // More than 2 ** 31 - 1 ms, which `setTimeout` would treat as 1ms, and more than a `Duration`.
+    for (const seconds of [3_000_000, Number.MAX_VALUE]) {
+      const { info } = await blunt(input).timeout({ seconds }).toBuffer({ resolveWithObject: true })
+      assert.equal(info.width, 8)
     }
   })
 
@@ -51,7 +60,7 @@ describe('pool', () => {
     const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
     const start = performance.now()
     await assertRejectsWithCode(
-      (pool as unknown as InternalPool).run(input, { transform: { format: 'png' } }, {}, 1),
+      (pool as unknown as InternalPool).run(input, { transform: { format: 'png' } }, undefined, 1),
       'ERR_TIMEOUT',
     )
     assert.ok(performance.now() - start < 2000)

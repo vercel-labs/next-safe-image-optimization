@@ -13,8 +13,10 @@ pub enum Error {
     LimitExceeded(String),
     Decode(String),
     Encode(String),
-    /// This should never happen: an invalid request (the JS wrapper validates options first), or
-    /// an unexpected error from a library.
+    /// Options the caller passed (see `request.rs`). The JS wrapper throws these as `TypeError`s.
+    InvalidOptions(String),
+    /// This should never happen: a malformed request from the JS wrapper, or an unexpected error
+    /// from a library.
     Internal(String),
 }
 
@@ -38,6 +40,9 @@ pub enum ErrorCode {
     /// The input is animated, with `allowAnimated: false`.
     #[serde(rename = "ERR_ANIMATED")]
     Animated,
+    /// Thrown as a `TypeError`, not a `BluntError`.
+    #[serde(rename = "ERR_INVALID_OPTIONS")]
+    InvalidOptions,
 }
 
 impl Error {
@@ -48,6 +53,7 @@ impl Error {
             Error::LimitExceeded(_) => ErrorCode::LimitExceeded,
             Error::Decode(_) => ErrorCode::DecodeFailed,
             Error::Encode(_) => ErrorCode::EncodeFailed,
+            Error::InvalidOptions(_) => ErrorCode::InvalidOptions,
             Error::Internal(_) => ErrorCode::Internal,
         }
     }
@@ -61,6 +67,8 @@ impl fmt::Display for Error {
             Error::LimitExceeded(msg) => write!(f, "Limit exceeded: {msg}"),
             Error::Decode(msg) => write!(f, "Failed to decode image: {msg}"),
             Error::Encode(msg) => write!(f, "Failed to encode image: {msg}"),
+            // Becomes a `TypeError`, like the wrapper's own, which have no prefix either.
+            Error::InvalidOptions(msg) => f.write_str(msg),
             Error::Internal(msg) => write!(f, "Internal error: {msg}"),
         }
     }

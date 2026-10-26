@@ -1,15 +1,8 @@
 import { availableParallelism } from 'node:os'
 
 import { NativeBackend, loadBinding } from './native.js'
-import { FORMATS, InvalidResponseError, decodeResponse, encodeOptions, maxResponseBytes } from './protocol.js'
-import type {
-  Backend,
-  LimitOptions,
-  RequestOptions,
-  ResizeOptions as NativeResizeOptions,
-  Response,
-  TransformOptions,
-} from './protocol.js'
+import { InvalidResponseError, decodeResponse, encodeOptions, maxResponseBytes } from './protocol.js'
+import type { Backend, LimitOptions, RequestOptions, Response, TransformOptions, Unchecked } from './protocol.js'
 import type * as generated from './protocol.generated.js'
 import { WasmBackend } from './wasm.js'
 
@@ -55,6 +48,8 @@ export interface BluntOptions {
   autoOrient?: boolean
   /** The pool of workers that processes the image. Default: `defaultPool()`. */
   pool?: Pool
+  /** Accepted for compatibility with sharp (Next.js passes it), but ignored. */
+  sequentialRead?: boolean
 }
 
 export type BackendName = 'native' | 'wasm'
@@ -111,8 +106,8 @@ export interface PngOptions {
   /** Default: `true` (sharp defaults to `false`). */
   adaptiveFiltering?: boolean
   /**
-   * Accepted for compatibility with sharp, but ignored. Output is always lossless truecolor; there
-   * is no palette quantization.
+   * 1-100. Accepted for compatibility with sharp, but ignored. Output is always lossless truecolor;
+   * there is no palette quantization.
    */
   quality?: number
 }
@@ -170,7 +165,7 @@ export interface TimeoutOptions {
 
 export type ErrorCode =
   /** Errors from the worker. `ERR_ANIMATED`: the input is animated, with `allowAnimated: false`. */
-  | `${generated.ErrorCode}`
+  | Exclude<`${generated.ErrorCode}`, 'ERR_INVALID_OPTIONS'>
   /** Processing took longer than `timeout()`. */
   | 'ERR_TIMEOUT'
   /** The worker ran out of memory. */
@@ -180,7 +175,11 @@ export type ErrorCode =
   /** The worker couldn't be started. */
   | 'ERR_WORKER_SPAWN'
 
-/** Errors from processing an image. Invalid arguments throw a `TypeError` instead. */
+/**
+ * Errors from processing an image. Invalid options are `TypeError`s instead. Most are only
+ * validated by the worker, so `toBuffer()` or `metadata()` rejects with them. The input, the pool
+ * and its options, `timeout()`, and `limitAllocatorMemory` throw immediately.
+ */
 export class BluntError extends Error {
   readonly code: ErrorCode
 
@@ -191,29 +190,31 @@ export class BluntError extends Error {
   }
 }
 
-const KERNELS: readonly Kernel[] = ['nearest', 'linear', 'cubic', 'lanczos3']
 const DEFAULT_LIMIT_INPUT_PIXELS = 0x3fff * 0x3fff
 
 function invalid(name: string, expected: string, value: unknown): TypeError {
   return new TypeError(`Expected ${expected} for ${name} but received ${String(value)} of type ${typeof value}`)
 }
 
-function isInteger(value: unknown, min: number, max: number): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max
-}
-
-function checkInteger(name: string, value: unknown, min: number, max: number): number {
-  if (!isInteger(value, min, max)) {
-    throw invalid(name, `integer between ${min} and ${max}`, value)
+function checkInteger(name: string, value: unknown, min: number, max = Infinity): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw invalid(name, max === Infinity ? `integer of at least ${min}` : `integer between ${min} and ${max}`, value)
   }
   return value
 }
 
-function checkBoolean(name: string, value: unknown): boolean {
-  if (typeof value !== 'boolean') {
-    throw invalid(name, 'boolean', value)
+/**
+ * A shallow copy, so that later changes to `options` don't apply. The worker validates what's in
+ * it, and rejects unknown fields.
+ */
+function copyOptions<T extends object>(options: T | null | undefined): Partial<T> {
+  if (options == null) {
+    return {}
   }
-  return value
+  if (typeof options !== 'object' || Array.isArray(options)) {
+    throw invalid('options', 'object', options)
+  }
+  return { ...options }
 }
 
 function optional<T, U>(value: T | undefined, check: (value: T) => U): U | undefined {
@@ -252,7 +253,7 @@ function createBackend(options: PoolOptions): Backend {
     options.limitProcessMemory === false
       ? 0
       : (optional(options.limitProcessMemory, (v) =>
-          checkInteger('limitProcessMemory', v, 0, Number.MAX_SAFE_INTEGER),
+          checkInteger('limitProcessMemory', v, 0),
         ) ?? DEFAULT_LIMIT_PROCESS_MEMORY)
   const backend = options.backend ?? process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND
   if (backend !== undefined) {
@@ -292,10 +293,15 @@ export class Pool {
   }
 
   /** @internal */
-  async run(input: Uint8Array, options: RequestOptions, limits: LimitOptions, timeoutMs?: number): Promise<Response> {
+  async run(
+    input: Uint8Array,
+    options: RequestOptions,
+    limitAllocatorMemory: number | undefined,
+    timeoutMs?: number,
+  ): Promise<Response> {
     const result = await this.#backend.run(input, encodeOptions(options), {
       timeoutMs,
-      maxResponseBytes: maxResponseBytes(limits.limitAllocatorMemory ?? DEFAULT_LIMIT_ALLOCATOR_MEMORY),
+      maxResponseBytes: maxResponseBytes(limitAllocatorMemory ?? DEFAULT_LIMIT_ALLOCATOR_MEMORY),
     })
     if (result.error) {
       throw new BluntError(result.error.code as ErrorCode, result.error.message)
@@ -310,6 +316,9 @@ export class Pool {
       throw error
     }
     if (response.kind === 'error') {
+      if (response.code === 'ERR_INVALID_OPTIONS') {
+        throw new TypeError(response.message)
+      }
       throw new BluntError(response.code, response.message)
     }
     return response
@@ -331,51 +340,40 @@ export function defaultPool(): Pool {
 export class Pipeline {
   #input: Uint8Array
   #pool: Pool | undefined
-  #limits: LimitOptions = {}
+  #limits: Unchecked<LimitOptions>
+  /** Validated here, because the response's maximum size depends on it. */
+  #limitAllocatorMemory: number | undefined
   #timeoutMs: number | undefined
-  #autoOrient = false
-  #rotate: number | undefined
-  #resize: NativeResizeOptions | undefined
-  #output: Pick<TransformOptions, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
+  #autoOrient: unknown
+  #rotate: unknown
+  #resize: ResizeOptions | undefined
+  #output: Pick<Unchecked<TransformOptions>, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
 
-  constructor(input: Input, options: BluntOptions = {}) {
+  constructor(input: Input, options?: BluntOptions) {
     this.#input = toUint8Array(input)
-    const { limitInputPixels, limitAllocatorMemory, allowedInputFormats, allowAnimated, autoOrient, pool } = options
+    // The rest are the worker's limits. `sequentialRead` is ignored.
+    const { pool, autoOrient, limitInputPixels, limitAllocatorMemory, sequentialRead, ...limits } =
+      copyOptions(options)
     if (pool !== undefined && !(pool instanceof Pool)) {
       throw invalid('pool', 'Pool', pool)
     }
     this.#pool = pool
-    if (limitInputPixels !== undefined) {
-      if (typeof limitInputPixels === 'boolean') {
-        this.#limits.limitInputPixels = limitInputPixels ? DEFAULT_LIMIT_INPUT_PIXELS : 0
-      } else {
-        this.#limits.limitInputPixels = checkInteger(
-          'limitInputPixels',
-          limitInputPixels,
-          0,
-          Number.MAX_SAFE_INTEGER,
-        )
-      }
-    }
-    this.#limits.limitAllocatorMemory = optional(limitAllocatorMemory, (v) =>
-      checkInteger('limitAllocatorMemory', v, 1, Number.MAX_SAFE_INTEGER),
+    this.#limitAllocatorMemory = optional(limitAllocatorMemory, (v) =>
+      checkInteger('limitAllocatorMemory', v, 1),
     )
-    if (allowedInputFormats !== undefined) {
-      if (!Array.isArray(allowedInputFormats) || allowedInputFormats.length === 0) {
-        throw invalid('allowedInputFormats', 'non-empty array', allowedInputFormats)
-      }
-      this.#limits.allowedInputFormats = allowedInputFormats.map((v) =>
-        checkOneOf('allowedInputFormats', v, FORMATS),
-      )
+    const { allowedInputFormats } = limits
+    this.#limits = {
+      ...limits,
+      limitInputPixels:
+        typeof limitInputPixels === 'boolean' ? (limitInputPixels ? DEFAULT_LIMIT_INPUT_PIXELS : 0) : limitInputPixels,
+      limitAllocatorMemory: this.#limitAllocatorMemory,
+      allowedInputFormats: Array.isArray(allowedInputFormats) ? [...allowedInputFormats] : allowedInputFormats,
     }
-    this.#limits.allowAnimated = optional(allowAnimated, (v) => checkBoolean('allowAnimated', v))
-    if (optional(autoOrient, (v) => checkBoolean('autoOrient', v))) {
-      this.autoOrient()
-    }
+    this.#autoOrient = autoOrient
   }
 
   /**
-   * Limits the wall time of processing (in seconds, 0-3600), like sharp. The time starts when a
+   * Limits the wall time of processing (in whole seconds), like sharp. The time starts when a
    * worker picks up the image, not while it waits for a free worker. The worker is killed when the
    * time runs out, so this works even if a decoder hangs.
    *
@@ -383,7 +381,7 @@ export class Pipeline {
    * Otherwise, an image that's slow to process can occupy a worker indefinitely.
    */
   timeout(options: TimeoutOptions): this {
-    const seconds = checkInteger('timeout.seconds', options?.seconds, 0, 3600)
+    const seconds = checkInteger('timeout.seconds', options?.seconds, 0)
     this.#timeoutMs = seconds === 0 ? undefined : seconds * 1000
     return this
   }
@@ -402,87 +400,41 @@ export class Pipeline {
     if (angle === undefined) {
       return this.autoOrient()
     }
-    if (!isInteger(angle, -3600, 3600) || angle % 90 !== 0) {
-      throw invalid('angle', 'multiple of 90', angle)
-    }
     this.#rotate = angle
     return this
   }
 
   resize(width?: number | null, height?: number | null, options?: ResizeOptions): this
   resize(options: ResizeOptions): this
-  resize(
-    widthOrOptions?: number | null | ResizeOptions,
-    height?: number | null,
-    options: ResizeOptions = {},
-  ): this {
-    let width: number | null | undefined
+  resize(widthOrOptions?: number | null | ResizeOptions, height?: number | null, options?: ResizeOptions): this {
     if (widthOrOptions !== null && typeof widthOrOptions === 'object') {
-      options = widthOrOptions
-      width = options.width
-      height = options.height
+      this.#resize = copyOptions(widthOrOptions)
     } else {
-      width = widthOrOptions ?? options.width
-      height = height ?? options.height
-    }
-    const dimension = (name: string, value: number | null | undefined) =>
-      value == null ? undefined : checkInteger(name, value, 1, 0xffffffff)
-    const resize: NativeResizeOptions = {
-      width: dimension('width', width),
-      height: dimension('height', height),
-      kernel: optional(options.kernel, (v) => checkOneOf('kernel', v, KERNELS)),
-      withoutEnlargement: optional(options.withoutEnlargement, (v) => checkBoolean('withoutEnlargement', v)),
-      withoutReduction: optional(options.withoutReduction, (v) => checkBoolean('withoutReduction', v)),
-    }
-    this.#resize = resize
-    return this
-  }
-
-  jpeg(options: JpegOptions = {}): this {
-    this.#output = {
-      format: 'jpeg',
-      jpeg: {
-        quality: optional(options.quality, (v) => checkInteger('quality', v, 1, 100)),
-        mozjpeg: optional(options.mozjpeg, (v) => checkBoolean('mozjpeg', v)),
-      },
+      const resize = copyOptions(options)
+      resize.width = widthOrOptions ?? resize.width
+      resize.height = height ?? resize.height
+      this.#resize = resize
     }
     return this
   }
 
-  png(options: PngOptions = {}): this {
-    if (options.quality !== undefined) {
-      checkInteger('quality', options.quality, 1, 100)
-    }
-    this.#output = {
-      format: 'png',
-      png: {
-        compressionLevel: optional(options.compressionLevel, (v) => checkInteger('compressionLevel', v, 0, 9)),
-        adaptiveFiltering: optional(options.adaptiveFiltering, (v) => checkBoolean('adaptiveFiltering', v)),
-      },
-    }
+  jpeg(options?: JpegOptions): this {
+    this.#output = { format: 'jpeg', jpeg: copyOptions(options) }
     return this
   }
 
-  webp(options: WebpOptions = {}): this {
-    this.#output = {
-      format: 'webp',
-      webp: {
-        quality: optional(options.quality, (v) => checkInteger('quality', v, 1, 100)),
-        alphaQuality: optional(options.alphaQuality, (v) => checkInteger('alphaQuality', v, 0, 100)),
-        lossless: optional(options.lossless, (v) => checkBoolean('lossless', v)),
-        nearLossless: optional(options.nearLossless, (v) => checkBoolean('nearLossless', v)),
-        smartSubsample: optional(options.smartSubsample, (v) => checkBoolean('smartSubsample', v)),
-        effort: optional(options.effort, (v) => checkInteger('effort', v, 0, 6)),
-      },
-    }
+  png(options?: PngOptions): this {
+    this.#output = { format: 'png', png: copyOptions(options) }
     return this
   }
 
-  gif(options: GifOptions = {}): this {
-    this.#output = {
-      format: 'gif',
-      gif: { effort: optional(options.effort, (v) => checkInteger('effort', v, 1, 10)) },
-    }
+  webp(options?: WebpOptions): this {
+    this.#output = { format: 'webp', webp: copyOptions(options) }
+    return this
+  }
+
+  gif(options?: GifOptions): this {
+    this.#output = { format: 'gif', gif: copyOptions(options) }
     return this
   }
 
@@ -511,7 +463,7 @@ export class Pipeline {
   toBuffer(options?: ToBufferOptions & { resolveWithObject?: false }): Promise<Buffer>
   toBuffer(options: ToBufferOptions & { resolveWithObject: true }): Promise<{ data: Buffer; info: OutputInfo }>
   async toBuffer(options: ToBufferOptions = {}): Promise<Buffer | { data: Buffer; info: OutputInfo }> {
-    const transform: TransformOptions = {
+    const transform: Unchecked<TransformOptions> = {
       limits: this.#limits,
       autoOrient: this.#autoOrient,
       rotate: this.#rotate,
@@ -548,7 +500,7 @@ export class Pipeline {
   }
 
   #run(options: RequestOptions): Promise<Response> {
-    return (this.#pool ?? defaultPool()).run(this.#input, options, this.#limits, this.#timeoutMs)
+    return (this.#pool ?? defaultPool()).run(this.#input, options, this.#limitAllocatorMemory, this.#timeoutMs)
   }
 }
 

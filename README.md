@@ -41,6 +41,7 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 ## Differences from sharp
 
 - Only in-memory input (never file paths). Exports `blunt()` instead of a default export.
+- Unsupported options (like `fit` or `progressive`) are rejected with a `TypeError`, instead of being ignored. Most options are validated by the worker, so `toBuffer()` or `metadata()` rejects with it, instead of the method throwing. `sequentialRead` is accepted, but ignored.
 - `rotate(angle)` only supports multiples of 90. There is no `blur`, `flip`, `extract`, `composite`, etc.
 - `resize()` is always like sharp's default `fit: 'cover'` with `position: 'centre'`: there's no `fit`, `position`, or `background`. `kernel` supports `nearest`, `linear`, `cubic`, and `lanczos3` (the filters that `image` implements), and resampling isn't sharp's, so pixels differ slightly. Resizing is slower than sharp's, and its intermediate buffer (16 bytes per pixel, for the input width times the output height) counts against `limitAllocatorMemory`.
 - No HEIF input. No AVIF, HEIF, or animated output.

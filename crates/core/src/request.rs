@@ -1,5 +1,7 @@
-//! Request options. These come from the TypeScript wrapper in `js/`, which validates them first.
-//! We validate again, since the wrapper isn't a security boundary.
+//! Request options. The TypeScript wrapper in `js/` passes them through mostly as the caller wrote
+//! them, and only validates the few that it uses itself. So this is where they're validated, and
+//! unknown fields are rejected. Those errors are `Error::InvalidOptions`, which the wrapper throws
+//! as `TypeError`s.
 
 use serde::Deserialize;
 use typeshare_annotation::typeshare;
@@ -65,6 +67,8 @@ struct JpegOptions {
 struct PngOptions {
     compression_level: Option<f64>,
     adaptive_filtering: Option<bool>,
+    /// Accepted for compatibility with sharp, but ignored (there's no palette quantization).
+    quality: Option<f64>,
 }
 
 #[typeshare]
@@ -115,33 +119,51 @@ pub struct TransformOptions {
 }
 
 pub fn parse(json: &[u8]) -> Result<Request> {
-    serde_json::from_slice(json).map_err(|err| Error::Internal(format!("invalid request: {err}")))
+    serde_json::from_slice(json).map_err(|err| {
+        // The caller never sees the JSON, so the position alone would mean nothing to them.
+        let line = err
+            .line()
+            .checked_sub(1)
+            .and_then(|index| json.split(|&b| b == b'\n').nth(index))
+            .unwrap_or_default();
+        let message = format!("{err} in {}", String::from_utf8_lossy(line));
+        // `JSON.stringify` never truncates its output.
+        if err.is_eof() {
+            Error::Internal(format!("invalid request: {message}"))
+        } else {
+            invalid(message)
+        }
+    })
 }
 
 fn invalid(message: String) -> Error {
-    Error::Internal(format!("invalid request: {message}"))
+    Error::InvalidOptions(message)
 }
 
+/// `max` may be infinite. Casting the result to an integer type saturates.
 fn int(name: &str, value: f64, min: f64, max: f64) -> Result<f64> {
     if value.fract() != 0.0 || !(min..=max).contains(&value) {
+        let range = if max.is_infinite() {
+            format!("of at least {min}")
+        } else {
+            format!("between {min} and {max}")
+        };
         return Err(invalid(format!(
-            "{name} must be an integer between {min} and {max}, got {value}"
+            "{name} must be an integer {range}, got {value}"
         )));
     }
     Ok(value)
 }
 
-const MAX_SAFE_INTEGER: f64 = 9007199254740991.0;
-
 pub fn parse_limits(options: Option<LimitOptions>) -> Result<Limits> {
     let mut limits = Limits::default();
     if let Some(options) = options {
         if let Some(pixels) = options.limit_input_pixels {
-            let pixels = int("limitInputPixels", pixels, 0.0, MAX_SAFE_INTEGER)? as u64;
+            let pixels = int("limitInputPixels", pixels, 0.0, f64::INFINITY)? as u64;
             limits.input_pixels = if pixels == 0 { u64::MAX } else { pixels };
         }
         if let Some(memory) = options.limit_allocator_memory {
-            limits.memory = int("limitAllocatorMemory", memory, 1.0, MAX_SAFE_INTEGER)? as u64;
+            limits.memory = int("limitAllocatorMemory", memory, 1.0, f64::INFINITY)? as u64;
         }
         if let Some(formats) = options.allowed_input_formats {
             if formats.is_empty() {
@@ -161,8 +183,8 @@ fn parse_resize(options: ResizeOptions) -> Result<ResizeSpec> {
             .transpose()
     };
     Ok(ResizeSpec {
-        width: dim("width", options.width)?,
-        height: dim("height", options.height)?,
+        width: dim("resize.width", options.width)?,
+        height: dim("resize.height", options.height)?,
         kernel: match options.kernel.unwrap_or(Kernel::Lanczos3) {
             Kernel::Nearest => ops::Kernel::Nearest,
             Kernel::Linear => ops::Kernel::Linear,
@@ -196,6 +218,9 @@ fn parse_output(options: &mut TransformOptions) -> Result<Option<OutputSpec>> {
                     spec.compression_level = int("png.compressionLevel", level, 0.0, 9.0)? as u8;
                 }
                 spec.adaptive_filtering = o.adaptive_filtering.unwrap_or(spec.adaptive_filtering);
+                if let Some(q) = o.quality {
+                    int("png.quality", q, 1.0, 100.0)?;
+                }
             }
             OutputSpec::Png(spec)
         }
@@ -256,6 +281,7 @@ pub fn parse_pipeline(mut options: Box<TransformOptions>) -> Result<Pipeline> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorCode;
 
     #[test]
     fn parses_transform() {
@@ -274,26 +300,81 @@ mod tests {
         assert!(matches!(pipeline.output, Some(OutputSpec::Webp(spec)) if spec.quality == 50.0));
     }
 
-    #[test]
-    fn rejects_invalid_options() {
-        for json in [
-            r#"{"transform":{"rotate":45}}"#,
-            r#"{"transform":{"resize":{"width":0}}}"#,
-            r#"{"transform":{"resize":{"width":1,"fit":"contain"}}}"#,
-            r#"{"transform":{"resize":{"width":1,"kernel":"mitchell"}}}"#,
-            r#"{"transform":{"blur":{}}}"#,
-            r#"{"transform":{"format":"avif"}}"#,
-            r#"{"transform":{"unknown":1}}"#,
-            r#"{"metadata":{"limitAllocatorMemory":0}}"#,
-            r#"{"metadata":{"allowedInputFormats":[]}}"#,
-            r#"{"metadata":{"allowedInputFormats":["bmp"]}}"#,
-            r#"{"other":{}}"#,
-        ] {
-            let result = parse(json.as_bytes()).and_then(|request| match request {
+    fn error(json: &str) -> Error {
+        parse(json.as_bytes())
+            .and_then(|request| match request {
                 Request::Transform(options) => parse_pipeline(options).map(drop),
                 Request::Metadata(options) => parse_limits(Some(options)).map(drop),
-            });
-            assert!(result.is_err(), "{json}");
+            })
+            .expect_err(json)
+    }
+
+    #[test]
+    fn rejects_invalid_options() {
+        for (json, prefix) in [
+            (r#"{"transform":{"rotate":45}}"#, "rotate only supports"),
+            (
+                r#"{"transform":{"resize":{"width":0}}}"#,
+                "resize.width must be",
+            ),
+            (
+                r#"{"transform":{"resize":{"fit":"contain"}}}"#,
+                "unknown field `fit`",
+            ),
+            (
+                r#"{"transform":{"resize":{"kernel":"mitchell"}}}"#,
+                "unknown variant `mitchell`",
+            ),
+            (
+                r#"{"transform":{"jpeg":{"mozjpeg":"yes"}}}"#,
+                "invalid type: string",
+            ),
+            (
+                r#"{"transform":{"format":"png","png":{"quality":0}}}"#,
+                "png.quality must be",
+            ),
+            (
+                r#"{"transform":{"format":"avif"}}"#,
+                "unknown variant `avif`",
+            ),
+            (
+                r#"{"transform":{"limits":{"failOn":"none"}}}"#,
+                "unknown field `failOn`",
+            ),
+            (
+                r#"{"metadata":{"limitAllocatorMemory":0}}"#,
+                "limitAllocatorMemory must be",
+            ),
+            (
+                r#"{"metadata":{"allowedInputFormats":[]}}"#,
+                "allowedInputFormats must not be empty",
+            ),
+            (
+                r#"{"metadata":{"allowedInputFormats":["bmp"]}}"#,
+                "unknown variant `bmp`",
+            ),
+            (r#"{"other":{}}"#, "unknown variant `other`"),
+        ] {
+            let err = error(json);
+            assert_eq!(err.code(), ErrorCode::InvalidOptions, "{json}");
+            assert!(err.to_string().starts_with(prefix), "{json}: {err}");
+        }
+    }
+
+    #[test]
+    fn errors_include_the_json() {
+        let json = "{\"transform\":\n{\"resize\":{\"fit\":\"contain\"}}}";
+        let message = error(json).to_string();
+        assert!(
+            message.ends_with(r#" in {"resize":{"fit":"contain"}}}"#),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn truncated_requests_are_internal() {
+        for json in ["", "{\"transform\":"] {
+            assert_eq!(error(json).code(), ErrorCode::Internal, "{json}");
         }
     }
 }

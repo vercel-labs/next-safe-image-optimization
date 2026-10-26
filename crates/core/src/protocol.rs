@@ -174,7 +174,7 @@ mod tests {
         for (request, code) in [
             (Vec::new(), ErrorCode::Internal),
             (vec![0, 0, 0, 0xFF], ErrorCode::Internal),
-            (request(b"not an image", "{}"), ErrorCode::Internal),
+            (request(b"not an image", "{}"), ErrorCode::InvalidOptions),
             (
                 request(b"not an image", r#"{"metadata":{}}"#),
                 ErrorCode::UnsupportedFormat,

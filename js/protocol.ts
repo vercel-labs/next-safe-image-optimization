@@ -12,10 +12,16 @@ import type { LimitOptions, TransformOptions } from './protocol.generated.js'
 export type { LimitOptions, ResizeOptions, TransformOptions } from './protocol.generated.js'
 export { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY } from './protocol.generated.js'
 
+/**
+ * Options as the caller passed them. The worker validates them (`crates/core/src/request.rs`), and
+ * rejects unknown fields with `ERR_INVALID_OPTIONS`.
+ */
+export type Unchecked<T> = { [K in keyof T]?: unknown }
+
 /** `Request` in `crates/core/src/request.rs`, which typeshare can't export. Exactly one is set. */
 export interface RequestOptions {
-  transform?: TransformOptions
-  metadata?: LimitOptions
+  transform?: Unchecked<TransformOptions>
+  metadata?: Unchecked<LimitOptions>
 }
 
 export interface RunOptions {
@@ -57,8 +63,20 @@ export function maxResponseBytes(limitAllocatorMemory: number): number {
   return limitAllocatorMemory + RESPONSE_OVERHEAD
 }
 
+/**
+ * Throws a `TypeError` for values that JSON can't represent, instead of letting `JSON.stringify`
+ * turn them into `null` (which means unset) or drop them. `undefined` also means unset.
+ */
 export function encodeOptions(options: RequestOptions): string {
-  return JSON.stringify(options)
+  return JSON.stringify(options, (key, value: unknown) => {
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw new TypeError(`Expected a finite number for ${key} but received ${value}`)
+    }
+    if (typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol') {
+      throw new TypeError(`Expected a JSON value for ${key} but received a ${typeof value}`)
+    }
+    return value
+  })
 }
 
 export class InvalidResponseError extends Error {}

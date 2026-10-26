@@ -1,6 +1,6 @@
 import { availableParallelism } from 'node:os'
 
-import { NativeBackend, loadBinding } from './native.js'
+import { NativeBackend, findWorker } from './native.js'
 import { InvalidResponseError, decodeResponse, encodeOptions, maxResponseBytes } from './protocol.js'
 import type { Backend, LimitOptions, RequestOptions, Response, TransformOptions, Unchecked } from './protocol.js'
 import type * as generated from './protocol.generated.js'
@@ -64,7 +64,7 @@ export interface PoolOptions {
   /**
    * `'native'` processes images in worker processes. `'wasm'` processes them in worker threads,
    * with a wasm build. Default: the `BLUNT_IMAGE_OPTIMIZATION_BACKEND` environment variable, or
-   * else `'native'`, falling back to `'wasm'` if there's no native binding for this platform.
+   * else `'native'`, falling back to `'wasm'` if there's no native worker binary for this platform.
    */
   backend?: BackendName
   /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
@@ -272,16 +272,21 @@ function createBackend(options: PoolOptions): Backend {
   if (backend === 'wasm') {
     return wasm()
   }
-  let binding
-  try {
-    binding = loadBinding()
-  } catch (error) {
+  const worker = findWorker()
+  if (worker === undefined) {
     if (backend === 'native') {
-      throw error
+      throw new Error(`There's no native worker binary for ${process.platform}-${process.arch}`)
     }
     return wasm()
   }
-  return new NativeBackend(binding, { maxProcesses: maxWorkers, idleTimeoutMs, memoryLimit })
+  return new NativeBackend({
+    workerPath: worker.path,
+    maxProcesses: maxWorkers,
+    idleTimeoutMs,
+    memoryLimit,
+    // Local builds show the worker's stderr. Installed ones discard it (rav1d logs errors there).
+    inheritStderr: worker.local,
+  })
 }
 
 /**

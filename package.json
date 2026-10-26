@@ -8,23 +8,8 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "binding.js",
-    "binding.d.ts",
     "blunt-image-optimization.wasm"
   ],
-  "napi": {
-    "binaryName": "blunt-image-optimization",
-    "targets": [
-      "x86_64-apple-darwin",
-      "aarch64-apple-darwin",
-      "x86_64-pc-windows-msvc",
-      "aarch64-pc-windows-msvc",
-      "x86_64-unknown-linux-gnu",
-      "aarch64-unknown-linux-gnu",
-      "x86_64-unknown-linux-musl",
-      "aarch64-unknown-linux-musl"
-    ]
-  },
   "engines": {
     "node": ">= 20.9.0"
   },
@@ -40,13 +25,10 @@
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
     "test:wasm": "BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm node --run test",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit",
-    "lint": "cargo fmt --check && cargo clippy --all-targets -- -D warnings && pnpm typecheck",
-    "artifacts": "napi artifacts",
-    "prepublishOnly": "napi prepublish -t npm"
+    "lint": "cargo fmt --check && cargo clippy --all-targets -- -D warnings && pnpm typecheck"
   },
   "packageManager": "pnpm@12.11.2",
   "devDependencies": {
-    "@napi-rs/cli": "^3.10.8",
     "@types/node": "^26.6.5",
     "sharp": "^0.35.5",
     "turbo": "^2.11.10",

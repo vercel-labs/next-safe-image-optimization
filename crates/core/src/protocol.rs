@@ -24,7 +24,7 @@ use crate::limits::Limits;
 use crate::pipeline;
 use crate::request::{self, Request};
 
-/// Worker exit codes, besides 0 (stdin closed). These must match `crates/shim/src/pool.rs`.
+/// Worker exit codes, besides 0 (stdin closed).
 #[typeshare]
 pub const EXIT_OUT_OF_MEMORY: i32 = 86;
 #[typeshare]

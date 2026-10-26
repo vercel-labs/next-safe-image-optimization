@@ -14,4 +14,3 @@ blunt-core = { path = "../core" }
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2.190", default-features = false }
-blunt-scm = { path = "../scm" }

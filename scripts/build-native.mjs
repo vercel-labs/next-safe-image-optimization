@@ -1,77 +1,82 @@
 #!/usr/bin/env node
-// Builds the native binding (`crates/shim`, with `napi build`) and the worker binary
-// (`crates/worker`), and copies them to the package root. napi runs in a scratch directory, so that
-// it only installs the files we want.
+// Builds the worker binary (`crates/worker`), and copies it to the package root as
+// `blunt-image-optimization-worker.<platform>`, where `js/native.ts` looks for it. The platform is
+// Node's (like `linux-x64-gnu`, or `darwin-arm64`).
 //
-// Usage: node scripts/build-native.mjs [--release] [--target <triple>] [-x] [extra napi build args]
+// Usage: node scripts/build-native.mjs [--release] [--target <triple>] [-x] [extra cargo args]
+//
+// `-x` cross-compiles with cargo-zigbuild.
 
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const root = join(import.meta.dirname, '..')
-// Relative to `root`, because the command line isn't escaped on Windows.
-const outputDir = 'target/napi-output'
+/** The oldest glibc that official Node.js binaries support. */
+const GLIBC_VERSION = '2.28'
 
 function run(command, args) {
-  const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+  const result = spawnSync(command, args, { cwd: root, stdio: 'inherit' })
   if (result.status !== 0) {
     process.exit(result.status ?? 1)
   }
 }
 
-const args = process.argv.slice(2)
-const release = args.includes('--release') || args.includes('-r')
-const targetIndex = args.findIndex((arg) => arg === '--target' || arg === '-t')
-const target = targetIndex === -1 ? undefined : args[targetIndex + 1]
-const cross = args.includes('-x') || args.includes('--cross-compile')
-
-const dir = join(root, outputDir)
-// Otherwise outputs from earlier builds (e.g. for other targets) would be installed too.
-rmSync(dir, { recursive: true, force: true })
-mkdirSync(dir, { recursive: true })
-run('pnpm', [
-  'exec',
-  'napi',
-  'build',
-  '--platform',
-  '--no-const-enum',
-  '--manifest-path',
-  'crates/shim/Cargo.toml',
-  '--package-json-path',
-  'package.json',
-  '--output-dir',
-  outputDir,
-  '--js',
-  'binding.js',
-  '--dts',
-  'binding.d.ts',
-  ...args,
-])
-
-// The binding is named like `blunt-image-optimization.linux-x64-gnu.node`. The worker uses the same
-// platform name.
-const binding = readdirSync(dir).find((file) => file.endsWith('.node'))
-if (binding === undefined) {
-  console.error('napi build produced no .node file')
-  process.exit(1)
+/** Like `x86_64-unknown-linux-gnu` → `linux-x64-gnu`. */
+function platform(triple) {
+  const [arch, , os, abi] = triple.split('-')
+  const nodeArch = { x86_64: 'x64', aarch64: 'arm64' }[arch]
+  const nodeOs = { darwin: 'darwin', windows: 'win32', linux: 'linux' }[os]
+  if (nodeArch === undefined || nodeOs === undefined) {
+    console.error(`unsupported target: ${triple}`)
+    process.exit(1)
+  }
+  return abi === undefined ? `${nodeOs}-${nodeArch}` : `${nodeOs}-${nodeArch}-${abi}`
 }
-const platform = binding.split('.')[1]
+
+function hostTriple() {
+  const result = spawnSync('rustc', ['-vV'], { cwd: root, encoding: 'utf8' })
+  const host = result.stdout?.match(/^host: (.+)$/m)?.[1]
+  if (result.status !== 0 || host === undefined) {
+    console.error('failed to get the host target from `rustc -vV`')
+    process.exit(1)
+  }
+  return host
+}
+
+const args = process.argv.slice(2)
+let release = false
+let cross = false
+let target
+const extra = []
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i]
+  if (arg === '--release' || arg === '-r') {
+    release = true
+  } else if (arg === '-x' || arg === '--cross-compile') {
+    cross = true
+  } else if (arg === '--target' || arg === '-t') {
+    target = args[++i]
+  } else {
+    extra.push(arg)
+  }
+}
 
 // Panics abort the worker (see the `worker` profiles in Cargo.toml).
 const profile = release ? 'worker' : 'worker-dev'
+// cargo-zigbuild takes the glibc version as a suffix (otherwise, it's zig's default), but its output
+// directory doesn't include it.
+const cargoTarget = cross && target?.endsWith('-gnu') ? `${target}.${GLIBC_VERSION}` : target
 run('cargo', [
   cross ? 'zigbuild' : 'build',
   '-p',
   'blunt-worker',
   '--profile',
   profile,
-  ...(target ? ['--target', target] : []),
+  ...(cargoTarget ? ['--target', cargoTarget] : []),
+  ...extra,
 ])
-const exe = platform.startsWith('win32') ? '.exe' : ''
+const name = platform(target ?? hostTriple())
+const exe = name.startsWith('win32') ? '.exe' : ''
 const worker = join(root, 'target', ...(target ? [target] : []), profile, `blunt-image-optimization-worker${exe}`)
-
-for (const file of ['binding.js', 'binding.d.ts', binding]) {
-  copyFileSync(join(dir, file), join(root, file))
-}
-copyFileSync(worker, join(root, `blunt-image-optimization-worker.${platform}${exe}`))
+copyFileSync(worker, join(root, `blunt-image-optimization-worker.${name}${exe}`))

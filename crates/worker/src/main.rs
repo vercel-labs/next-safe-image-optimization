@@ -1,7 +1,8 @@
-//! The worker process. The shim (`crates/shim`) spawns it with the arguments `<version> <parent
-//! pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for stdin and stdout. On
-//! unix, the shim instead spawns it once as a fork server (`--fork-server`), which forks workers
-//! with the same setup (see `fork_server.rs`).
+//! The worker process. The JS wrapper (`js/native.ts`) spawns it with the arguments `<version>
+//! <parent pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for stdin and
+//! stdout. On unix, it instead spawns it once as a fork server (`--fork-server <socket>`), which
+//! forks workers with the same setup, except that stdin and stdout are a Unix socket (see
+//! `fork_server.rs`).
 //!
 //! Requests arrive on stdin as `[u64 LE length][request]`, and responses are written to stdout
 //! (see `blunt_core::protocol`). The worker handles one request at a time. It exits as soon as
@@ -32,7 +33,13 @@ fn main() {
     };
     let parent = number().and_then(|pid| u32::try_from(pid).ok());
     let memory_limit = number().unwrap_or(0);
-    let fork_server = args.next().as_deref() == Some(OsStr::new("--fork-server"));
+    let fork_server = match args.next() {
+        Some(arg) if arg == "--fork-server" => Some(
+            args.next()
+                .unwrap_or_else(|| exit_immediately(EXIT_INVALID_FRAME)),
+        ),
+        _ => None,
+    };
 
     // Forked workers inherit the limit.
     #[cfg(target_os = "linux")]
@@ -48,9 +55,9 @@ fn main() {
     let _ = parent;
 
     #[cfg(unix)]
-    if fork_server {
+    if let Some(socket) = fork_server {
         let server = std::process::id();
-        fork_server::serve();
+        fork_server::serve(&socket);
         // Now in a forked worker, which doesn't inherit `PR_SET_PDEATHSIG`.
         #[cfg(target_os = "linux")]
         sandbox::exit_with_parent(Some(server));
@@ -159,8 +166,8 @@ fn take_stdout() -> io::Stdout {
 #[cfg(target_os = "linux")]
 mod sandbox {
     /// Asks the kernel to kill us when the parent exits. Strictly, this fires when the parent
-    /// *thread* that spawned us exits, but the shim spawns each worker (or fork server) from a
-    /// thread that lives at least as long as the worker, and the fork server is single-threaded.
+    /// *thread* that spawned us exits: for Node, the JS thread that started the worker (or fork
+    /// server), which also owns its pipes. The fork server is single-threaded.
     pub fn exit_with_parent(parent: Option<u32>) {
         unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) };
         // In case the parent exited before `prctl`.
@@ -279,5 +286,19 @@ mod sandbox {
             };
             if result != 0 { Err(()) } else { Ok(()) }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `js/native.ts` passes `package.json`'s version, which has to match.
+    #[test]
+    fn version_matches_package_json() {
+        let package = include_str!("../../../package.json");
+        let version = format!(r#""version": "{}""#, env!("CARGO_PKG_VERSION"));
+        assert!(
+            package.contains(&version),
+            "package.json doesn't have {version}"
+        );
     }
 }

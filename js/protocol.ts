@@ -10,7 +10,12 @@ import * as generated from './protocol.generated.js'
 import type { LimitOptions, TransformOptions } from './protocol.generated.js'
 
 export type { LimitOptions, ResizeOptions, TransformOptions } from './protocol.generated.js'
-export { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY } from './protocol.generated.js'
+export {
+  EXIT_MEMORY_LIMIT,
+  EXIT_OUT_OF_MEMORY,
+  EXIT_SANDBOX_FAILED,
+  EXIT_VERSION_MISMATCH,
+} from './protocol.generated.js'
 
 /**
  * Options as the caller passed them. The worker validates them (`crates/core/src/request.rs`), and

@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, test } from 'node:test'
 
 import { Pool, blunt, defaultPool } from '../dist/index.js'
+import { NativeBackend } from '../dist/native.js'
+import type { RunResult } from '../dist/protocol.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
 const backend = defaultPool().backend
@@ -139,24 +140,20 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
       process.kill(pid, 'SIGKILL')
     }
     process.kill(server!.pid, 'SIGKILL')
-    // The idle worker is gone.
-    await assertRejectsWithCode(blunt(input, { pool }).png().toBuffer(), 'ERR_WORKER_CRASHED')
+    // The idle worker is gone too, which the pool may not have noticed yet.
+    await blunt(input, { pool })
+      .png()
+      .toBuffer()
+      .catch((error: { code?: string }) => assert.equal(error.code, 'ERR_WORKER_CRASHED'))
     await blunt(input, { pool }).png().toBuffer()
+    const replaced = servers().filter(({ pid }) => !before.has(pid) && pid !== server!.pid)
+    assert.equal(replaced.length, 1)
   })
 })
 
-// The native binding's handling of misbehaving workers, with shell scripts standing in for the
+// The native backend's handling of misbehaving workers, with shell scripts standing in for the
 // worker binary (or the fork server, which they fail to start).
 describe('native worker failures', { skip: backend !== 'native' || process.platform === 'win32' }, () => {
-  interface RunResult {
-    response?: Buffer
-    error?: { code: string; message: string }
-  }
-  const binding = createRequire(import.meta.url)('../binding.js') as {
-    WorkerPool: new (options: object) => {
-      run(input: Uint8Array, options: string, runOptions: object): Promise<RunResult>
-    }
-  }
   const dir = mkdtempSync(join(tmpdir(), 'blunt-test-'))
   let count = 0
   function worker(script: string): string {
@@ -166,7 +163,7 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     return path
   }
   function run(workerPath: string, timeoutMs?: number, forkServer = false): Promise<RunResult> {
-    const pool = new binding.WorkerPool({ workerPath, maxProcesses: 1, idleTimeoutMs: 1000, memoryLimit: 0, forkServer })
+    const pool = new NativeBackend({ workerPath, maxProcesses: 1, idleTimeoutMs: 1000, memoryLimit: 0, forkServer })
     return pool.run(Buffer.alloc(16), '{}', { timeoutMs, maxResponseBytes: 1024 })
   }
   async function assertFails(result: Promise<RunResult>, code: string) {
@@ -201,8 +198,8 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     await assertFails(fork('exit 88'), 'ERR_WORKER_SPAWN')
     await assertFails(fork('exit 0'), 'ERR_WORKER_CRASHED')
     await assertFails(fork('kill -9 $$'), 'ERR_WORKER_CRASHED')
-    // Closes the socket, but keeps running.
-    await assertFails(fork('exec sleep 10 <&-'), 'ERR_WORKER_CRASHED')
+    // Closes its stdin and stdout, but keeps running.
+    await assertFails(fork('exec sleep 10 <&- >&-'), 'ERR_WORKER_CRASHED')
   })
 
   test('a worker that never responds is killed', async () => {
@@ -215,6 +212,7 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     const huge = String.raw`printf '\377\377\377\377\377\377\377\377'; exec sleep 10`
     await assertFails(run(worker(huge)), 'ERR_WORKER_CRASHED')
     await assertFails(run(worker(String.raw`printf '\003\0\0\0\0\0\0\0a'`)), 'ERR_WORKER_CRASHED')
+    await assertFails(run(worker(String.raw`printf '\001\0\0\0\0\0\0\0ab'; exec sleep 10`)), 'ERR_WORKER_CRASHED')
   })
 
   test('the worker gets an empty environment', async () => {

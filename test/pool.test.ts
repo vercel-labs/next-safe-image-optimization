@@ -239,8 +239,9 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     await assertFails(fork('exit 88'), 'ERR_WORKER_SPAWN')
     await assertFails(fork('exit 0'), 'ERR_WORKER_CRASHED')
     await assertFails(fork('kill -9 $$'), 'ERR_WORKER_CRASHED')
-    // Closes its IPC channel, but keeps running.
-    await assertFails(fork('exec sleep 10 3<&-'), 'ERR_WORKER_CRASHED')
+    // Close the IPC channel but keep running. Redirecting on `exec sleep` leaves a duplicate
+    // of fd 3 open in macOS's shell, so close it in a separate command.
+    await assertFails(fork('exec 3<&-; exec sleep 10'), 'ERR_WORKER_CRASHED')
   })
 
   test('a worker that never responds is killed', async () => {

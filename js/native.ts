@@ -9,7 +9,6 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { type Server, type Socket, createServer } from 'node:net'
 import { constants, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { getSystemErrorName } from 'node:util'
 
 import { isMusl } from './musl.js'
 import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY, EXIT_SANDBOX_FAILED, EXIT_VERSION_MISMATCH } from './protocol.js'
@@ -220,7 +219,8 @@ class ForkedWorker implements WorkerProcess {
   }
 }
 
-const TOKEN_BYTES = 16
+/** 16 random bytes, in hex. */
+const TOKEN_LENGTH = 32
 
 /**
  * Forked workers connect to this, and identify themselves with a random token, which is only used
@@ -285,18 +285,17 @@ class Listener {
   }
 
   /** Waits for the worker with `token` to connect. Resolves with `undefined` after a timeout. */
-  expect(token: Buffer): { connected: Promise<Socket | undefined>; cancel: () => void } {
-    const key = token.toString('hex')
+  expect(token: string): { connected: Promise<Socket | undefined>; cancel: () => void } {
     let done!: (socket: Socket | undefined) => void
     const connected = new Promise<Socket | undefined>((resolve) => {
       const timer = setTimeout(() => done(undefined), SERVER_TIMEOUT_MS)
       done = (socket) => {
         clearTimeout(timer)
-        this.#pending.delete(key)
+        this.#pending.delete(token)
         resolve(socket)
       }
     })
-    this.#pending.set(key, done)
+    this.#pending.set(token, done)
     return { connected, cancel: () => done(undefined) }
   }
 
@@ -309,20 +308,20 @@ class Listener {
     const onData = (chunk: Buffer) => {
       chunks.push(chunk)
       length += chunk.length
-      if (length < TOKEN_BYTES) {
+      if (length < TOKEN_LENGTH) {
         return
       }
       socket.off('data', onData)
       socket.pause()
       socket.setTimeout(0)
       const data = Buffer.concat(chunks)
-      const done = this.#pending.get(data.toString('hex', 0, TOKEN_BYTES))
+      const done = this.#pending.get(data.toString('latin1', 0, TOKEN_LENGTH))
       if (done === undefined) {
         socket.destroy()
         return
       }
-      if (data.length > TOKEN_BYTES) {
-        socket.unshift(data.subarray(TOKEN_BYTES))
+      if (data.length > TOKEN_LENGTH) {
+        socket.unshift(data.subarray(TOKEN_LENGTH))
       }
       done(socket)
     }
@@ -330,13 +329,14 @@ class Listener {
   }
 }
 
-// The fork server's protocol. Keep in sync with `crates/worker/src/fork_server.rs`.
-const SPAWN = 0
-const KILL = 1
-const MESSAGE_BYTES = 1 + 8 + TOKEN_BYTES
-const SPAWNED = 0
-const EXITED = 1
-const REPLY_BYTES = 1 + 8 + 4
+// The fork server's messages, each `[u32 LE length][JSON]`. Keep in sync with
+// `crates/worker/src/fork_server.rs`. The server is trusted, so replies aren't validated.
+type Message = { type: 'spawn'; id: number; token: string } | { type: 'kill'; id: number }
+type Reply =
+  | { type: 'spawned'; id: number; pid: number }
+  | { type: 'spawnFailed'; id: number; error: string }
+  | { type: 'exited'; id: number; code: number | null; signal: number | null }
+type SpawnReply = Extract<Reply, { type: 'spawned' | 'spawnFailed' }>
 
 interface Forked {
   resolve: (exit: WorkerError) => void
@@ -354,8 +354,8 @@ class ForkServer {
   #started: Started
   #listener: Listener
   #nextId = 0
-  /** Waiting for `SPAWNED`, which resolves with the pid or negated errno. */
-  #spawns = new Map<number, (value: number | undefined) => void>()
+  /** Waiting for `spawned` or `spawnFailed`. */
+  #spawns = new Map<number, (reply: SpawnReply | undefined) => void>()
   /** Forked, and not yet reaped. */
   #workers = new Map<number, Forked>()
   #replies = Buffer.alloc(0)
@@ -397,26 +397,25 @@ class ForkServer {
       return { failure: this.#failure, serverExited: true }
     }
     const id = this.#nextId++
-    const token = randomBytes(TOKEN_BYTES)
+    const token = randomBytes(TOKEN_LENGTH / 2).toString('hex')
     const { connected, cancel } = this.#listener.expect(token)
     const exited = new Promise<WorkerError>((resolve) => this.#workers.set(id, { resolve }))
-    const pid = await new Promise<number | undefined>((resolve) => {
+    const reply = await new Promise<SpawnReply | undefined>((resolve) => {
       const timer = setTimeout(() => this.#abandon(`the fork server didn't reply in ${SERVER_TIMEOUT_MS}ms`), SERVER_TIMEOUT_MS)
-      this.#spawns.set(id, (value) => {
+      this.#spawns.set(id, (reply) => {
         clearTimeout(timer)
         this.#spawns.delete(id)
-        resolve(value)
+        resolve(reply)
       })
-      this.#send(SPAWN, id, token)
+      this.#send({ type: 'spawn', id, token })
     })
-    if (pid === undefined || pid <= 0) {
+    if (reply?.type !== 'spawned') {
       cancel()
       this.#workers.delete(id)
-      if (pid === undefined) {
+      if (reply === undefined) {
         return { failure: this.#failure, serverExited: true }
       }
-      const error = pid === 0 ? 'unknown error' : getSystemErrorName(pid)
-      return { failure: failure('ERR_WORKER_SPAWN', `failed to fork a worker: ${error}`), serverExited: false }
+      return { failure: failure('ERR_WORKER_SPAWN', `the fork server ${reply.error}`), serverExited: false }
     }
     const socket = await connected
     if (socket === undefined) {
@@ -432,43 +431,45 @@ class ForkServer {
     if (worker === undefined || worker.timer !== undefined) {
       return
     }
-    this.#send(KILL, id)
+    this.#send({ type: 'kill', id })
     // If the server doesn't reap it, the server is stuck, so kill the server too. On Linux, that
     // also kills its workers (`PR_SET_PDEATHSIG`).
     worker.timer = setTimeout(() => this.#abandon(`the fork server didn't reap a worker in ${SERVER_TIMEOUT_MS}ms`), SERVER_TIMEOUT_MS)
   }
 
-  #send(op: number, id: number, token?: Buffer) {
+  #send(message: Message) {
     if (this.#exited) {
       return
     }
-    const message = Buffer.alloc(MESSAGE_BYTES)
-    message[0] = op
-    message.writeBigUInt64LE(BigInt(id), 1)
-    token?.copy(message, 9)
-    this.#started.stdin.write(message)
+    const json = Buffer.from(JSON.stringify(message))
+    const length = Buffer.alloc(4)
+    length.writeUInt32LE(json.length)
+    this.#started.stdin.write(Buffer.concat([length, json]))
   }
 
   #onReplies(chunk: Buffer) {
     this.#replies = Buffer.concat([this.#replies, chunk])
     let offset = 0
-    for (; offset + REPLY_BYTES <= this.#replies.length; offset += REPLY_BYTES) {
-      const kind = this.#replies[offset]
-      const id = Number(this.#replies.readBigUInt64LE(offset + 1))
-      const value = this.#replies.readInt32LE(offset + 9)
-      if (kind === SPAWNED) {
-        this.#spawns.get(id)?.(value)
-      } else if (kind === EXITED) {
-        const worker = this.#workers.get(id)
-        this.#workers.delete(id)
-        clearTimeout(worker?.timer)
-        worker?.resolve(value >= 0 ? exitFailure(value, null) : exitFailure(null, signalName(-value)))
-      } else {
-        this.#abandon('the fork server sent an invalid reply')
-        return
+    while (offset + 4 <= this.#replies.length) {
+      const end = offset + 4 + this.#replies.readUInt32LE(offset)
+      if (end > this.#replies.length) {
+        break
       }
+      this.#onReply(JSON.parse(this.#replies.toString('utf8', offset + 4, end)) as Reply)
+      offset = end
     }
     this.#replies = this.#replies.subarray(offset)
+  }
+
+  #onReply(reply: Reply) {
+    if (reply.type === 'exited') {
+      const worker = this.#workers.get(reply.id)
+      this.#workers.delete(reply.id)
+      clearTimeout(worker?.timer)
+      worker?.resolve(exitFailure(reply.code, reply.signal === null ? null : signalName(reply.signal)))
+    } else {
+      this.#spawns.get(reply.id)?.(reply)
+    }
   }
 
   /** Kills the server. Once it exits, the pool starts another. */

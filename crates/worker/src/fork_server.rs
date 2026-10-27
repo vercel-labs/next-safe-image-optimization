@@ -8,18 +8,17 @@
 //! stdin and stdout are a connection to it: the server connects, sends the worker's token (so that
 //! the parent knows which worker it is), and forks.
 //!
-//! The parent sends `[u8 op][u64 LE id][16-byte token]` messages on stdin (keep in sync with
-//! `js/native.ts`):
+//! Messages in both directions are `[u32 LE length][JSON]` (keep in sync with `js/native.ts`). The
+//! parent sends `Message`s on stdin:
 //!
-//! - `SPAWN`: connects with the token, and forks a worker. The server replies `SPAWNED` with the
-//!   worker's pid, or a negated errno if connecting or forking failed.
-//! - `KILL`: kills the worker, unless it already exited. The token is unused. Ids aren't reused,
-//!   and the server forgets an id when it reaps the worker, so a late `KILL` can't hit a reused pid.
+//! - `spawn`: connects with the token, and forks a worker. The server replies `spawned` with the
+//!   worker's pid, or `spawnFailed` if connecting or forking failed.
+//! - `kill`: kills the worker, unless it already exited. Ids aren't reused, and the server forgets
+//!   an id when it reaps the worker, so a late `kill` can't hit a reused pid.
 //!
-//! Replies on stdout are `[u8 kind][u64 LE id][i32 LE value]`. Only a parent can reap a process, so
-//! after reaping a worker, the server replies `EXITED` with its exit code, or its negated signal
-//! number. Workers close every file descriptor the server holds, so they can't ask it to do
-//! anything.
+//! It replies with `Reply`s on stdout. Only a parent can reap a process, so after reaping a worker,
+//! the server replies `exited` with its exit code or signal number. Workers close every file
+//! descriptor the server holds, so they can't ask it to do anything.
 
 use std::ffi::OsStr;
 use std::fs::File;
@@ -32,24 +31,43 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use blunt_core::exit_immediately;
 use blunt_core::protocol::{EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED};
-
-const SPAWN: u8 = 0;
-const KILL: u8 = 1;
-const TOKEN_LEN: usize = 16;
-const MESSAGE_LEN: usize = 1 + 8 + TOKEN_LEN;
-
-const SPAWNED: u8 = 0;
-const EXITED: u8 = 1;
-const REPLY_LEN: usize = 1 + 8 + 4;
+use serde::{Deserialize, Serialize};
 
 struct Worker {
     id: u64,
     pid: libc::pid_t,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum Message {
-    Spawn { id: u64, token: [u8; TOKEN_LEN] },
-    Kill { id: u64 },
+    /// The worker sends `token` when it connects.
+    Spawn {
+        id: u64,
+        token: String,
+    },
+    Kill {
+        id: u64,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum Reply {
+    Spawned {
+        id: u64,
+        pid: libc::pid_t,
+    },
+    SpawnFailed {
+        id: u64,
+        error: String,
+    },
+    /// Exactly one of `code` and `signal` is set.
+    Exited {
+        id: u64,
+        code: Option<i32>,
+        signal: Option<i32>,
+    },
 }
 
 /// The write end of a pipe that wakes up the loop when a worker exits.
@@ -103,10 +121,13 @@ pub fn serve(socket: &OsStr) {
                 }
             }
             Some(Message::Spawn { id, token }) => {
-                let connection = match connect(socket, &token) {
+                let connection = match connect(socket, token.as_bytes()) {
                     Ok(connection) => connection,
                     Err(err) => {
-                        reply(SPAWNED, id, -err.raw_os_error().unwrap_or(libc::EIO));
+                        reply(&Reply::SpawnFailed {
+                            id,
+                            error: format!("failed to connect: {err}"),
+                        });
                         continue;
                     }
                 };
@@ -125,11 +146,14 @@ pub fn serve(socket: &OsStr) {
                         return;
                     }
                     -1 => {
-                        let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
-                        reply(SPAWNED, id, -errno);
+                        let err = io::Error::last_os_error();
+                        reply(&Reply::SpawnFailed {
+                            id,
+                            error: format!("failed to fork: {err}"),
+                        });
                     }
                     pid => {
-                        reply(SPAWNED, id, pid);
+                        reply(&Reply::Spawned { id, pid });
                         workers.push(Worker { id, pid });
                     }
                 }
@@ -147,36 +171,38 @@ fn reap(workers: &mut Vec<Worker>) {
             return;
         }
         if let Some(i) = workers.iter().position(|worker| worker.pid == pid) {
-            let value = if libc::WIFSIGNALED(status) {
-                -libc::WTERMSIG(status)
+            let id = workers.swap_remove(i).id;
+            reply(&if libc::WIFSIGNALED(status) {
+                Reply::Exited {
+                    id,
+                    code: None,
+                    signal: Some(libc::WTERMSIG(status)),
+                }
             } else {
-                libc::WEXITSTATUS(status)
-            };
-            reply(EXITED, workers.swap_remove(i).id, value);
+                Reply::Exited {
+                    id,
+                    code: Some(libc::WEXITSTATUS(status)),
+                    signal: None,
+                }
+            });
         }
     }
 }
 
 /// Returns `None` if stdin closed. The parent is trusted, so an invalid message is a bug.
 fn receive() -> Option<Message> {
-    let mut message = [0u8; MESSAGE_LEN];
-    fd(libc::STDIN_FILENO).read_exact(&mut message).ok()?;
-    let id = u64::from_le_bytes(message[1..9].try_into().expect("8 bytes"));
-    Some(match message[0] {
-        SPAWN => Message::Spawn {
-            id,
-            token: message[9..].try_into().expect("a token"),
-        },
-        KILL => Message::Kill { id },
-        _ => exit_immediately(EXIT_INVALID_FRAME),
-    })
+    let mut stdin = fd(libc::STDIN_FILENO);
+    let mut len = [0u8; 4];
+    stdin.read_exact(&mut len).ok()?;
+    let mut message = vec![0u8; u32::from_le_bytes(len) as usize];
+    stdin.read_exact(&mut message).ok()?;
+    Some(serde_json::from_slice(&message).unwrap_or_else(|_| exit_immediately(EXIT_INVALID_FRAME)))
 }
 
-fn reply(kind: u8, id: u64, value: i32) {
-    let mut message = [0u8; REPLY_LEN];
-    message[0] = kind;
-    message[1..9].copy_from_slice(&id.to_le_bytes());
-    message[9..].copy_from_slice(&value.to_le_bytes());
+fn reply(reply: &Reply) {
+    let json = serde_json::to_vec(reply).expect("replies serialize");
+    let mut message = (json.len() as u32).to_le_bytes().to_vec();
+    message.extend_from_slice(&json);
     if fd(libc::STDOUT_FILENO).write_all(&message).is_err() {
         // The parent is gone.
         exit_immediately(0);

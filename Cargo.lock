@@ -142,6 +142,8 @@ version = "0.1.0"
 dependencies = [
  "blunt-core",
  "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

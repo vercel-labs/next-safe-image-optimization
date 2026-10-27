@@ -80,6 +80,14 @@ export interface PoolOptions {
    * `0` removes the limit (not recommended). Default: 768 MiB.
    */
   limitProcessMemoryBytes?: number | false
+  /**
+   * Fork native workers from a fork server (one per pool), instead of spawning each one, which
+   * makes starting a worker faster. Forked workers share the fork server's address space layout
+   * (ASLR), and the fork server passes their sockets to Node over its IPC channel, which Node
+   * doesn't officially support with a process that isn't Node (though Node, Bun, and Deno have used
+   * the same protocol for years). Ignored on Windows and for `'wasm'`. Default: `true`.
+   */
+  forkServer?: boolean
 }
 
 /**
@@ -262,6 +270,10 @@ function createBackend(options: PoolOptions): Backend {
       : (optional(options.limitProcessMemoryBytes, (v) =>
           checkInteger('limitProcessMemoryBytes', v, 0),
         ) ?? DEFAULT_LIMIT_PROCESS_MEMORY)
+  const forkServer: unknown = options.forkServer ?? true
+  if (typeof forkServer !== 'boolean') {
+    throw invalid('forkServer', 'boolean', forkServer)
+  }
   const backend = options.backend ?? process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND
   if (backend !== undefined) {
     checkOneOf('backend', backend, BACKENDS)
@@ -284,6 +296,7 @@ function createBackend(options: PoolOptions): Backend {
     maxProcesses: maxWorkers,
     idleTimeoutMs,
     memoryLimit,
+    forkServer,
     // Local builds show the worker's stderr. Installed ones discard it (rav1d logs errors there).
     inheritStderr: worker.local,
   })

@@ -39,6 +39,7 @@ describe('pool', () => {
       new Pool({ idleTimeoutMs })
     }
     assert.throws(() => new Pool({ backend: 'other' as never }), TypeError)
+    assert.throws(() => new Pool({ forkServer: 'yes' as never }), TypeError)
     for (const ms of [-1, -0.5, NaN, undefined, '10']) {
       assert.throws(() => defaultPool().prepare(Buffer.alloc(1)).timeoutMs(ms as never), TypeError)
     }
@@ -175,6 +176,19 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
     await pool.prepare(input).png().toBuffer()
     const replaced = servers().filter(({ pid }) => !before.has(pid) && pid !== server!.pid)
     assert.equal(replaced.length, 1)
+  })
+
+  // Last, because the first test checks that nothing is spawned directly.
+  test('forkServer: false spawns each worker', async () => {
+    const spawned = () =>
+      processes().filter(({ ppid, args }) => ppid === process.pid && args.includes('blunt-image-optimization-worker'))
+    const before = new Set(spawned().map(({ pid }) => pid))
+    const pool = new Pool({ concurrency: 2, forkServer: false })
+    const input = await fromRaw(pattern(64, 64)).png().toBuffer()
+    await Promise.all([pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()])
+    const added = spawned().filter(({ pid }) => !before.has(pid))
+    assert.equal(added.length, 2)
+    assert.ok(added.every(({ args }) => !args.includes('--fork-server')))
   })
 })
 

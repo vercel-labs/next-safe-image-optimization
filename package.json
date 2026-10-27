@@ -21,6 +21,7 @@
     "build:wasm": "node scripts/build-wasm.mjs",
     "build:wasm:release": "node scripts/build-wasm.mjs --release",
     "build:js": "tsc -p tsconfig.json",
+    "build:test": "tsc -p test/tsconfig.json",
     "generate": "typeshare crates/core --lang=typescript --output-file=js/protocol.generated.ts",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
     "test:wasm": "BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm node --run test",

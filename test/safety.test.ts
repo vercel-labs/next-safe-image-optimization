@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { crc32, deflateSync } from 'node:zlib'
-
-import sharp from 'sharp'
+import { deflateSync } from 'node:zlib'
 
 import { BluntError, defaultPool } from '../dist/index.js'
 import { MAX_JSON_BYTES } from '../dist/protocol.generated.js'
 import { InvalidResponseError, decodeResponse } from '../dist/protocol.js'
-import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
+import { assertRejectsWithCode, crc32, fromRaw, pattern, sharp } from './helpers.ts'
 
 const pool = defaultPool()
 

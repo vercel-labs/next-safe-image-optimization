@@ -3,13 +3,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, test } from 'node:test'
-import { crc32, gzipSync } from 'node:zlib'
-
-import sharp from 'sharp'
+import { gzipSync } from 'node:zlib'
 
 import { defaultPool } from '../dist/index.js'
 import type { OutputFormat } from '../dist/index.js'
-import { assertRejectsWithCode, assertSimilar, formatOf, fromRaw, pattern } from './helpers.ts'
+import { assertRejectsWithCode, assertSimilar, crc32, formatOf, fromRaw, pattern, sharp } from './helpers.ts'
 
 const pool = defaultPool()
 const rgb = pattern(96, 64)

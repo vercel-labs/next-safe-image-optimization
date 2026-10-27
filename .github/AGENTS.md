@@ -47,7 +47,7 @@ Prefer GitHub-provided (`actions/*`) and Vercel-owned actions. For third-party a
 - Use pnpm, not npm. Add the CLI to `devDependencies` (root `package.json` for CI-only tooling).
 - Use `pnpm add -D` over directly modifying `package.json`. Let pnpm figure out the latest version number.
 - `pnpm dlx` does not pin transitive deps; don't rely on it.
-- Bootstrap pnpm via corepack so it picks up `packageManager` from the root `package.json`.
+- Install pnpm with `npm install --global pnpm@<version>`, not corepack (Node.js 25+ doesn't bundle it). pnpm switches itself to the `packageManager` version in the root `package.json`, so keep the two in sync to avoid a second download.
 
 ## Downloading binaries (e.g. GitHub Releases)
 

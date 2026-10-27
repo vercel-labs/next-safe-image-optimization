@@ -1,6 +1,7 @@
 /target
 /node_modules
 /dist
+/test/*.js
 /blunt-image-optimization-worker.*
 *.wasm
 *.tgz

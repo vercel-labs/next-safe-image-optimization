@@ -21,6 +21,12 @@
     "build:js": {
       "inputs": ["js/**", "tsconfig.json"],
       "outputs": ["dist/**"]
+    },
+    // Compiles the tests in place (for Node.js 20, which can't strip types), against dist/*.d.ts.
+    "build:test": {
+      "dependsOn": ["build:js"],
+      "inputs": ["test/**/*.ts", "test/tsconfig.json", "test/package.json"],
+      "outputs": ["test/*.js"]
     }
   }
 }

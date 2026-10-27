@@ -55,7 +55,7 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 
 ## Development
 
-Requires Rust (version pinned in `rust-toolchain.toml`), Node.js 24, and pnpm (via corepack).
+Requires Rust (version pinned in `rust-toolchain.toml`), Node.js 24, and pnpm 12 (`npm install --global pnpm`, which switches itself to the version in `package.json`).
 
 ```sh
 pnpm install

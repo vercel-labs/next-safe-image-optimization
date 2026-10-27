@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { Pool, defaultPool } from '../dist/index.js'
 import { NativeBackend } from '../dist/native.js'
@@ -105,7 +106,7 @@ describe('pool', () => {
       new Pool({ idleTimeoutMs: 60000 }).prepare(png).toBuffer().then(() => console.log('done'))
     `
     const start = performance.now()
-    const child = spawnSync(process.execPath, ['-e', script], { cwd: join(import.meta.dirname, '..'), timeout: 30_000 })
+    const child = spawnSync(process.execPath, ['-e', script], { cwd: fileURLToPath(new URL('..', import.meta.url)), timeout: 30_000 })
     assert.equal(child.stdout.toString().trim(), 'done', child.stderr.toString())
     assert.equal(child.status, 0)
     assert.ok(performance.now() - start < 20_000)

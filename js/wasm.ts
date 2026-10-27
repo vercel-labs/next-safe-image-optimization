@@ -13,6 +13,7 @@ import type { WasmRequest, WasmWorkerData, WasmWorkerMessage } from './wasm-work
 
 export interface WasmOptions {
   maxWorkers: number
+  /** Over `MAX_TIMEOUT_MS` (like `Infinity`), idle workers never exit. */
   idleTimeoutMs: number
   /** The maximum size of each instance's memory, or 0 for the most possible. */
   memoryLimit: number
@@ -167,8 +168,10 @@ export class WasmBackend implements Backend {
     this.#idle.push(slot)
     // Idle workers don't keep the process alive.
     slot.worker.unref()
-    slot.timer = setTimeout(() => this.#discard(slot), this.#options.idleTimeoutMs)
-    slot.timer.unref()
+    if (this.#options.idleTimeoutMs <= MAX_TIMEOUT_MS) {
+      slot.timer = setTimeout(() => this.#discard(slot), this.#options.idleTimeoutMs)
+      slot.timer.unref()
+    }
   }
 
   #discard(slot: Slot) {

@@ -67,7 +67,10 @@ export interface PoolOptions {
   backend?: BackendName
   /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
   concurrency?: number
-  /** Milliseconds before an idle worker exits. Default: 10000. */
+  /**
+   * Milliseconds before an idle worker exits. 0 exits as soon as it's idle, and `Infinity` never
+   * does. Idle workers don't keep the process alive either way. Default: 10000.
+   */
   idleTimeoutMs?: number
   /**
    * The maximum memory of each worker in bytes, enforced by the OS: `RLIMIT_DATA` on Linux, and the
@@ -192,9 +195,17 @@ function invalid(name: string, expected: string, value: unknown): TypeError {
   return new TypeError(`Expected ${expected} for ${name} but received ${String(value)} of type ${typeof value}`)
 }
 
-function checkInteger(name: string, value: unknown, min: number, max = Infinity): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
-    throw invalid(name, max === Infinity ? `integer of at least ${min}` : `integer between ${min} and ${max}`, value)
+function checkInteger(name: string, value: unknown, min: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min) {
+    throw invalid(name, `integer of at least ${min}`, value)
+  }
+  return value
+}
+
+/** Any number, not just integers: these are only used by JS timers. */
+function checkMs(name: string, value: unknown): number {
+  if (typeof value !== 'number' || !(value >= 0)) {
+    throw invalid(name, 'number of at least 0', value)
   }
   return value
 }
@@ -243,9 +254,8 @@ const DEFAULT_LIMIT_PROCESS_MEMORY = 768 * 1024 * 1024
 const BACKENDS: readonly BackendName[] = ['native', 'wasm']
 
 function createBackend(options: PoolOptions): Backend {
-  const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1, 0xffffffff))
-  const idleTimeoutMs =
-    optional(options.idleTimeoutMs, (v) => checkInteger('idleTimeoutMs', v, 0, 0xffffffff)) ?? 10_000
+  const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1))
+  const idleTimeoutMs = optional(options.idleTimeoutMs, (v) => checkMs('idleTimeoutMs', v)) ?? 10_000
   const memoryLimit =
     options.limitProcessMemoryBytes === false
       ? 0
@@ -385,9 +395,7 @@ export class Pipeline {
    * untrusted input. Otherwise, an image that's slow to process can occupy a worker indefinitely.
    */
   timeoutMs(ms: number): this {
-    if (typeof ms !== 'number' || !(ms >= 0)) {
-      throw invalid('timeoutMs', 'number of at least 0', ms)
-    }
+    checkMs('timeoutMs', ms)
     this.#timeoutMs = ms === 0 ? undefined : ms
     return this
   }

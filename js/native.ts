@@ -18,6 +18,7 @@ import type { Backend, RunOptions, RunResult, WorkerError } from './protocol.js'
 export interface NativeOptions {
   workerPath: string
   maxProcesses: number
+  /** Over `MAX_TIMEOUT_MS` (like `Infinity`), idle workers never exit. */
   idleTimeoutMs: number
   /** Each worker's `RLIMIT_DATA` in bytes (Linux only), or 0 for none. */
   memoryLimit: number
@@ -686,8 +687,10 @@ export class NativeBackend implements Backend {
     this.#idle.push(slot)
     // Idle workers don't keep the process alive.
     slot.process.ref(false)
-    slot.timer = setTimeout(() => this.#discard(slot), this.#options.idleTimeoutMs)
-    slot.timer.unref()
+    if (this.#options.idleTimeoutMs <= MAX_TIMEOUT_MS) {
+      slot.timer = setTimeout(() => this.#discard(slot), this.#options.idleTimeoutMs)
+      slot.timer.unref()
+    }
   }
 
   /** Kills the worker. Returns `false` if it was already discarded. */

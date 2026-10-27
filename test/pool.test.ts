@@ -28,8 +28,16 @@ function noise(width: number, height: number) {
 
 describe('pool', () => {
   test('options are validated', () => {
-    assert.throws(() => new Pool({ concurrency: 0 }), TypeError)
-    assert.throws(() => new Pool({ idleTimeoutMs: -1 }), TypeError)
+    for (const concurrency of [0, 1.5, Infinity]) {
+      assert.throws(() => new Pool({ concurrency }), TypeError)
+    }
+    new Pool({ concurrency: 2 ** 40 })
+    for (const idleTimeoutMs of [-1, NaN, '10']) {
+      assert.throws(() => new Pool({ idleTimeoutMs: idleTimeoutMs as never }), TypeError)
+    }
+    for (const idleTimeoutMs of [0, 1.5, 3_000_000_000, Infinity]) {
+      new Pool({ idleTimeoutMs })
+    }
     assert.throws(() => new Pool({ backend: 'other' as never }), TypeError)
     for (const ms of [-1, -0.5, NaN, undefined, '10']) {
       assert.throws(() => defaultPool().prepare(Buffer.alloc(1)).timeoutMs(ms as never), TypeError)
@@ -43,6 +51,26 @@ describe('pool', () => {
       const { info } = await defaultPool().prepare(input).timeoutMs(ms).toBuffer({ resolveWithObject: true })
       assert.equal(info.width, 8)
     }
+  })
+
+  test('very long idle timeouts never expire', async () => {
+    const input = await fromRaw(pattern(8, 8)).png().toBuffer()
+    const warnings: Error[] = []
+    const onWarning = (warning: Error) => warnings.push(warning)
+    process.on('warning', onWarning)
+    try {
+      // `setTimeout` would treat these as 1ms, with a `TimeoutOverflowWarning`.
+      for (const idleTimeoutMs of [3_000_000_000, Infinity]) {
+        await new Pool({ idleTimeoutMs }).prepare(input).toBuffer()
+      }
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      process.off('warning', onWarning)
+    }
+    assert.deepEqual(
+      warnings.filter(({ name }) => name === 'TimeoutOverflowWarning'),
+      [],
+    )
   })
 
   test('requests queue for a free worker', async () => {

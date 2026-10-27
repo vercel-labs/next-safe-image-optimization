@@ -1,66 +1,32 @@
 // The worker protocol (see `crates/core/src/protocol.rs`). Requests are built by the backends, from
 // `input` and `encodeOptions()`. Responses come from a worker, so they're untrusted, and parsed
 // defensively.
+//
+// The request options and protocol constants are generated from the Rust code
+// (`protocol.generated.ts`, by `pnpm generate`).
 
 import type { InputFormat, OutputFormat, OutputInfo } from './index.js'
+import * as generated from './protocol.generated.js'
+import type { LimitOptions, TransformOptions } from './protocol.generated.js'
 
+export type { LimitOptions, ResizeOptions, TransformOptions } from './protocol.generated.js'
+export {
+  EXIT_MEMORY_LIMIT,
+  EXIT_OUT_OF_MEMORY,
+  EXIT_SANDBOX_FAILED,
+  EXIT_VERSION_MISMATCH,
+} from './protocol.generated.js'
+
+/**
+ * Options as the caller passed them. The worker validates them (`crates/core/src/request.rs`), and
+ * rejects unknown fields with `ERR_INVALID_OPTIONS`.
+ */
+export type Unchecked<T> = { [K in keyof T]?: unknown }
+
+/** `Request` in `crates/core/src/request.rs`, which typeshare can't export. Exactly one is set. */
 export interface RequestOptions {
-  transform?: TransformOptions
-  metadata?: LimitOptions
-}
-
-export interface LimitOptions {
-  /** 0 disables the limit. */
-  limitInputPixels?: number
-  limitAllocatorMemory?: number
-}
-
-export interface ColorOptions {
-  r: number
-  g: number
-  b: number
-  /** 0-1 */
-  alpha: number
-}
-
-export interface ResizeOptions {
-  width?: number
-  height?: number
-  fit?: string
-  /** 0 (left) to 1 (right). */
-  gravityX?: number
-  /** 0 (top) to 1 (bottom). */
-  gravityY?: number
-  kernel?: string
-  withoutEnlargement?: boolean
-  withoutReduction?: boolean
-  background?: ColorOptions
-}
-
-export interface TransformOptions {
-  limits?: LimitOptions
-  autoOrient?: boolean
-  /** Clockwise degrees, a multiple of 90. */
-  rotate?: number
-  resize?: ResizeOptions
-  /** Omit `sigma` for a mild 3x3 box blur. */
-  blur?: { sigma?: number }
-  /** Defaults to the input format. */
-  format?: OutputFormat
-  jpeg?: {
-    quality?: number
-    mozjpeg?: boolean
-  }
-  png?: { compressionLevel?: number; adaptiveFiltering?: boolean }
-  webp?: {
-    quality?: number
-    alphaQuality?: number
-    lossless?: boolean
-    nearLossless?: boolean
-    smartSubsample?: boolean
-    effort?: number
-  }
-  gif?: { effort?: number }
+  transform?: Unchecked<TransformOptions>
+  metadata?: Unchecked<LimitOptions>
 }
 
 export interface RunOptions {
@@ -86,121 +52,128 @@ export interface Backend {
   run(input: Uint8Array, options: string, runOptions: RunOptions): Promise<RunResult>
 }
 
-/** These must match `crates/core/src/protocol.rs`. */
-export const EXIT_OUT_OF_MEMORY = 86
-export const EXIT_MEMORY_LIMIT = 90
-const KIND_TRANSFORM = 0
-const KIND_METADATA = 1
-const KIND_ERROR = 2
-const FORMATS: readonly InputFormat[] = ['jpeg', 'png', 'webp', 'gif', 'tiff', 'avif']
-const ERROR_CODES = [
-  'ERR_UNSUPPORTED_FORMAT',
-  'ERR_LIMIT_EXCEEDED',
-  'ERR_DECODE_FAILED',
-  'ERR_ENCODE_FAILED',
-  'ERR_INTERNAL',
-] as const
-
-/** Room for everything in a response besides the encoded image. */
-const RESPONSE_OVERHEAD = 64 * 1024
+const FORMATS: readonly InputFormat[] = Object.values(generated.InputFormat)
+const OUTPUT_FORMATS: readonly OutputFormat[] = Object.values(generated.OutputFormat)
+const ERROR_CODES: readonly `${generated.ErrorCode}`[] = Object.values(generated.ErrorCode)
 
 /**
- * The encoded image is bounded by the encoder's memory, which is bounded by `limitAllocatorMemory`. So
- * anything larger means the worker is misbehaving.
+ * The JSON's length, the JSON, and the encoded image. The worker rejects larger images itself, so
+ * anything larger means it's misbehaving.
  */
-export function maxResponseBytes(limitAllocatorMemory: number): number {
-  return limitAllocatorMemory + RESPONSE_OVERHEAD
+export function maxResponseBytes(limitOutputBytes: number): number {
+  return 4 + generated.MAX_JSON_BYTES + limitOutputBytes
 }
 
+/**
+ * Throws a `TypeError` for values that JSON can't represent, instead of letting `JSON.stringify`
+ * turn them into `null` (which means unset) or drop them. `undefined` also means unset.
+ */
 export function encodeOptions(options: RequestOptions): string {
-  return JSON.stringify(options)
+  return JSON.stringify(options, (key, value: unknown) => {
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw new TypeError(`Expected a finite number for ${key} but received ${value}`)
+    }
+    if (typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol') {
+      throw new TypeError(`Expected a JSON value for ${key} but received a ${typeof value}`)
+    }
+    return value
+  })
 }
 
 export class InvalidResponseError extends Error {}
 
 export type Response =
   | { kind: 'transform'; data: Buffer; info: OutputInfo }
-  | {
-      kind: 'metadata'
-      format: InputFormat
-      width: number
-      height: number
-      hasAlpha: boolean
-      orientation: number
-      hasProfile: boolean
-    }
-  | { kind: 'error'; code: (typeof ERROR_CODES)[number]; message: string }
+  | ({ kind: 'metadata' } & generated.MetadataResponse)
+  | ({ kind: 'error' } & generated.ErrorResponse)
 
-function format(index: number, allowed: readonly string[] = FORMATS): InputFormat {
-  const name = FORMATS[index]
-  if (name === undefined || !allowed.includes(name)) {
-    throw new InvalidResponseError(`invalid format ${index}`)
+// Checks for the untrusted JSON. They never include the worker's values in their messages.
+
+function object(value: unknown, name: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new InvalidResponseError(`${name} is not an object`)
   }
-  return name
+  return value as Record<string, unknown>
 }
 
-function boolean(value: number): boolean {
-  if (value > 1) {
-    throw new InvalidResponseError(`invalid boolean ${value}`)
+function integer(value: unknown, name: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new InvalidResponseError(`invalid ${name}`)
   }
-  return value === 1
+  return value
 }
 
-/** Throws an `InvalidResponseError` if the response is malformed. */
+function boolean(value: unknown, name: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new InvalidResponseError(`invalid ${name}`)
+  }
+  return value
+}
+
+function oneOf<T extends string>(value: unknown, name: string, allowed: readonly T[]): T {
+  if (!allowed.includes(value as T)) {
+    throw new InvalidResponseError(`invalid ${name}`)
+  }
+  return value as T
+}
+
+const U32_MAX = 0xffffffff
+
+/**
+ * Splits the response into its JSON (a `generated.Response`) and data. Throws an
+ * `InvalidResponseError` if it's malformed.
+ */
 export function decodeResponse(response: Uint8Array): Response {
-  const view = new DataView(response.buffer, response.byteOffset, response.byteLength)
-  const fixed = (length: number) => {
-    if (response.length < length) {
-      throw new InvalidResponseError(`truncated response (${response.length} bytes)`)
-    }
+  if (response.length < 4) {
+    throw new InvalidResponseError(`truncated response (${response.length} bytes)`)
   }
-  fixed(1)
-  switch (response[0]) {
-    case KIND_TRANSFORM: {
-      fixed(11)
-      const channels = response[10]
-      if (channels < 1 || channels > 4) {
-        throw new InvalidResponseError(`invalid channel count ${channels}`)
-      }
-      const data = Buffer.from(response.buffer, response.byteOffset + 11, response.length - 11)
+  const jsonLength = new DataView(response.buffer, response.byteOffset, 4).getUint32(0, true)
+  if (jsonLength > generated.MAX_JSON_BYTES) {
+    throw new InvalidResponseError(`the JSON is ${jsonLength} bytes`)
+  }
+  const jsonEnd = 4 + jsonLength
+  if (jsonEnd > response.length) {
+    throw new InvalidResponseError(`truncated response (${response.length} bytes)`)
+  }
+  let json: unknown
+  try {
+    json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(response.subarray(4, jsonEnd)))
+  } catch {
+    throw new InvalidResponseError('invalid JSON')
+  }
+  const { type: kind, meta: untrusted } = object(json, 'the response')
+  const meta = object(untrusted, 'meta')
+  // Only transforms send data.
+  if (kind !== 'transform' && jsonEnd !== response.length) {
+    throw new InvalidResponseError('unexpected data after the JSON')
+  }
+  switch (kind) {
+    case 'transform': {
+      const data = Buffer.from(response.buffer, response.byteOffset + jsonEnd, response.length - jsonEnd)
       const info: OutputInfo = {
-        format: format(response[1], ['jpeg', 'png', 'webp', 'gif']) as OutputFormat,
-        width: view.getUint32(2, true),
-        height: view.getUint32(6, true),
-        channels,
-        size: data.length,
+        format: oneOf(meta.format, 'format', OUTPUT_FORMATS),
+        width: integer(meta.width, 'width', 0, U32_MAX),
+        height: integer(meta.height, 'height', 0, U32_MAX),
+        channels: integer(meta.channels, 'channels', 1, 4),
       }
-      return { kind: 'transform', data, info }
+      return { kind, data, info }
     }
-    case KIND_METADATA: {
-      fixed(13)
-      if (response.length !== 13) {
-        throw new InvalidResponseError('metadata response is too long')
-      }
-      const orientation = response[11]
-      if (orientation < 1 || orientation > 8) {
-        throw new InvalidResponseError(`invalid orientation ${orientation}`)
-      }
+    case 'metadata':
       return {
-        kind: 'metadata',
-        format: format(response[1]),
-        width: view.getUint32(2, true),
-        height: view.getUint32(6, true),
-        hasAlpha: boolean(response[10]),
-        orientation,
-        hasProfile: boolean(response[12]),
+        kind,
+        format: oneOf(meta.format, 'format', FORMATS),
+        width: integer(meta.width, 'width', 0, U32_MAX),
+        height: integer(meta.height, 'height', 0, U32_MAX),
+        hasAlpha: boolean(meta.hasAlpha, 'hasAlpha'),
+        orientation: integer(meta.orientation, 'orientation', 1, 8),
+        hasProfile: boolean(meta.hasProfile, 'hasProfile'),
       }
-    }
-    case KIND_ERROR: {
-      fixed(2)
-      const code = ERROR_CODES[response[1]]
-      if (code === undefined) {
-        throw new InvalidResponseError(`invalid error code ${response[1]}`)
+    case 'error':
+      if (typeof meta.message !== 'string') {
+        throw new InvalidResponseError('invalid message')
       }
-      const message = new TextDecoder().decode(response.subarray(2))
-      return { kind: 'error', code, message }
-    }
+      return { kind, code: oneOf(meta.code, 'code', ERROR_CODES), message: meta.message }
     default:
-      throw new InvalidResponseError(`invalid response kind ${response[0]}`)
+      throw new InvalidResponseError('invalid response type')
   }
 }

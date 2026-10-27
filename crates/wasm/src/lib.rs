@@ -13,14 +13,14 @@
 use std::mem::ManuallyDrop;
 use std::sync::Mutex;
 
-use blunt_core::protocol::{self, Response};
+use blunt_core::protocol::{self, Frame};
 
 #[global_allocator]
 static GLOBAL: blunt_core::ExitOnOom = blunt_core::ExitOnOom;
 
 struct Current {
     /// Owns the buffers that `parts` points to.
-    _response: Response,
+    _response: Frame,
     parts: [u32; 4],
 }
 

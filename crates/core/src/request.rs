@@ -1,9 +1,13 @@
-//! Request options. These come from the TypeScript wrapper in `js/`, which validates them first.
-//! We validate again, since the wrapper isn't a security boundary.
+//! Request options. The TypeScript wrapper in `js/` passes them through mostly as the caller wrote
+//! them, and only validates the few that it uses itself. So this is where they're validated, and
+//! unknown fields are rejected. Those errors are `Error::InvalidOptions`, which the wrapper throws
+//! as `TypeError`s.
 
 use serde::Deserialize;
+use typeshare_annotation::typeshare;
 
-use crate::encode::{GifSpec, JpegSpec, OutputSpec, PngSpec, WebpSpec};
+use crate::decode::InputFormat;
+use crate::encode::{GifSpec, JpegSpec, OutputFormat, OutputSpec, PngSpec, WebpSpec};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 use crate::ops::{self, ResizeSpec};
@@ -16,70 +20,30 @@ pub enum Request {
     Metadata(LimitOptions),
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Fit {
-    Cover,
-    Contain,
-    Fill,
-    Inside,
-    Outside,
-}
-
+/// The filters that `image` implements, named like sharp's.
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Kernel {
     Nearest,
     Linear,
     Cubic,
-    Mitchell,
-    Lanczos2,
     Lanczos3,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum OutputFormat {
-    Jpeg,
-    Png,
-    Webp,
-    Gif,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Color {
-    /// 0-255
-    r: f64,
-    g: f64,
-    b: f64,
-    /// 0-1
-    alpha: f64,
-}
-
+/// Like sharp's `fit: 'cover'`: with both dimensions, the excess is cropped, centered.
+#[typeshare]
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResizeOptions {
     width: Option<f64>,
     height: Option<f64>,
-    fit: Option<Fit>,
-    /// 0 (left) to 1 (right).
-    gravity_x: Option<f64>,
-    /// 0 (top) to 1 (bottom).
-    gravity_y: Option<f64>,
     kernel: Option<Kernel>,
     without_enlargement: Option<bool>,
     without_reduction: Option<bool>,
-    background: Option<Color>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BlurOptions {
-    /// Omit for a mild 3x3 box blur.
-    sigma: Option<f64>,
-}
-
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct JpegOptions {
@@ -87,13 +51,17 @@ struct JpegOptions {
     mozjpeg: Option<bool>,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PngOptions {
     compression_level: Option<f64>,
     adaptive_filtering: Option<bool>,
+    /// Accepted for compatibility with sharp, but ignored (there's no palette quantization).
+    quality: Option<f64>,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WebpOptions {
@@ -105,20 +73,26 @@ struct WebpOptions {
     effort: Option<f64>,
 }
 
+#[typeshare]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GifOptions {
     effort: Option<f64>,
 }
 
+#[typeshare]
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LimitOptions {
     /// 0 disables the limit.
     limit_input_pixels: Option<f64>,
-    limit_allocator_memory: Option<f64>,
+    limit_allocator_memory_bytes: Option<f64>,
+    limit_output_bytes: Option<f64>,
+    allowed_input_formats: Option<Vec<InputFormat>>,
+    allow_animated: Option<bool>,
 }
 
+#[typeshare]
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TransformOptions {
@@ -127,7 +101,6 @@ pub struct TransformOptions {
     /// Clockwise degrees, a multiple of 90.
     rotate: Option<f64>,
     resize: Option<ResizeOptions>,
-    blur: Option<BlurOptions>,
     /// Defaults to the input format.
     format: Option<OutputFormat>,
     jpeg: Option<JpegOptions>,
@@ -137,43 +110,62 @@ pub struct TransformOptions {
 }
 
 pub fn parse(json: &[u8]) -> Result<Request> {
-    serde_json::from_slice(json).map_err(|err| Error::Internal(format!("invalid request: {err}")))
+    serde_json::from_slice(json).map_err(|err| {
+        // The caller never sees the JSON, so the position alone would mean nothing to them.
+        let line = err
+            .line()
+            .checked_sub(1)
+            .and_then(|index| json.split(|&b| b == b'\n').nth(index))
+            .unwrap_or_default();
+        let message = format!("{err} in {}", String::from_utf8_lossy(line));
+        // `JSON.stringify` never truncates its output.
+        if err.is_eof() {
+            Error::Internal(format!("invalid request: {message}"))
+        } else {
+            invalid(message)
+        }
+    })
 }
 
 fn invalid(message: String) -> Error {
-    Error::Internal(format!("invalid request: {message}"))
+    Error::InvalidOptions(message)
 }
 
+/// `max` may be infinite. Casting the result to an integer type saturates.
 fn int(name: &str, value: f64, min: f64, max: f64) -> Result<f64> {
     if value.fract() != 0.0 || !(min..=max).contains(&value) {
+        let range = if max.is_infinite() {
+            format!("of at least {min}")
+        } else {
+            format!("between {min} and {max}")
+        };
         return Err(invalid(format!(
-            "{name} must be an integer between {min} and {max}, got {value}"
+            "{name} must be an integer {range}, got {value}"
         )));
     }
     Ok(value)
 }
-
-fn number(name: &str, value: f64, min: f64, max: f64) -> Result<f64> {
-    if !(min..=max).contains(&value) {
-        return Err(invalid(format!(
-            "{name} must be between {min} and {max}, got {value}"
-        )));
-    }
-    Ok(value)
-}
-
-const MAX_SAFE_INTEGER: f64 = 9007199254740991.0;
 
 pub fn parse_limits(options: Option<LimitOptions>) -> Result<Limits> {
     let mut limits = Limits::default();
     if let Some(options) = options {
         if let Some(pixels) = options.limit_input_pixels {
-            let pixels = int("limitInputPixels", pixels, 0.0, MAX_SAFE_INTEGER)? as u64;
+            let pixels = int("limitInputPixels", pixels, 0.0, f64::INFINITY)? as u64;
             limits.input_pixels = if pixels == 0 { u64::MAX } else { pixels };
         }
-        if let Some(memory) = options.limit_allocator_memory {
-            limits.memory = int("limitAllocatorMemory", memory, 1.0, MAX_SAFE_INTEGER)? as u64;
+        if let Some(memory) = options.limit_allocator_memory_bytes {
+            limits.memory = int("limitAllocatorMemoryBytes", memory, 1.0, f64::INFINITY)? as u64;
         }
+        if let Some(bytes) = options.limit_output_bytes {
+            limits.output_bytes = int("limitOutputBytes", bytes, 1.0, f64::INFINITY)? as u64;
+        }
+        if let Some(formats) = options.allowed_input_formats {
+            if formats.is_empty() {
+                return Err(invalid("allowedInputFormats must not be empty".into()));
+            }
+            limits.input_formats = formats;
+        }
+        limits.animated = options.allow_animated.unwrap_or(limits.animated);
     }
     Ok(limits)
 }
@@ -184,41 +176,17 @@ fn parse_resize(options: ResizeOptions) -> Result<ResizeSpec> {
             .map(|v| int(name, v, 1.0, f64::from(u32::MAX)).map(|v| v as u32))
             .transpose()
     };
-    let gravity = |name, value: Option<f64>| number(name, value.unwrap_or(0.5), 0.0, 1.0);
-    let background = match options.background {
-        None => [0, 0, 0, u8::MAX],
-        Some(c) => [
-            int("background.r", c.r, 0.0, 255.0)? as u8,
-            int("background.g", c.g, 0.0, 255.0)? as u8,
-            int("background.b", c.b, 0.0, 255.0)? as u8,
-            (number("background.alpha", c.alpha, 0.0, 1.0)? * 255.0).round() as u8,
-        ],
-    };
     Ok(ResizeSpec {
-        width: dim("width", options.width)?,
-        height: dim("height", options.height)?,
-        fit: match options.fit.unwrap_or(Fit::Cover) {
-            Fit::Cover => ops::Fit::Cover,
-            Fit::Contain => ops::Fit::Contain,
-            Fit::Fill => ops::Fit::Fill,
-            Fit::Inside => ops::Fit::Inside,
-            Fit::Outside => ops::Fit::Outside,
-        },
-        gravity: (
-            gravity("gravityX", options.gravity_x)?,
-            gravity("gravityY", options.gravity_y)?,
-        ),
+        width: dim("resize.width", options.width)?,
+        height: dim("resize.height", options.height)?,
         kernel: match options.kernel.unwrap_or(Kernel::Lanczos3) {
             Kernel::Nearest => ops::Kernel::Nearest,
             Kernel::Linear => ops::Kernel::Linear,
             Kernel::Cubic => ops::Kernel::Cubic,
-            Kernel::Mitchell => ops::Kernel::Mitchell,
-            Kernel::Lanczos2 => ops::Kernel::Lanczos2,
             Kernel::Lanczos3 => ops::Kernel::Lanczos3,
         },
         without_enlargement: options.without_enlargement.unwrap_or(false),
         without_reduction: options.without_reduction.unwrap_or(false),
-        background,
     })
 }
 
@@ -244,6 +212,9 @@ fn parse_output(options: &mut TransformOptions) -> Result<Option<OutputSpec>> {
                     spec.compression_level = int("png.compressionLevel", level, 0.0, 9.0)? as u8;
                 }
                 spec.adaptive_filtering = o.adaptive_filtering.unwrap_or(spec.adaptive_filtering);
+                if let Some(q) = o.quality {
+                    int("png.quality", q, 1.0, 100.0)?;
+                }
             }
             OutputSpec::Png(spec)
         }
@@ -291,18 +262,12 @@ pub fn parse_pipeline(mut options: Box<TransformOptions>) -> Result<Pipeline> {
             angle
         }
     };
-    let blur = match options.blur.take() {
-        None => None,
-        Some(BlurOptions { sigma: None }) => Some(None),
-        Some(BlurOptions { sigma: Some(s) }) => Some(Some(number("blur", s, 0.3, 1000.0)?)),
-    };
     let output = parse_output(&mut options)?;
     Ok(Pipeline {
         limits,
         auto_orient: options.auto_orient.unwrap_or(false),
         rotate,
         resize: options.resize.take().map(parse_resize).transpose()?,
-        blur,
         output,
     })
 }
@@ -310,12 +275,13 @@ pub fn parse_pipeline(mut options: Box<TransformOptions>) -> Result<Pipeline> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorCode;
 
     #[test]
     fn parses_transform() {
         let request = parse(
-            br#"{"transform":{"limits":{"limitAllocatorMemory":1000},"rotate":90,"resize":{"width":10},
-                "blur":{},"format":"webp","webp":{"quality":50}}}"#,
+            br#"{"transform":{"limits":{"limitAllocatorMemoryBytes":1000},"rotate":90,"resize":{"width":10},
+                "format":"webp","webp":{"quality":50}}}"#,
         )
         .unwrap();
         let Request::Transform(options) = request else {
@@ -325,25 +291,88 @@ mod tests {
         assert_eq!(pipeline.limits.memory, 1000);
         assert_eq!(pipeline.rotate, 90);
         assert_eq!(pipeline.resize.unwrap().width, Some(10));
-        assert_eq!(pipeline.blur, Some(None));
         assert!(matches!(pipeline.output, Some(OutputSpec::Webp(spec)) if spec.quality == 50.0));
+    }
+
+    fn error(json: &str) -> Error {
+        parse(json.as_bytes())
+            .and_then(|request| match request {
+                Request::Transform(options) => parse_pipeline(options).map(drop),
+                Request::Metadata(options) => parse_limits(Some(options)).map(drop),
+            })
+            .expect_err(json)
     }
 
     #[test]
     fn rejects_invalid_options() {
-        for json in [
-            r#"{"transform":{"rotate":45}}"#,
-            r#"{"transform":{"resize":{"width":0}}}"#,
-            r#"{"transform":{"format":"avif"}}"#,
-            r#"{"transform":{"unknown":1}}"#,
-            r#"{"metadata":{"limitAllocatorMemory":0}}"#,
-            r#"{"other":{}}"#,
+        for (json, prefix) in [
+            (r#"{"transform":{"rotate":45}}"#, "rotate only supports"),
+            (
+                r#"{"transform":{"resize":{"width":0}}}"#,
+                "resize.width must be",
+            ),
+            (
+                r#"{"transform":{"resize":{"fit":"contain"}}}"#,
+                "unknown field `fit`",
+            ),
+            (
+                r#"{"transform":{"resize":{"kernel":"mitchell"}}}"#,
+                "unknown variant `mitchell`",
+            ),
+            (
+                r#"{"transform":{"jpeg":{"mozjpeg":"yes"}}}"#,
+                "invalid type: string",
+            ),
+            (
+                r#"{"transform":{"format":"png","png":{"quality":0}}}"#,
+                "png.quality must be",
+            ),
+            (
+                r#"{"transform":{"format":"avif"}}"#,
+                "unknown variant `avif`",
+            ),
+            (
+                r#"{"transform":{"limits":{"failOn":"none"}}}"#,
+                "unknown field `failOn`",
+            ),
+            (
+                r#"{"metadata":{"limitAllocatorMemoryBytes":0}}"#,
+                "limitAllocatorMemoryBytes must be",
+            ),
+            (
+                r#"{"metadata":{"limitOutputBytes":0}}"#,
+                "limitOutputBytes must be",
+            ),
+            (
+                r#"{"metadata":{"allowedInputFormats":[]}}"#,
+                "allowedInputFormats must not be empty",
+            ),
+            (
+                r#"{"metadata":{"allowedInputFormats":["bmp"]}}"#,
+                "unknown variant `bmp`",
+            ),
+            (r#"{"other":{}}"#, "unknown variant `other`"),
         ] {
-            let result = parse(json.as_bytes()).and_then(|request| match request {
-                Request::Transform(options) => parse_pipeline(options).map(drop),
-                Request::Metadata(options) => parse_limits(Some(options)).map(drop),
-            });
-            assert!(result.is_err(), "{json}");
+            let err = error(json);
+            assert_eq!(err.code(), ErrorCode::InvalidOptions, "{json}");
+            assert!(err.to_string().starts_with(prefix), "{json}: {err}");
+        }
+    }
+
+    #[test]
+    fn errors_include_the_json() {
+        let json = "{\"transform\":\n{\"resize\":{\"fit\":\"contain\"}}}";
+        let message = error(json).to_string();
+        assert!(
+            message.ends_with(r#" in {"resize":{"fit":"contain"}}}"#),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn truncated_requests_are_internal() {
+        for json in ["", "{\"transform\":"] {
+            assert_eq!(error(json).code(), ErrorCode::Internal, "{json}");
         }
     }
 }

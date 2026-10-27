@@ -1,6 +1,8 @@
 use crate::color;
 use crate::decode::{self, Header, InputFormat};
-use crate::encode::{self, Encoded, GifSpec, JpegSpec, OutputSpec, PngSpec, WebpSpec};
+use crate::encode::{
+    self, Encoded, GifSpec, JpegSpec, OutputFormat, OutputSpec, PngSpec, WebpSpec,
+};
 use crate::error::{Error, Result};
 use crate::limits::Limits;
 use crate::ops::{self, ResizeSpec};
@@ -13,19 +15,23 @@ pub struct Pipeline {
     /// Clockwise, a multiple of 90. Applied after auto-orientation.
     pub rotate: i32,
     pub resize: Option<ResizeSpec>,
-    /// `Some(None)` is a mild 3x3 box blur.
-    pub blur: Option<Option<f64>>,
     /// `None` uses the input format, with default options.
     pub output: Option<OutputSpec>,
 }
 
 pub struct Output {
     pub encoded: Encoded,
-    pub format: &'static str,
+    pub format: OutputFormat,
 }
 
 pub fn run(input: Vec<u8>, pipeline: &Pipeline) -> Result<Output> {
-    let decoded = decode::decode(&input, &pipeline.limits)?;
+    // Vector images have no orientation, so only the rotation applies.
+    let decoded = decode::decode(&input, &pipeline.limits, |width, height| {
+        pipeline.resize.as_ref().map_or(1.0, |spec| {
+            let transform = Transform::from_rotation(pipeline.rotate);
+            ops::vector_scale((width, height), spec, transform)
+        })
+    })?;
     drop(input);
 
     let output = match &pipeline.output {
@@ -48,21 +54,20 @@ pub fn run(input: Vec<u8>, pipeline: &Pipeline) -> Result<Output> {
         img = color::to_srgb(img, icc);
     }
     img.apply_orientation(transform.to_orientation());
-    if let Some(sigma) = pipeline.blur {
-        img = ops::blur(img, sigma)?;
-    }
 
     let encoded = encode::encode(img, &output, &pipeline.limits)?;
+    pipeline.limits.check_output_bytes(encoded.data.len())?;
     Ok(Output {
         encoded,
-        format: output.format_name(),
+        format: output.format(),
     })
 }
 
 fn default_output(format: InputFormat) -> Result<OutputSpec> {
     Ok(match format {
         InputFormat::Jpeg => OutputSpec::Jpeg(JpegSpec::default()),
-        InputFormat::Png => OutputSpec::Png(PngSpec::default()),
+        // Like sharp.
+        InputFormat::Png | InputFormat::Svg => OutputSpec::Png(PngSpec::default()),
         InputFormat::Webp => OutputSpec::Webp(WebpSpec::default()),
         InputFormat::Gif => OutputSpec::Gif(GifSpec::default()),
         InputFormat::Tiff | InputFormat::Avif => {

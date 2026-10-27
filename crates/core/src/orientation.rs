@@ -1,8 +1,8 @@
 //! Rotations and flips as elements of the dihedral group D4.
 //!
 //! We resize *before* rotating (like sharp), because rotating the smaller image is cheaper. That
-//! means resize targets and crop/embed gravity (specified in the output frame) need to be mapped
-//! back into the input frame.
+//! means resize targets (specified in the output frame) need to be mapped back into the input
+//! frame.
 
 use image::metadata::Orientation;
 
@@ -65,17 +65,6 @@ impl Transform {
         }
     }
 
-    /// Maps an output-frame gravity (each component in `[0, 1]`, where 0 is left/top) to the input
-    /// frame.
-    pub fn input_gravity(self, (x, y): (f64, f64)) -> (f64, f64) {
-        // The inverse of a signed permutation matrix is its transpose.
-        let m = self.0;
-        let (cx, cy) = (x - 0.5, y - 0.5);
-        let ix = f64::from(m[0][0]) * cx + f64::from(m[1][0]) * cy;
-        let iy = f64::from(m[0][1]) * cx + f64::from(m[1][1]) * cy;
-        (ix + 0.5, iy + 0.5)
-    }
-
     pub fn to_orientation(self) -> Orientation {
         let index = EXIF_TRANSFORMS
             .iter()
@@ -122,13 +111,5 @@ mod tests {
         assert_eq!(r90.then(r90), Transform::from_rotation(180));
         assert_eq!(r90.then(r90).then(r90).then(r90), Transform::IDENTITY);
         assert_eq!(Transform::from_rotation(-90), Transform::from_rotation(270));
-    }
-
-    #[test]
-    fn gravity() {
-        // After rotating 90 degrees clockwise, the output's top edge was the input's left edge.
-        let r90 = Transform::from_rotation(90);
-        assert_eq!(r90.input_gravity((0.5, 0.0)), (0.0, 0.5));
-        assert_eq!(Transform::IDENTITY.input_gravity((1.0, 0.0)), (1.0, 0.0));
     }
 }

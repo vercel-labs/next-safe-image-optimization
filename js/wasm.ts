@@ -9,10 +9,11 @@ import { Worker } from 'node:worker_threads'
 
 import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY } from './protocol.js'
 import type { Backend, RunOptions, RunResult } from './protocol.js'
-import type { WasmWorkerData, WasmWorkerMessage } from './wasm-worker.js'
+import type { WasmRequest, WasmWorkerData, WasmWorkerMessage } from './wasm-worker.js'
 
 export interface WasmOptions {
   maxWorkers: number
+  /** Over `MAX_TIMEOUT_MS` (like `Infinity`), idle workers never exit. */
   idleTimeoutMs: number
   /** The maximum size of each instance's memory, or 0 for the most possible. */
   memoryLimit: number
@@ -24,9 +25,10 @@ const PAGE_SIZE = 64 * 1024
 const INITIAL_PAGES = 512
 /** The most that wasm32 can address. */
 const MAX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
+const MAX_TIMEOUT_MS = 2 ** 31 - 1
 
 interface Job {
-  request: Uint8Array
+  request: WasmRequest
   timeoutMs?: number
   resolve: (result: RunResult) => void
 }
@@ -64,7 +66,8 @@ export class WasmBackend implements Backend {
     request.set(json, input.length)
     new DataView(request.buffer).setUint32(input.length + json.length, json.length, true)
     return new Promise((resolve) => {
-      this.#queue.push({ request, timeoutMs: runOptions.timeoutMs, resolve })
+      const { timeoutMs, maxResponseBytes } = runOptions
+      this.#queue.push({ request: { request, maxResponseBytes }, timeoutMs, resolve })
       this.#dispatch()
     })
   }
@@ -119,7 +122,7 @@ export class WasmBackend implements Backend {
         job.resolve(failure('ERR_OUT_OF_MEMORY', 'out of memory'))
         this.#discard(slot)
       } else if (message.exit === EXIT_MEMORY_LIMIT) {
-        job.resolve(failure('ERR_LIMIT_EXCEEDED', 'Limit exceeded: processing allocated more than limitAllocatorMemory'))
+        job.resolve(failure('ERR_LIMIT_EXCEEDED', 'Limit exceeded: processing allocated more than limitAllocatorMemoryBytes'))
         this.#discard(slot)
       } else {
         const reason = message.exit === undefined ? message.crash : `exit code ${message.exit}`
@@ -145,14 +148,15 @@ export class WasmBackend implements Backend {
     slot.job = job
     clearTimeout(slot.timer)
     slot.worker.ref()
-    if (job.timeoutMs !== undefined) {
+    // `setTimeout` treats longer delays as 1ms. They're over 24 days, so they never arrive.
+    if (job.timeoutMs !== undefined && job.timeoutMs <= MAX_TIMEOUT_MS) {
       slot.timer = setTimeout(() => {
         slot.job = undefined
         job.resolve(failure('ERR_TIMEOUT', `processing took longer than ${job.timeoutMs}ms`))
         this.#discard(slot)
       }, job.timeoutMs)
     }
-    slot.worker.postMessage(job.request, [job.request.buffer as ArrayBuffer])
+    slot.worker.postMessage(job.request, [job.request.request.buffer as ArrayBuffer])
   }
 
   #release(slot: Slot) {
@@ -164,8 +168,10 @@ export class WasmBackend implements Backend {
     this.#idle.push(slot)
     // Idle workers don't keep the process alive.
     slot.worker.unref()
-    slot.timer = setTimeout(() => this.#discard(slot), this.#options.idleTimeoutMs)
-    slot.timer.unref()
+    if (this.#options.idleTimeoutMs <= MAX_TIMEOUT_MS) {
+      slot.timer = setTimeout(() => this.#discard(slot), this.#options.idleTimeoutMs)
+      slot.timer.unref()
+    }
   }
 
   #discard(slot: Slot) {

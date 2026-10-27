@@ -1,71 +1,59 @@
 import { availableParallelism } from 'node:os'
 
-import { NativeBackend, loadBinding } from './native.js'
+import { NativeBackend, findWorker } from './native.js'
 import { InvalidResponseError, decodeResponse, encodeOptions, maxResponseBytes } from './protocol.js'
-import type {
-  Backend,
-  LimitOptions,
-  RequestOptions,
-  ResizeOptions as NativeResizeOptions,
-  Response,
-  TransformOptions,
-} from './protocol.js'
+import type { Backend, LimitOptions, RequestOptions, Response, TransformOptions, Unchecked } from './protocol.js'
+import type * as generated from './protocol.generated.js'
 import { WasmBackend } from './wasm.js'
 
-export type InputFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'tiff' | 'avif'
-export type OutputFormat = 'jpeg' | 'png' | 'webp' | 'gif'
-export type Fit = 'cover' | 'contain' | 'fill' | 'inside' | 'outside'
-export type Kernel = 'nearest' | 'linear' | 'cubic' | 'mitchell' | 'lanczos2' | 'lanczos3'
-export type Position =
-  | 'centre'
-  | 'center'
-  | 'north'
-  | 'northeast'
-  | 'east'
-  | 'southeast'
-  | 'south'
-  | 'southwest'
-  | 'west'
-  | 'northwest'
-  | 'top'
-  | 'right top'
-  | 'right'
-  | 'right bottom'
-  | 'bottom'
-  | 'left bottom'
-  | 'left'
-  | 'left top'
+export type InputFormat = `${generated.InputFormat}`
+export type OutputFormat = `${generated.OutputFormat}`
+export type Kernel = `${generated.Kernel}`
 
 export type Input = Uint8Array | ArrayBuffer | ArrayBufferView
 
-export interface Color {
-  /** 0-255 */
-  r: number
-  /** 0-255 */
-  g: number
-  /** 0-255 */
-  b: number
-  /** 0-1, defaults to 1. */
-  alpha?: number
-}
-
-export interface BluntOptions {
+export interface PipelineOptions {
   /**
    * Reject input images where `width * height` exceeds this. `true` uses the default; `false` or
    * `0` removes the limit (not recommended). Default: `268402689` (`0x3FFF * 0x3FFF`), like sharp.
+   *
+   * For SVGs, this applies to the natural size and the rendered size, but **not** to raster images
+   * embedded in the SVG (`<image href="data:...">`). Those are only bounded by
+   * `limitAllocatorMemoryBytes`, `limitProcessMemoryBytes`, and `timeoutMs()`.
    */
   limitInputPixels?: number | boolean
   /**
    * The maximum memory in bytes that processing may allocate, including the input. The worker's
    * allocator enforces this, by exiting the worker, which doesn't cover the C encoders (libwebp and
-   * mozjpeg); see the pool's `limitProcessMemory` for that. Each stage (decode, resize, blur, encode) also estimates
+   * mozjpeg); see the pool's `limitProcessMemoryBytes` for that. Each stage (decode, resize, encode) also estimates
    * its memory before it runs, for a clearer error. Default: 512 MiB.
    */
-  limitAllocatorMemory?: number
+  limitAllocatorMemoryBytes?: number
+  /**
+   * The maximum size in bytes of the encoded image. Larger output is rejected with
+   * `ERR_LIMIT_EXCEEDED`. The pool also enforces it when it reads the worker's response, so a
+   * misbehaving worker can't make it buffer more. Default: 128 MiB.
+   */
+  limitOutputBytes?: number
+  /**
+   * Reject input in any other format with `ERR_UNSUPPORTED_FORMAT`, before decoding it. The format
+   * is always detected from the input's contents. Must not be empty. Default: every `InputFormat`.
+   */
+  allowedInputFormats?: readonly InputFormat[]
+  /**
+   * `false` rejects animated input with `ERR_ANIMATED`, before decoding it. Otherwise, only the
+   * first frame is decoded. PNG (APNG), WebP, and AVIF count as animated if their header declares an
+   * animation, and GIF if it has more than one frame. Default: `true`.
+   *
+   * A future version may transform every frame of an animated image when this is `true`, depending
+   * on the output format (e.g. GIF or WebP). Set this to `false` if you rely on only the first frame
+   * being decoded.
+   */
+  allowAnimated?: boolean
   /** Equivalent to calling `autoOrient()`. */
   autoOrient?: boolean
-  /** The pool of workers that processes the image. Default: `defaultPool()`. */
-  pool?: Pool
+  /** Accepted for compatibility with sharp (Next.js passes it), but ignored. */
+  sequentialRead?: boolean
 }
 
 export type BackendName = 'native' | 'wasm'
@@ -74,34 +62,43 @@ export interface PoolOptions {
   /**
    * `'native'` processes images in worker processes. `'wasm'` processes them in worker threads,
    * with a wasm build. Default: the `BLUNT_IMAGE_OPTIMIZATION_BACKEND` environment variable, or
-   * else `'native'`, falling back to `'wasm'` if there's no native binding for this platform.
+   * else `'native'`, falling back to `'wasm'` if there's no native worker binary for this platform.
    */
   backend?: BackendName
   /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
   concurrency?: number
-  /** Milliseconds before an idle worker exits. Default: 10000. */
-  idleTimeout?: number
+  /**
+   * Milliseconds before an idle worker exits. 0 exits as soon as it's idle, and `Infinity` never
+   * does. Idle workers don't keep the process alive either way. Default: 10000.
+   */
+  idleTimeoutMs?: number
   /**
    * The maximum memory of each worker in bytes, enforced by the OS: `RLIMIT_DATA` on Linux, and the
    * memory's maximum size for wasm. There's no limit on macOS or Windows. This is a backstop for
-   * `limitAllocatorMemory`, and unlike it, covers the C encoders (libwebp and mozjpeg). It's per
-   * worker, not per image, so it should be larger than `limitAllocatorMemory`. `false` or
+   * `limitAllocatorMemoryBytes`, and unlike it, covers the C encoders (libwebp and mozjpeg). It's per
+   * worker, not per image, so it should be larger than `limitAllocatorMemoryBytes`. `false` or
    * `0` removes the limit (not recommended). Default: 768 MiB.
    */
-  limitProcessMemory?: number | false
+  limitProcessMemoryBytes?: number | false
+  /**
+   * Fork native workers from a fork server (one per pool), instead of spawning each one, which
+   * makes starting a worker faster. Forked workers share the fork server's address space layout
+   * (ASLR), and the fork server passes their sockets to Node over its IPC channel, which Node
+   * doesn't officially support with a process that isn't Node (though Node, Bun, and Deno have used
+   * the same protocol for years). Ignored on Windows and for `'wasm'`. Default: `true`.
+   */
+  forkServer?: boolean
 }
 
+/**
+ * Always like sharp's default `fit: 'cover'`, with the default `position: 'centre'`: the aspect
+ * ratio is kept, and with both a width and a height, the excess is cropped, centered.
+ */
 export interface ResizeOptions {
   width?: number | null
   height?: number | null
-  /** Default: `'cover'`. */
-  fit?: Fit
-  /** Where to crop (`cover`) or embed (`contain`). Default: `'centre'`. */
-  position?: Position
   /** Default: `'lanczos3'`. */
   kernel?: Kernel
-  /** Background for `contain`. Default: opaque black. */
-  background?: Color
   withoutEnlargement?: boolean
   withoutReduction?: boolean
 }
@@ -124,8 +121,8 @@ export interface PngOptions {
   /** Default: `true` (sharp defaults to `false`). */
   adaptiveFiltering?: boolean
   /**
-   * Accepted for compatibility with sharp, but ignored. Output is always lossless truecolor; there
-   * is no palette quantization.
+   * 1-100. Accepted for compatibility with sharp, but ignored. Output is always lossless truecolor;
+   * there is no palette quantization.
    */
   quality?: number
 }
@@ -147,14 +144,11 @@ export interface GifOptions {
   effort?: number
 }
 
-export type FormatOptions = JpegOptions | PngOptions | WebpOptions | GifOptions
-
 export interface OutputInfo {
   format: OutputFormat
   width: number
   height: number
   channels: number
-  size: number
 }
 
 export interface Metadata {
@@ -176,18 +170,10 @@ export interface ToBufferOptions {
   resolveWithObject?: boolean
 }
 
-export interface TimeoutOptions {
-  /** 0 (the default) waits indefinitely. */
-  seconds: number
-}
-
 export type ErrorCode =
-  | 'ERR_UNSUPPORTED_FORMAT'
-  | 'ERR_LIMIT_EXCEEDED'
-  | 'ERR_DECODE_FAILED'
-  | 'ERR_ENCODE_FAILED'
-  | 'ERR_INTERNAL'
-  /** Processing took longer than `timeout()`. */
+  /** Errors from the worker. `ERR_ANIMATED`: the input is animated, with `allowAnimated: false`. */
+  | Exclude<`${generated.ErrorCode}`, 'ERR_INVALID_OPTIONS'>
+  /** Processing took longer than `timeoutMs()`. */
   | 'ERR_TIMEOUT'
   /** The worker ran out of memory. */
   | 'ERR_OUT_OF_MEMORY'
@@ -196,7 +182,11 @@ export type ErrorCode =
   /** The worker couldn't be started. */
   | 'ERR_WORKER_SPAWN'
 
-/** Errors from processing an image. Invalid arguments throw a `TypeError` instead. */
+/**
+ * Errors from processing an image. Invalid options are `TypeError`s instead. Most are only
+ * validated by the worker, so `toBuffer()` or `metadata()` rejects with them. The input, the pool
+ * and its options, `timeoutMs()`, and `limitOutputBytes` throw immediately.
+ */
 export class BluntError extends Error {
   readonly code: ErrorCode
 
@@ -207,58 +197,39 @@ export class BluntError extends Error {
   }
 }
 
-const GRAVITY: Record<Position, [number, number]> = {
-  centre: [0.5, 0.5],
-  center: [0.5, 0.5],
-  north: [0.5, 0],
-  top: [0.5, 0],
-  northeast: [1, 0],
-  'right top': [1, 0],
-  east: [1, 0.5],
-  right: [1, 0.5],
-  southeast: [1, 1],
-  'right bottom': [1, 1],
-  south: [0.5, 1],
-  bottom: [0.5, 1],
-  southwest: [0, 1],
-  'left bottom': [0, 1],
-  west: [0, 0.5],
-  left: [0, 0.5],
-  northwest: [0, 0],
-  'left top': [0, 0],
-}
-
-const FITS: readonly Fit[] = ['cover', 'contain', 'fill', 'inside', 'outside']
-const KERNELS: readonly Kernel[] = ['nearest', 'linear', 'cubic', 'mitchell', 'lanczos2', 'lanczos3']
 const DEFAULT_LIMIT_INPUT_PIXELS = 0x3fff * 0x3fff
 
 function invalid(name: string, expected: string, value: unknown): TypeError {
   return new TypeError(`Expected ${expected} for ${name} but received ${String(value)} of type ${typeof value}`)
 }
 
-function isInteger(value: unknown, min: number, max: number): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max
-}
-
-function checkInteger(name: string, value: unknown, min: number, max: number): number {
-  if (!isInteger(value, min, max)) {
-    throw invalid(name, `integer between ${min} and ${max}`, value)
+function checkInteger(name: string, value: unknown, min: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min) {
+    throw invalid(name, `integer of at least ${min}`, value)
   }
   return value
 }
 
-function checkNumber(name: string, value: unknown, min: number, max: number): number {
-  if (typeof value !== 'number' || !(value >= min && value <= max)) {
-    throw invalid(name, `number between ${min} and ${max}`, value)
+/** Any number, not just integers: these are only used by JS timers. */
+function checkMs(name: string, value: unknown): number {
+  if (typeof value !== 'number' || !(value >= 0)) {
+    throw invalid(name, 'number of at least 0', value)
   }
   return value
 }
 
-function checkBoolean(name: string, value: unknown): boolean {
-  if (typeof value !== 'boolean') {
-    throw invalid(name, 'boolean', value)
+/**
+ * A shallow copy, so that later changes to `options` don't apply. The worker validates what's in
+ * it, and rejects unknown fields.
+ */
+function copyOptions<T extends object>(options: T | null | undefined): Partial<T> {
+  if (options == null) {
+    return {}
   }
-  return value
+  if (typeof options !== 'object' || Array.isArray(options)) {
+    throw invalid('options', 'object', options)
+  }
+  return { ...options }
 }
 
 function optional<T, U>(value: T | undefined, check: (value: T) => U): U | undefined {
@@ -285,41 +256,50 @@ function toUint8Array(input: Input): Uint8Array {
   throw invalid('input', 'Buffer, Uint8Array, ArrayBuffer, or ArrayBufferView', input)
 }
 
-/** Same as `DEFAULT_MEMORY` in `crates/core/src/limits.rs`. */
-const DEFAULT_LIMIT_ALLOCATOR_MEMORY = 512 * 1024 * 1024
+/** Same as `DEFAULT_OUTPUT_BYTES` in `crates/core/src/limits.rs`. */
+const DEFAULT_LIMIT_OUTPUT_BYTES = 128 * 1024 * 1024
 const DEFAULT_LIMIT_PROCESS_MEMORY = 768 * 1024 * 1024
 const BACKENDS: readonly BackendName[] = ['native', 'wasm']
 
 function createBackend(options: PoolOptions): Backend {
-  const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1, 0xffffffff))
-  const idleTimeout = optional(options.idleTimeout, (v) => checkInteger('idleTimeout', v, 0, 0xffffffff))
+  const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1))
+  const idleTimeoutMs = optional(options.idleTimeoutMs, (v) => checkMs('idleTimeoutMs', v)) ?? 10_000
   const memoryLimit =
-    options.limitProcessMemory === false
+    options.limitProcessMemoryBytes === false
       ? 0
-      : (optional(options.limitProcessMemory, (v) =>
-          checkInteger('limitProcessMemory', v, 0, Number.MAX_SAFE_INTEGER),
+      : (optional(options.limitProcessMemoryBytes, (v) =>
+          checkInteger('limitProcessMemoryBytes', v, 0),
         ) ?? DEFAULT_LIMIT_PROCESS_MEMORY)
+  const forkServer: unknown = options.forkServer ?? true
+  if (typeof forkServer !== 'boolean') {
+    throw invalid('forkServer', 'boolean', forkServer)
+  }
   const backend = options.backend ?? process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND
   if (backend !== undefined) {
     checkOneOf('backend', backend, BACKENDS)
   }
   const maxWorkers = concurrency ?? availableParallelism()
-  const idleTimeoutMs = idleTimeout ?? 10_000
   const wasm = () =>
     new WasmBackend({ maxWorkers, idleTimeoutMs, memoryLimit })
   if (backend === 'wasm') {
     return wasm()
   }
-  let binding
-  try {
-    binding = loadBinding()
-  } catch (error) {
+  const worker = findWorker()
+  if (worker === undefined) {
     if (backend === 'native') {
-      throw error
+      throw new Error(`There's no native worker binary for ${process.platform}-${process.arch}`)
     }
     return wasm()
   }
-  return new NativeBackend(binding, { maxProcesses: maxWorkers, idleTimeoutMs, memoryLimit })
+  return new NativeBackend({
+    workerPath: worker.path,
+    maxProcesses: maxWorkers,
+    idleTimeoutMs,
+    memoryLimit,
+    forkServer,
+    // Local builds show the worker's stderr. Installed ones discard it (rav1d logs errors there).
+    inheritStderr: worker.local,
+  })
 }
 
 /**
@@ -336,11 +316,24 @@ export class Pool {
     this.backend = this.#backend.name
   }
 
+  /**
+   * Creates a pipeline that processes `input` with this pool's workers. Only in-memory input is
+   * supported (never file paths).
+   */
+  prepare(input: Input, options?: PipelineOptions): Pipeline {
+    return new Pipeline(this, input, options)
+  }
+
   /** @internal */
-  async run(input: Uint8Array, options: RequestOptions, limits: LimitOptions, timeoutMs?: number): Promise<Response> {
+  async run(
+    input: Uint8Array,
+    options: RequestOptions,
+    limitOutputBytes: number | undefined,
+    timeoutMs?: number,
+  ): Promise<Response> {
     const result = await this.#backend.run(input, encodeOptions(options), {
       timeoutMs,
-      maxResponseBytes: maxResponseBytes(limits.limitAllocatorMemory ?? DEFAULT_LIMIT_ALLOCATOR_MEMORY),
+      maxResponseBytes: maxResponseBytes(limitOutputBytes ?? DEFAULT_LIMIT_OUTPUT_BYTES),
     })
     if (result.error) {
       throw new BluntError(result.error.code as ErrorCode, result.error.message)
@@ -355,6 +348,9 @@ export class Pool {
       throw error
     }
     if (response.kind === 'error') {
+      if (response.code === 'ERR_INVALID_OPTIONS') {
+        throw new TypeError(response.message)
+      }
       throw new BluntError(response.code, response.message)
     }
     return response
@@ -363,65 +359,57 @@ export class Pool {
 
 let globalPool: Pool | undefined
 
-/** The pool used by pipelines without a `pool` option. Created with default options on first use. */
+/** A shared pool, created with default options on first use. */
 export function defaultPool(): Pool {
   globalPool ??= new Pool()
   return globalPool
 }
 
 /**
- * A chainable image processing pipeline, similar to a sharp instance. Operations always run in this
- * order, regardless of call order: auto-orient, rotate, resize, blur.
+ * A chainable image processing pipeline, similar to a sharp instance, created by `Pool.prepare()`.
+ * Operations always run in this order, regardless of call order: auto-orient, rotate, resize.
  */
 export class Pipeline {
   #input: Uint8Array
-  #pool: Pool | undefined
-  #limits: LimitOptions = {}
+  #pool: Pool
+  #limits: Unchecked<LimitOptions>
+  /** Validated here, because the response's maximum size depends on it. */
+  #limitOutputBytes: number | undefined
   #timeoutMs: number | undefined
-  #autoOrient = false
-  #rotate: number | undefined
-  #resize: NativeResizeOptions | undefined
-  #blur: TransformOptions['blur']
-  #output: Pick<TransformOptions, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
+  #autoOrient: unknown
+  #rotate: unknown
+  #resize: ResizeOptions | undefined
+  #output: Pick<Unchecked<TransformOptions>, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
 
-  constructor(input: Input, options: BluntOptions = {}) {
-    this.#input = toUint8Array(input)
-    const { limitInputPixels, limitAllocatorMemory, autoOrient, pool } = options
-    if (pool !== undefined && !(pool instanceof Pool)) {
-      throw invalid('pool', 'Pool', pool)
-    }
+  /** @internal Use `Pool.prepare()`. */
+  constructor(pool: Pool, input: Input, options?: PipelineOptions) {
     this.#pool = pool
-    if (limitInputPixels !== undefined) {
-      if (typeof limitInputPixels === 'boolean') {
-        this.#limits.limitInputPixels = limitInputPixels ? DEFAULT_LIMIT_INPUT_PIXELS : 0
-      } else {
-        this.#limits.limitInputPixels = checkInteger(
-          'limitInputPixels',
-          limitInputPixels,
-          0,
-          Number.MAX_SAFE_INTEGER,
-        )
-      }
+    this.#input = toUint8Array(input)
+    // The rest are the worker's limits. `sequentialRead` is ignored.
+    const { autoOrient, limitInputPixels, limitOutputBytes, sequentialRead, ...limits } = copyOptions(options)
+    this.#limitOutputBytes = optional(limitOutputBytes, (v) => checkInteger('limitOutputBytes', v, 1))
+    const { allowedInputFormats } = limits
+    this.#limits = {
+      ...limits,
+      limitInputPixels:
+        typeof limitInputPixels === 'boolean' ? (limitInputPixels ? DEFAULT_LIMIT_INPUT_PIXELS : 0) : limitInputPixels,
+      limitOutputBytes: this.#limitOutputBytes,
+      allowedInputFormats: Array.isArray(allowedInputFormats) ? [...allowedInputFormats] : allowedInputFormats,
     }
-    this.#limits.limitAllocatorMemory = optional(limitAllocatorMemory, (v) =>
-      checkInteger('limitAllocatorMemory', v, 1, Number.MAX_SAFE_INTEGER),
-    )
-    if (optional(autoOrient, (v) => checkBoolean('autoOrient', v))) {
-      this.autoOrient()
-    }
+    this.#autoOrient = autoOrient
   }
 
   /**
-   * Limits the wall time of processing (in seconds, 0-3600), like sharp. The time starts when a
-   * worker picks up the image, not while it waits for a free worker. The worker is killed when the
-   * time runs out, so this works even if a decoder hangs.
+   * Limits the wall time of processing, in milliseconds (like sharp's `timeout()`, which takes whole
+   * seconds). The time starts when a worker picks up the image, not while it waits for a free
+   * worker. The worker is killed when the time runs out, so this works even if a decoder hangs.
    *
-   * There's no timeout by default (like sharp), but you should set one for untrusted input.
-   * Otherwise, an image that's slow to process can occupy a worker indefinitely.
+   * 0 (the default, like sharp) or `Infinity` waits indefinitely, but you should set a timeout for
+   * untrusted input. Otherwise, an image that's slow to process can occupy a worker indefinitely.
    */
-  timeout(options: TimeoutOptions): this {
-    const seconds = checkInteger('timeout.seconds', options?.seconds, 0, 3600)
-    this.#timeoutMs = seconds === 0 ? undefined : seconds * 1000
+  timeoutMs(ms: number): this {
+    checkMs('timeoutMs', ms)
+    this.#timeoutMs = ms === 0 ? undefined : ms
     return this
   }
 
@@ -439,151 +427,53 @@ export class Pipeline {
     if (angle === undefined) {
       return this.autoOrient()
     }
-    if (!isInteger(angle, -3600, 3600) || angle % 90 !== 0) {
-      throw invalid('angle', 'multiple of 90', angle)
-    }
     this.#rotate = angle
     return this
   }
 
   resize(width?: number | null, height?: number | null, options?: ResizeOptions): this
   resize(options: ResizeOptions): this
-  resize(
-    widthOrOptions?: number | null | ResizeOptions,
-    height?: number | null,
-    options: ResizeOptions = {},
-  ): this {
-    let width: number | null | undefined
+  resize(widthOrOptions?: number | null | ResizeOptions, height?: number | null, options?: ResizeOptions): this {
     if (widthOrOptions !== null && typeof widthOrOptions === 'object') {
-      options = widthOrOptions
-      width = options.width
-      height = options.height
+      this.#resize = copyOptions(widthOrOptions)
     } else {
-      width = widthOrOptions ?? options.width
-      height = height ?? options.height
-    }
-    const dimension = (name: string, value: number | null | undefined) =>
-      value == null ? undefined : checkInteger(name, value, 1, 0xffffffff)
-    const resize: NativeResizeOptions = {
-      width: dimension('width', width),
-      height: dimension('height', height),
-      fit: optional(options.fit, (v) => checkOneOf('fit', v, FITS)),
-      kernel: optional(options.kernel, (v) => checkOneOf('kernel', v, KERNELS)),
-      withoutEnlargement: optional(options.withoutEnlargement, (v) => checkBoolean('withoutEnlargement', v)),
-      withoutReduction: optional(options.withoutReduction, (v) => checkBoolean('withoutReduction', v)),
-    }
-    if (options.position !== undefined) {
-      const gravity = GRAVITY[checkOneOf('position', options.position, Object.keys(GRAVITY) as Position[])]
-      ;[resize.gravityX, resize.gravityY] = gravity
-    }
-    if (options.background !== undefined) {
-      const { r, g, b, alpha = 1 } = options.background
-      resize.background = {
-        r: checkInteger('background.r', r, 0, 255),
-        g: checkInteger('background.g', g, 0, 255),
-        b: checkInteger('background.b', b, 0, 255),
-        alpha: checkNumber('background.alpha', alpha, 0, 1),
-      }
-    }
-    this.#resize = resize
-    return this
-  }
-
-  /**
-   * Without arguments (or `true`), performs a mild 3x3 box blur. With a sigma (0.3-1000), performs
-   * a Gaussian blur. `false` disables blurring.
-   */
-  blur(sigma?: number | boolean | { sigma: number }): this {
-    if (sigma === undefined || sigma === true) {
-      this.#blur = {}
-    } else if (sigma === false) {
-      this.#blur = undefined
-    } else {
-      const value = typeof sigma === 'object' && sigma !== null ? sigma.sigma : sigma
-      this.#blur = { sigma: checkNumber('sigma', value, 0.3, 1000) }
+      const resize = copyOptions(options)
+      resize.width = widthOrOptions ?? resize.width
+      resize.height = height ?? resize.height
+      this.#resize = resize
     }
     return this
   }
 
-  jpeg(options: JpegOptions = {}): this {
-    this.#output = {
-      format: 'jpeg',
-      jpeg: {
-        quality: optional(options.quality, (v) => checkInteger('quality', v, 1, 100)),
-        mozjpeg: optional(options.mozjpeg, (v) => checkBoolean('mozjpeg', v)),
-      },
-    }
+  jpeg(options?: JpegOptions): this {
+    this.#output = { format: 'jpeg', jpeg: copyOptions(options) }
     return this
   }
 
-  png(options: PngOptions = {}): this {
-    if (options.quality !== undefined) {
-      checkInteger('quality', options.quality, 1, 100)
-    }
-    this.#output = {
-      format: 'png',
-      png: {
-        compressionLevel: optional(options.compressionLevel, (v) => checkInteger('compressionLevel', v, 0, 9)),
-        adaptiveFiltering: optional(options.adaptiveFiltering, (v) => checkBoolean('adaptiveFiltering', v)),
-      },
-    }
+  png(options?: PngOptions): this {
+    this.#output = { format: 'png', png: copyOptions(options) }
     return this
   }
 
-  webp(options: WebpOptions = {}): this {
-    this.#output = {
-      format: 'webp',
-      webp: {
-        quality: optional(options.quality, (v) => checkInteger('quality', v, 1, 100)),
-        alphaQuality: optional(options.alphaQuality, (v) => checkInteger('alphaQuality', v, 0, 100)),
-        lossless: optional(options.lossless, (v) => checkBoolean('lossless', v)),
-        nearLossless: optional(options.nearLossless, (v) => checkBoolean('nearLossless', v)),
-        smartSubsample: optional(options.smartSubsample, (v) => checkBoolean('smartSubsample', v)),
-        effort: optional(options.effort, (v) => checkInteger('effort', v, 0, 6)),
-      },
-    }
+  webp(options?: WebpOptions): this {
+    this.#output = { format: 'webp', webp: copyOptions(options) }
     return this
   }
 
-  gif(options: GifOptions = {}): this {
-    this.#output = {
-      format: 'gif',
-      gif: { effort: optional(options.effort, (v) => checkInteger('effort', v, 1, 10)) },
-    }
+  gif(options?: GifOptions): this {
+    this.#output = { format: 'gif', gif: copyOptions(options) }
     return this
-  }
-
-  toFormat(format: 'jpeg' | 'jpg', options?: JpegOptions): this
-  toFormat(format: 'png', options?: PngOptions): this
-  toFormat(format: 'webp', options?: WebpOptions): this
-  toFormat(format: 'gif', options?: GifOptions): this
-  toFormat(format: OutputFormat | 'jpg', options?: FormatOptions): this
-  toFormat(format: OutputFormat | 'jpg', options?: FormatOptions): this {
-    switch (format) {
-      case 'jpeg':
-      case 'jpg':
-        return this.jpeg(options as JpegOptions)
-      case 'png':
-        return this.png(options as PngOptions)
-      case 'webp':
-        return this.webp(options as WebpOptions)
-      case 'gif':
-        return this.gif(options as GifOptions)
-      default:
-        throw invalid('format', 'one of jpeg, jpg, png, webp, gif', format)
-    }
   }
 
   /** Processes the image. Without an explicit output format, uses the input format. */
   toBuffer(options?: ToBufferOptions & { resolveWithObject?: false }): Promise<Buffer>
   toBuffer(options: ToBufferOptions & { resolveWithObject: true }): Promise<{ data: Buffer; info: OutputInfo }>
   async toBuffer(options: ToBufferOptions = {}): Promise<Buffer | { data: Buffer; info: OutputInfo }> {
-    const transform: TransformOptions = {
+    const transform: Unchecked<TransformOptions> = {
       limits: this.#limits,
       autoOrient: this.#autoOrient,
       rotate: this.#rotate,
       resize: this.#resize,
-      blur: this.#blur,
       ...this.#output,
     }
     const response = await this.#run({ transform })
@@ -594,7 +484,7 @@ export class Pipeline {
     return options.resolveWithObject ? { data, info } : data
   }
 
-  /** Reads the image header without decoding pixels. Ignores all operations except `timeout()`. */
+  /** Reads the image header without decoding pixels. Ignores all operations except `timeoutMs()`. */
   async metadata(): Promise<Metadata> {
     const metadata = await this.#run({ metadata: this.#limits })
     if (metadata.kind !== 'metadata') {
@@ -616,14 +506,6 @@ export class Pipeline {
   }
 
   #run(options: RequestOptions): Promise<Response> {
-    return (this.#pool ?? defaultPool()).run(this.#input, options, this.#limits, this.#timeoutMs)
+    return this.#pool.run(this.#input, options, this.#limitOutputBytes, this.#timeoutMs)
   }
-}
-
-/**
- * Creates a pipeline, like `sharp(input, options)`. Unlike sharp, only in-memory input is supported
- * (never file paths).
- */
-export function blunt(input: Input, options?: BluntOptions): Pipeline {
-  return new Pipeline(input, options)
 }

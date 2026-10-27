@@ -9,6 +9,9 @@ publish.workspace = true
 # Requests are JSON options followed by the input (see `protocol.rs`).
 serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
+# `#[typeshare]`, which marks the types that `pnpm generate` exports to `js/protocol.generated.ts`.
+# Not the `typeshare` crate, which depends on chrono at runtime.
+typeshare-annotation = { version = "1.0.5", default-features = false }
 # `_exit`, for `ExitOnOom`.
 libc = { version = "0.2.190", default-features = false }
 
@@ -22,11 +25,11 @@ avif-decode = { path = "../../vendor/avif-decode", default-features = false }
 avif-parse = { version = "2.1.0", default-features = false }
 # Reuses avif-decode's output buffers.
 bytemuck = { version = "1.25.2", default-features = false, features = ["extern_crate_alloc"] }
+# SVG. Without `text` (and fonts) and `svgz`. `raster-images` renders embedded (`data:` URL) JPEG,
+# PNG, GIF, and WebP images, with the same decoder crates that `image` uses (see AGENTS.md).
+resvg = { version = "0.48.1", default-features = false, features = ["raster-images"] }
 # ICC profile -> sRGB conversion. Same major version as `image` uses.
 moxcms = { version = "0.8.1", default-features = false, features = ["lut", "neon_shaper_paths", "sse_shaper_paths", "avx_shaper_paths"] }
-
-# Image operations
-fast_image_resize = { version = "6.1.0", default-features = false, features = ["std"] }
 
 # Encoders. Sandboxing encoders isn't a goal: they only ever see pixel buffers we produced.
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }

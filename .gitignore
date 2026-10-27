@@ -1,8 +1,7 @@
 /target
 /node_modules
 /dist
-/npm
-*.node
 /blunt-image-optimization-worker.*
 *.wasm
 *.tgz
+/.turbo

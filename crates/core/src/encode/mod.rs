@@ -7,6 +7,8 @@ mod png;
 mod webp;
 
 use image::DynamicImage;
+use serde::{Deserialize, Serialize};
+use typeshare_annotation::typeshare;
 
 pub use self::gif::GifSpec;
 pub use self::jpeg::JpegSpec;
@@ -14,6 +16,16 @@ pub use self::png::PngSpec;
 pub use self::webp::WebpSpec;
 use crate::error::{Error, Result};
 use crate::limits::Limits;
+
+#[typeshare]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputFormat {
+    Jpeg,
+    Png,
+    Webp,
+    Gif,
+}
 
 #[derive(Clone, Debug)]
 pub enum OutputSpec {
@@ -24,12 +36,12 @@ pub enum OutputSpec {
 }
 
 impl OutputSpec {
-    pub fn format_name(&self) -> &'static str {
+    pub fn format(&self) -> OutputFormat {
         match self {
-            OutputSpec::Jpeg(_) => "jpeg",
-            OutputSpec::Png(_) => "png",
-            OutputSpec::Webp(_) => "webp",
-            OutputSpec::Gif(_) => "gif",
+            OutputSpec::Jpeg(_) => OutputFormat::Jpeg,
+            OutputSpec::Png(_) => OutputFormat::Png,
+            OutputSpec::Webp(_) => OutputFormat::Webp,
+            OutputSpec::Gif(_) => OutputFormat::Gif,
         }
     }
 }
@@ -43,7 +55,7 @@ pub struct Encoded {
 
 /// Roughly how many bytes per pixel the C encoders (libwebp and mozjpeg) allocate, on top of the
 /// image itself and their output. They allocate with `malloc`, so the worker's allocator doesn't
-/// count it, and `limitProcessMemory` isn't enforced everywhere. The other encoders are Rust, so
+/// count it, and `limitProcessMemoryBytes` isn't enforced everywhere. The other encoders are Rust, so
 /// the allocator limits them. Measured with peak RSS on noisy 16 MP images, rounded up.
 fn c_encoder_bytes_per_pixel(img: &DynamicImage, spec: &OutputSpec) -> u64 {
     match spec {

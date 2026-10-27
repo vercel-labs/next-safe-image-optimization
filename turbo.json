@@ -1,0 +1,26 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  // cargo reads many environment variables (CARGO_*, CC_*, ...).
+  "envMode": "loose",
+  "tasks": {
+    // Cargo has its own incremental cache, which also knows about inputs turbo can't see (the
+    // toolchain, the target, RUSTFLAGS, ...).
+    "build:native": {
+      "cache": false
+    },
+    "build:native:release": {
+      "cache": false
+    },
+    "build:wasm": {
+      "cache": false
+    },
+    "build:wasm:release": {
+      "cache": false
+    },
+    // Doesn't depend on the native build (the worker is only spawned), so it runs alongside it.
+    "build:js": {
+      "inputs": ["js/**", "tsconfig.json"],
+      "outputs": ["dist/**"]
+    }
+  }
+}

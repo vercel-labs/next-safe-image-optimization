@@ -8,44 +8,30 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "binding.js",
-    "binding.d.ts",
     "blunt-image-optimization.wasm"
   ],
-  "napi": {
-    "binaryName": "blunt-image-optimization",
-    "targets": [
-      "x86_64-apple-darwin",
-      "aarch64-apple-darwin",
-      "x86_64-pc-windows-msvc",
-      "aarch64-pc-windows-msvc",
-      "x86_64-unknown-linux-gnu",
-      "aarch64-unknown-linux-gnu",
-      "x86_64-unknown-linux-musl",
-      "aarch64-unknown-linux-musl"
-    ]
-  },
   "engines": {
     "node": ">= 20.9.0"
   },
   "scripts": {
-    "build": "pnpm build:native --release && pnpm build:js",
-    "build:debug": "pnpm build:native && pnpm build:js",
+    "build": "turbo run build:native build:js",
+    "build:release": "turbo run build:native:release build:js",
     "build:native": "node scripts/build-native.mjs",
+    "build:native:release": "node scripts/build-native.mjs --release",
     "build:wasm": "node scripts/build-wasm.mjs",
+    "build:wasm:release": "node scripts/build-wasm.mjs --release",
     "build:js": "tsc -p tsconfig.json",
+    "generate": "typeshare crates/core --lang=typescript --output-file=js/protocol.generated.ts",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
     "test:wasm": "BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm node --run test",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit",
-    "lint": "cargo fmt --check && cargo clippy --all-targets -- -D warnings && pnpm typecheck",
-    "artifacts": "napi artifacts",
-    "prepublishOnly": "napi prepublish -t npm"
+    "lint": "cargo fmt --check && cargo clippy --all-targets -- -D warnings && pnpm typecheck"
   },
   "packageManager": "pnpm@12.11.2",
   "devDependencies": {
-    "@napi-rs/cli": "^3.10.8",
     "@types/node": "^26.6.5",
     "sharp": "^0.35.5",
+    "turbo": "^2.11.10",
     "typescript": "^7.0.2"
   }
 }

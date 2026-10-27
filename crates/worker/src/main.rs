@@ -1,5 +1,8 @@
-//! The worker process. The shim (`crates/shim`) spawns it with the arguments `<version> <parent
-//! pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for stdin and stdout.
+//! The worker process. The JS wrapper (`js/native.ts`) spawns it with the arguments `<version>
+//! <parent pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for stdin and
+//! stdout. On unix, it instead spawns it once as a fork server (`--fork-server`), which forks
+//! workers with the same setup, except that stdin and stdout are a Unix socket (see
+//! `fork_server.rs`).
 //!
 //! Requests arrive on stdin as `[u64 LE length][request]`, and responses are written to stdout
 //! (see `blunt_core::protocol`). The worker handles one request at a time. It exits as soon as
@@ -12,6 +15,11 @@ use std::thread;
 
 use blunt_core::exit_immediately;
 use blunt_core::protocol::{self, EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED, EXIT_VERSION_MISMATCH};
+
+#[cfg(unix)]
+mod fork_server;
+#[cfg(unix)]
+mod node_ipc;
 
 #[global_allocator]
 static GLOBAL: blunt_core::ExitOnOom = blunt_core::ExitOnOom;
@@ -27,7 +35,9 @@ fn main() {
     };
     let parent = number().and_then(|pid| u32::try_from(pid).ok());
     let memory_limit = number().unwrap_or(0);
+    let fork_server = args.next().is_some_and(|arg| arg == "--fork-server");
 
+    // Forked workers inherit the limit.
     #[cfg(target_os = "linux")]
     if memory_limit > 0 && limit_process_memory(memory_limit).is_err() {
         exit_immediately(EXIT_SANDBOX_FAILED);
@@ -39,6 +49,19 @@ fn main() {
     sandbox::exit_with_parent(parent);
     #[cfg(not(target_os = "linux"))]
     let _ = parent;
+
+    #[cfg(unix)]
+    if fork_server {
+        let server = std::process::id();
+        fork_server::serve();
+        // Now in a forked worker, which doesn't inherit `PR_SET_PDEATHSIG`.
+        #[cfg(target_os = "linux")]
+        sandbox::exit_with_parent(Some(server));
+        #[cfg(not(target_os = "linux"))]
+        let _ = server;
+    }
+    #[cfg(not(unix))]
+    let _ = fork_server;
 
     let mut output = take_stdout();
     let (sender, requests) = mpsc::sync_channel(0);
@@ -139,8 +162,8 @@ fn take_stdout() -> io::Stdout {
 #[cfg(target_os = "linux")]
 mod sandbox {
     /// Asks the kernel to kill us when the parent exits. Strictly, this fires when the parent
-    /// *thread* that spawned us exits, but the shim spawns each worker from a thread that lives
-    /// at least as long as the worker.
+    /// *thread* that spawned us exits: for Node, the JS thread that started the worker (or fork
+    /// server), which also owns its pipes. The fork server is single-threaded.
     pub fn exit_with_parent(parent: Option<u32>) {
         unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) };
         // In case the parent exited before `prctl`.
@@ -166,8 +189,8 @@ mod sandbox {
 
         /// Everything the worker needs after startup: reading requests and writing responses
         /// (and rav1d's logging, to stderr), memory management, threads synchronizing, and
-        /// aborting. Anything else (opening files, sockets, spawning processes, etc.) fails with
-        /// `EPERM`.
+        /// aborting (plus `tgkill`, below). Anything else (opening files, sockets, spawning
+        /// processes, etc.) fails with `EPERM`.
         const ALLOWED: &[c_long] = &[
             libc::SYS_read,
             libc::SYS_write,
@@ -188,7 +211,6 @@ mod sandbox {
             libc::SYS_sigaltstack,
             libc::SYS_getpid,
             libc::SYS_gettid,
-            libc::SYS_tgkill,
             libc::SYS_exit,
             libc::SYS_exit_group,
         ];
@@ -217,6 +239,8 @@ mod sandbox {
             // Offsets into `struct seccomp_data`.
             const NR: u32 = 0;
             const ARCH: u32 = 4;
+            // The low half (on little-endian), which is all the kernel reads of a `pid_t`.
+            const ARG0: u32 = 16;
 
             let mut filter = vec![
                 statement(BPF_LD | BPF_W | BPF_ABS, ARCH),
@@ -228,6 +252,16 @@ mod sandbox {
                 filter.push(jump_if_equal(nr as u32, 0, 1));
                 filter.push(statement(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
             }
+            // glibc's `abort` raises `SIGABRT` with `tgkill(getpid(), gettid(), SIGABRT)`.
+            // (Without it, `abort` still kills the worker, but with `SIGTRAP` or `SIGSEGV`.) Only
+            // allow signaling our own process, not others owned by the same user (like Node or
+            // the fork server).
+            filter.extend([
+                jump_if_equal(libc::SYS_tgkill as u32, 0, 3),
+                statement(BPF_LD | BPF_W | BPF_ABS, ARG0),
+                jump_if_equal(std::process::id(), 0, 1),
+                statement(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+            ]);
             filter.push(statement(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM as u32));
             let program = sock_fprog {
                 len: filter.len() as u16,
@@ -248,5 +282,19 @@ mod sandbox {
             };
             if result != 0 { Err(()) } else { Ok(()) }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `js/native.ts` passes `package.json`'s version, which has to match.
+    #[test]
+    fn version_matches_package_json() {
+        let package = include_str!("../../../package.json");
+        let version = format!(r#""version": "{}""#, env!("CARGO_PKG_VERSION"));
+        assert!(
+            package.contains(&version),
+            "package.json doesn't have {version}"
+        );
     }
 }

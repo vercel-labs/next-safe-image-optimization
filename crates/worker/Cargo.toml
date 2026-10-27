@@ -14,3 +14,6 @@ blunt-core = { path = "../core" }
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2.190", default-features = false }
+# For the fork server's messages.
+serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1.0.151", default-features = false, features = ["std"] }

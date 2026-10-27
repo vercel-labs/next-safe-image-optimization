@@ -1,7 +1,7 @@
 //! The worker process. The JS wrapper (`js/native.ts`) spawns it with the arguments `<version>
 //! <parent pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for stdin and
-//! stdout. On unix, it instead spawns it once as a fork server (`--fork-server <socket>`), which
-//! forks workers with the same setup, except that stdin and stdout are a Unix socket (see
+//! stdout. On unix, it instead spawns it once as a fork server (`--fork-server`), which forks
+//! workers with the same setup, except that stdin and stdout are a Unix socket (see
 //! `fork_server.rs`).
 //!
 //! Requests arrive on stdin as `[u64 LE length][request]`, and responses are written to stdout
@@ -18,6 +18,8 @@ use blunt_core::protocol::{self, EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED, EXIT_V
 
 #[cfg(unix)]
 mod fork_server;
+#[cfg(unix)]
+mod node_ipc;
 
 #[global_allocator]
 static GLOBAL: blunt_core::ExitOnOom = blunt_core::ExitOnOom;
@@ -33,13 +35,7 @@ fn main() {
     };
     let parent = number().and_then(|pid| u32::try_from(pid).ok());
     let memory_limit = number().unwrap_or(0);
-    let fork_server = match args.next() {
-        Some(arg) if arg == "--fork-server" => Some(
-            args.next()
-                .unwrap_or_else(|| exit_immediately(EXIT_INVALID_FRAME)),
-        ),
-        _ => None,
-    };
+    let fork_server = args.next().is_some_and(|arg| arg == "--fork-server");
 
     // Forked workers inherit the limit.
     #[cfg(target_os = "linux")]
@@ -55,9 +51,9 @@ fn main() {
     let _ = parent;
 
     #[cfg(unix)]
-    if let Some(socket) = fork_server {
+    if fork_server {
         let server = std::process::id();
-        fork_server::serve(&socket);
+        fork_server::serve();
         // Now in a forked worker, which doesn't inherit `PR_SET_PDEATHSIG`.
         #[cfg(target_os = "linux")]
         sandbox::exit_with_parent(Some(server));

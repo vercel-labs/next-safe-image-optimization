@@ -225,8 +225,8 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     await assertFails(fork('exit 88'), 'ERR_WORKER_SPAWN')
     await assertFails(fork('exit 0'), 'ERR_WORKER_CRASHED')
     await assertFails(fork('kill -9 $$'), 'ERR_WORKER_CRASHED')
-    // Closes its stdin and stdout, but keeps running.
-    await assertFails(fork('exec sleep 10 <&- >&-'), 'ERR_WORKER_CRASHED')
+    // Closes its IPC channel, but keeps running.
+    await assertFails(fork('exec sleep 10 3<&-'), 'ERR_WORKER_CRASHED')
   })
 
   test('a worker that never responds is killed', async () => {

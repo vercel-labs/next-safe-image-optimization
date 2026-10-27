@@ -4,10 +4,9 @@
 // sends a malformed response, or output it wasn't asked for, is killed.
 
 import { type ChildProcess, spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { type Server, type Socket, createServer } from 'node:net'
-import { constants, tmpdir } from 'node:os'
+import { existsSync } from 'node:fs'
+import type { Socket } from 'node:net'
+import { constants } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { isMusl } from './musl.js'
@@ -29,7 +28,7 @@ export interface NativeOptions {
 
 /** The worker exits with `EXIT_VERSION_MISMATCH` unless this matches its own version. */
 const VERSION = (require('../package.json') as { version: string }).version
-/** How long the fork server may take to reply, and a forked worker to connect. */
+/** How long the fork server may take to reply, and to reap a worker after killing it. */
 const SERVER_TIMEOUT_MS = 10_000
 const MAX_TIMEOUT_MS = 2 ** 31 - 1
 const U64_MAX = 2n ** 64n - 1n
@@ -108,35 +107,35 @@ function ignore() {}
 
 interface Started {
   child: ChildProcess
-  stdin: Socket
-  stdout: Socket
   /** Resolves when it exits, with how to report that. */
   exited: Promise<WorkerError>
 }
 
-/** Spawns the worker binary, and resolves once it starts. */
-function start(options: NativeOptions, args: readonly string[]): Promise<Started | WorkerError> {
+/**
+ * Spawns the worker binary, and resolves once it starts. A worker gets pipes for stdin and stdout,
+ * and the fork server gets an IPC channel instead (fd 3, see `node_ipc.rs`).
+ */
+function start(options: NativeOptions, forkServer: boolean): Promise<Started | WorkerError> {
   const memoryLimit = BigInt(options.memoryLimit) > U64_MAX ? U64_MAX : BigInt(options.memoryLimit)
+  const args = [VERSION, String(process.pid), String(memoryLimit), ...(forkServer ? ['--fork-server'] : [])]
+  const stderr = options.inheritStderr ? 'inherit' : 'ignore'
   let child: ChildProcess
   try {
-    child = spawn(options.workerPath, [VERSION, String(process.pid), String(memoryLimit), ...args], {
+    child = spawn(options.workerPath, args, {
       env: {},
-      stdio: ['pipe', 'pipe', options.inheritStderr ? 'inherit' : 'ignore'],
+      stdio: forkServer ? ['ignore', 'ignore', stderr, 'ipc'] : ['pipe', 'pipe', stderr],
       windowsHide: true,
     })
   } catch (error) {
     return Promise.resolve(failure('ERR_WORKER_SPAWN', `failed to spawn ${options.workerPath}: ${String(error)}`))
   }
-  // Child processes' stdio pipes are sockets.
-  const stdin = child.stdin as Socket
-  const stdout = child.stdout as Socket
-  stdin.on('error', ignore)
-  stdout.on('error', ignore)
+  child.stdin?.on('error', ignore)
+  child.stdout?.on('error', ignore)
   const exited = new Promise<WorkerError>((resolve) => {
     child.once('exit', (code, signal) => resolve(exitFailure(code, signal)))
   })
   return new Promise((resolve) => {
-    child.once('spawn', () => resolve({ child, stdin, stdout, exited }))
+    child.once('spawn', () => resolve({ child, exited }))
     // Also emitted if killing it fails (but not if it already exited).
     child.on('error', (error) => {
       resolve(failure('ERR_WORKER_SPAWN', `failed to spawn ${options.workerPath}: ${error.message}`))
@@ -162,10 +161,11 @@ class SpawnedWorker implements WorkerProcess {
   readonly exited: Promise<WorkerError>
   #child: ChildProcess
 
-  constructor({ child, stdin, stdout, exited }: Started) {
+  constructor({ child, exited }: Started) {
     this.#child = child
-    this.input = stdin
-    this.output = stdout
+    // Child processes' stdio pipes are sockets.
+    this.input = child.stdin as Socket
+    this.output = child.stdout as Socket
     this.exited = exited
   }
 
@@ -219,124 +219,17 @@ class ForkedWorker implements WorkerProcess {
   }
 }
 
-/** 16 random bytes, in hex. */
-const TOKEN_LENGTH = 32
-
-/**
- * Forked workers connect to this, and identify themselves with a random token, which is only used
- * once. On Linux, it's in the abstract namespace, so there's no file to clean up. Elsewhere, it's
- * in a private temporary directory, which is removed when the process exits. One for all pools.
- */
-class Listener {
-  static #instance: Promise<Listener | WorkerError> | undefined
-
-  /** The name (on Linux) or path that the fork server connects to. */
-  readonly address: string
-  #pending = new Map<string, (socket: Socket | undefined) => void>()
-
-  /** Retries next time if it fails. */
-  static get(): Promise<Listener | WorkerError> {
-    if (Listener.#instance === undefined) {
-      const instance = Listener.#listen()
-      Listener.#instance = instance
-      void instance.then((listener) => {
-        if (!(listener instanceof Listener) && Listener.#instance === instance) {
-          Listener.#instance = undefined
-        }
-      })
-    }
-    return Listener.#instance
-  }
-
-  static #listen(): Promise<Listener | WorkerError> {
-    let address
-    let path
-    if (process.platform === 'linux') {
-      address = `blunt-image-optimization-${process.pid}-${randomBytes(8).toString('hex')}`
-      path = `\0${address}`
-    } else {
-      let dir: string
-      try {
-        dir = mkdtempSync(join(tmpdir(), 'blunt-'))
-      } catch (error) {
-        return Promise.resolve(failure('ERR_WORKER_SPAWN', `failed to create a socket directory: ${String(error)}`))
-      }
-      process.once('exit', () => rmSync(dir, { recursive: true, force: true }))
-      address = path = join(dir, 'socket')
-    }
-    const server = createServer()
-    const listener = new Listener(server, address)
-    return new Promise((resolve) => {
-      server.once('error', (error) => {
-        resolve(failure('ERR_WORKER_SPAWN', `failed to listen on a Unix socket: ${error.message}`))
-      })
-      server.listen(path, () => {
-        server.unref()
-        // Accepting can fail (like with `EMFILE`), which only fails that worker.
-        server.on('error', ignore)
-        resolve(listener)
-      })
-    })
-  }
-
-  private constructor(server: Server, address: string) {
-    this.address = address
-    server.on('connection', (socket) => this.#identify(socket))
-  }
-
-  /** Waits for the worker with `token` to connect. Resolves with `undefined` after a timeout. */
-  expect(token: string): { connected: Promise<Socket | undefined>; cancel: () => void } {
-    let done!: (socket: Socket | undefined) => void
-    const connected = new Promise<Socket | undefined>((resolve) => {
-      const timer = setTimeout(() => done(undefined), SERVER_TIMEOUT_MS)
-      done = (socket) => {
-        clearTimeout(timer)
-        this.#pending.delete(token)
-        resolve(socket)
-      }
-    })
-    this.#pending.set(token, done)
-    return { connected, cancel: () => done(undefined) }
-  }
-
-  #identify(socket: Socket) {
-    socket.unref()
-    socket.on('error', ignore)
-    socket.setTimeout(SERVER_TIMEOUT_MS, () => socket.destroy())
-    const chunks: Buffer[] = []
-    let length = 0
-    const onData = (chunk: Buffer) => {
-      chunks.push(chunk)
-      length += chunk.length
-      if (length < TOKEN_LENGTH) {
-        return
-      }
-      socket.off('data', onData)
-      socket.pause()
-      socket.setTimeout(0)
-      const data = Buffer.concat(chunks)
-      const done = this.#pending.get(data.toString('latin1', 0, TOKEN_LENGTH))
-      if (done === undefined) {
-        socket.destroy()
-        return
-      }
-      if (data.length > TOKEN_LENGTH) {
-        socket.unshift(data.subarray(TOKEN_LENGTH))
-      }
-      done(socket)
-    }
-    socket.on('data', onData)
-  }
-}
-
-// The fork server's messages, each `[u32 LE length][JSON]`. Keep in sync with
+// The fork server's messages, over Node's IPC channel (which isn't supported with a process that
+// isn't Node, but hasn't changed significantly since Node 0.8 in 2012, and Bun and Deno use the
+// same protocol, see `crates/worker/src/node_ipc.rs`). Keep in sync with
 // `crates/worker/src/fork_server.rs`. The server is trusted, so replies aren't validated.
-type Message = { type: 'spawn'; id: number; token: string } | { type: 'kill'; id: number }
+type Message = { type: 'spawn'; id: number } | { type: 'kill'; id: number }
 type Reply =
+  /** Sent with the worker's socket. */
   | { type: 'spawned'; id: number; pid: number }
   | { type: 'spawnFailed'; id: number; error: string }
   | { type: 'exited'; id: number; code: number | null; signal: number | null }
-type SpawnReply = Extract<Reply, { type: 'spawned' | 'spawnFailed' }>
+type Spawn = { socket: Socket } | { error: string }
 
 interface Forked {
   resolve: (exit: WorkerError) => void
@@ -348,17 +241,15 @@ type ForkResult = { worker: ForkedWorker } | { failure: WorkerError; serverExite
 
 /**
  * A worker started with `--fork-server`, which forks workers. It never keeps the process alive by
- * itself, and it exits when the process does (when its stdin closes).
+ * itself, and it exits when the process does (when the IPC channel closes).
  */
 class ForkServer {
-  #started: Started
-  #listener: Listener
+  #child: ChildProcess
   #nextId = 0
   /** Waiting for `spawned` or `spawnFailed`. */
-  #spawns = new Map<number, (reply: SpawnReply | undefined) => void>()
+  #spawns = new Map<number, (spawn: Spawn | undefined) => void>()
   /** Forked, and not yet reaped. */
   #workers = new Map<number, Forked>()
-  #replies = Buffer.alloc(0)
   #exited = false
   /** Why it was killed, if it stopped responding. */
   #abandoned: string | undefined
@@ -366,25 +257,17 @@ class ForkServer {
   #failure: WorkerError = failure('ERR_WORKER_SPAWN', 'the fork server exited')
 
   static async start(options: NativeOptions): Promise<ForkServer | WorkerError> {
-    const listener = await Listener.get()
-    if (!(listener instanceof Listener)) {
-      return listener
-    }
-    const started = await start(options, ['--fork-server', listener.address])
-    return 'code' in started ? started : new ForkServer(started, listener)
+    const started = await start(options, true)
+    return 'code' in started ? started : new ForkServer(started)
   }
 
-  private constructor(started: Started, listener: Listener) {
-    this.#started = started
-    this.#listener = listener
-    const { child, stdin, stdout, exited } = started
+  private constructor({ child, exited }: Started) {
+    this.#child = child
+    // Bun has no `channel.unref()`, but there, `child.unref()` covers the channel too.
     child.unref()
-    stdin.unref()
-    stdout.unref()
-    stdout.on('data', (chunk: Buffer) => this.#onReplies(chunk))
-    stdout.on('end', () => this.#abandon())
-    stdout.on('error', () => this.#abandon())
-    stdin.on('error', () => this.#abandon())
+    child.channel?.unref?.()
+    child.on('message', (reply: Reply, socket?: Socket) => this.#onReply(reply, socket))
+    child.on('disconnect', () => this.#abandon())
     void exited.then((exit) => this.#onExit(exit))
   }
 
@@ -397,32 +280,26 @@ class ForkServer {
       return { failure: this.#failure, serverExited: true }
     }
     const id = this.#nextId++
-    const token = randomBytes(TOKEN_LENGTH / 2).toString('hex')
-    const { connected, cancel } = this.#listener.expect(token)
     const exited = new Promise<WorkerError>((resolve) => this.#workers.set(id, { resolve }))
-    const reply = await new Promise<SpawnReply | undefined>((resolve) => {
+    const spawn = await new Promise<Spawn | undefined>((resolve) => {
       const timer = setTimeout(() => this.#abandon(`the fork server didn't reply in ${SERVER_TIMEOUT_MS}ms`), SERVER_TIMEOUT_MS)
-      this.#spawns.set(id, (reply) => {
+      this.#spawns.set(id, (spawn) => {
         clearTimeout(timer)
         this.#spawns.delete(id)
-        resolve(reply)
+        resolve(spawn)
       })
-      this.#send({ type: 'spawn', id, token })
+      this.#send({ type: 'spawn', id })
     })
-    if (reply?.type !== 'spawned') {
-      cancel()
+    if (spawn === undefined || 'error' in spawn) {
       this.#workers.delete(id)
-      if (reply === undefined) {
+      if (spawn === undefined) {
         return { failure: this.#failure, serverExited: true }
       }
-      return { failure: failure('ERR_WORKER_SPAWN', `the fork server ${reply.error}`), serverExited: false }
+      return { failure: failure('ERR_WORKER_SPAWN', `the fork server ${spawn.error}`), serverExited: false }
     }
-    const socket = await connected
-    if (socket === undefined) {
-      this.kill(id)
-      return { failure: failure('ERR_WORKER_SPAWN', "the forked worker didn't connect"), serverExited: false }
-    }
-    return { worker: new ForkedWorker(this, id, socket, exited) }
+    spawn.socket.unref()
+    spawn.socket.on('error', ignore)
+    return { worker: new ForkedWorker(this, id, spawn.socket, exited) }
   }
 
   /** Does nothing if the worker already exited. */
@@ -441,41 +318,35 @@ class ForkServer {
     if (this.#exited) {
       return
     }
-    const json = Buffer.from(JSON.stringify(message))
-    const length = Buffer.alloc(4)
-    length.writeUInt32LE(json.length)
-    this.#started.stdin.write(Buffer.concat([length, json]))
+    // Errors (if the channel closed) are handled by `'disconnect'`.
+    this.#child.send(message, ignore)
   }
 
-  #onReplies(chunk: Buffer) {
-    this.#replies = Buffer.concat([this.#replies, chunk])
-    let offset = 0
-    while (offset + 4 <= this.#replies.length) {
-      const end = offset + 4 + this.#replies.readUInt32LE(offset)
-      if (end > this.#replies.length) {
-        break
-      }
-      this.#onReply(JSON.parse(this.#replies.toString('utf8', offset + 4, end)) as Reply)
-      offset = end
-    }
-    this.#replies = this.#replies.subarray(offset)
-  }
-
-  #onReply(reply: Reply) {
+  #onReply(reply: Reply, socket: Socket | undefined) {
     if (reply.type === 'exited') {
       const worker = this.#workers.get(reply.id)
       this.#workers.delete(reply.id)
       clearTimeout(worker?.timer)
       worker?.resolve(exitFailure(reply.code, reply.signal === null ? null : signalName(reply.signal)))
+      return
+    }
+    const resolve = this.#spawns.get(reply.id)
+    if (reply.type === 'spawnFailed') {
+      resolve?.({ error: reply.error })
+    } else if (socket === undefined) {
+      this.#abandon("the fork server didn't send a worker's socket")
+    } else if (resolve === undefined) {
+      // It already timed out.
+      socket.destroy()
     } else {
-      this.#spawns.get(reply.id)?.(reply)
+      resolve({ socket })
     }
   }
 
   /** Kills the server. Once it exits, the pool starts another. */
   #abandon(reason?: string) {
     this.#abandoned ??= reason
-    this.#started.child.kill('SIGKILL')
+    this.#child.kill('SIGKILL')
   }
 
   #onExit(exit: WorkerError) {
@@ -572,7 +443,7 @@ export class NativeBackend implements Backend {
     if ((this.#options.forkServer ?? true) && process.platform !== 'win32') {
       return this.#fork()
     }
-    const started = await start(this.#options, [])
+    const started = await start(this.#options, false)
     return 'code' in started ? started : new SpawnedWorker(started)
   }
 
@@ -604,8 +475,6 @@ export class NativeBackend implements Backend {
     worker.output.on('close', closed)
     worker.output.on('error', closed)
     worker.input.on('error', closed)
-    // Forked workers' sockets are paused after reading their token.
-    worker.output.resume()
     return slot
   }
 

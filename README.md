@@ -5,9 +5,10 @@ A safer image optimization library for Node.js, intended to replace [sharp](http
 sharp (libvips) decodes untrusted images with C libraries. This library decodes with memory-safe Rust decoders from the [image-rs](https://github.com/image-rs) ecosystem, configured with explicit memory limits, in sandboxed worker processes.
 
 ```js
-const { blunt } = require('blunt-image-optimization')
+const { defaultPool } = require('blunt-image-optimization')
 
-const output = await blunt(input, { limitInputPixels: 268402689 })
+const output = await defaultPool()
+  .prepare(input, { limitInputPixels: 268402689 })
   .rotate() // auto-orient using EXIF
   .resize(640, null, { withoutEnlargement: true })
   .webp({ quality: 75 })
@@ -40,7 +41,7 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 
 ## Differences from sharp
 
-- Only in-memory input (never file paths). Exports `blunt()` instead of a default export.
+- Only in-memory input (never file paths). Pipelines are created by a pool's `prepare()`, instead of a default export.
 - Unsupported options (like `fit` or `progressive`) are rejected with a `TypeError`, instead of being ignored. Most options are validated by the worker, so `toBuffer()` or `metadata()` rejects with it, instead of the method throwing. `sequentialRead` is accepted, but ignored.
 - `rotate(angle)` only supports multiples of 90. There is no `blur`, `flip`, `extract`, `composite`, etc.
 - `resize()` is always like sharp's default `fit: 'cover'` with `position: 'centre'`: there's no `fit`, `position`, or `background`. `kernel` supports `nearest`, `linear`, `cubic`, and `lanczos3` (the filters that `image` implements), and resampling isn't sharp's, so pixels differ slightly. Resizing is slower than sharp's, and its intermediate buffer (16 bytes per pixel, for the input width times the output height) counts against `limitAllocatorMemoryBytes`.
@@ -75,13 +76,13 @@ pnpm test:wasm
 
 ## Pools
 
-Images are processed by a pool of workers, one image per worker at a time. Workers start on demand, exit when idle, and are replaced if they crash or time out. By default, pipelines share a pool with up to `os.availableParallelism()` workers. To configure one:
+Images are processed by a pool of workers, one image per worker at a time. Workers start on demand, exit when idle, and are replaced if they crash or time out. `defaultPool()` is a shared pool with up to `os.availableParallelism()` workers. To configure one:
 
 ```js
-const { blunt, Pool } = require('blunt-image-optimization')
+const { Pool } = require('blunt-image-optimization')
 
 const pool = new Pool({ concurrency: 4, idleTimeoutMs: 30_000 })
-const output = await blunt(input, { pool }).timeoutMs(10_000).webp().toBuffer()
+const output = await pool.prepare(input).timeoutMs(10_000).webp().toBuffer()
 ```
 
 The native backend uses worker processes. Without a native worker binary for the platform, or with `backend: 'wasm'` (or `BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm`), workers are threads running a wasm build. `limitProcessMemoryBytes` limits each worker's memory.

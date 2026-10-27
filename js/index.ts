@@ -12,7 +12,7 @@ export type Kernel = `${generated.Kernel}`
 
 export type Input = Uint8Array | ArrayBuffer | ArrayBufferView
 
-export interface BluntOptions {
+export interface PipelineOptions {
   /**
    * Reject input images where `width * height` exceeds this. `true` uses the default; `false` or
    * `0` removes the limit (not recommended). Default: `268402689` (`0x3FFF * 0x3FFF`), like sharp.
@@ -52,8 +52,6 @@ export interface BluntOptions {
   allowAnimated?: boolean
   /** Equivalent to calling `autoOrient()`. */
   autoOrient?: boolean
-  /** The pool of workers that processes the image. Default: `defaultPool()`. */
-  pool?: Pool
   /** Accepted for compatibility with sharp (Next.js passes it), but ignored. */
   sequentialRead?: boolean
 }
@@ -295,6 +293,14 @@ export class Pool {
     this.backend = this.#backend.name
   }
 
+  /**
+   * Creates a pipeline that processes `input` with this pool's workers. Only in-memory input is
+   * supported (never file paths).
+   */
+  prepare(input: Input, options?: PipelineOptions): Pipeline {
+    return new Pipeline(this, input, options)
+  }
+
   /** @internal */
   async run(
     input: Uint8Array,
@@ -330,19 +336,19 @@ export class Pool {
 
 let globalPool: Pool | undefined
 
-/** The pool used by pipelines without a `pool` option. Created with default options on first use. */
+/** A shared pool, created with default options on first use. */
 export function defaultPool(): Pool {
   globalPool ??= new Pool()
   return globalPool
 }
 
 /**
- * A chainable image processing pipeline, similar to a sharp instance. Operations always run in this
- * order, regardless of call order: auto-orient, rotate, resize.
+ * A chainable image processing pipeline, similar to a sharp instance, created by `Pool.prepare()`.
+ * Operations always run in this order, regardless of call order: auto-orient, rotate, resize.
  */
 export class Pipeline {
   #input: Uint8Array
-  #pool: Pool | undefined
+  #pool: Pool
   #limits: Unchecked<LimitOptions>
   /** Validated here, because the response's maximum size depends on it. */
   #limitOutputBytes: number | undefined
@@ -352,14 +358,12 @@ export class Pipeline {
   #resize: ResizeOptions | undefined
   #output: Pick<Unchecked<TransformOptions>, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
 
-  constructor(input: Input, options?: BluntOptions) {
+  /** @internal Use `Pool.prepare()`. */
+  constructor(pool: Pool, input: Input, options?: PipelineOptions) {
+    this.#pool = pool
     this.#input = toUint8Array(input)
     // The rest are the worker's limits. `sequentialRead` is ignored.
-    const { pool, autoOrient, limitInputPixels, limitOutputBytes, sequentialRead, ...limits } = copyOptions(options)
-    if (pool !== undefined && !(pool instanceof Pool)) {
-      throw invalid('pool', 'Pool', pool)
-    }
-    this.#pool = pool
+    const { autoOrient, limitInputPixels, limitOutputBytes, sequentialRead, ...limits } = copyOptions(options)
     this.#limitOutputBytes = optional(limitOutputBytes, (v) => checkInteger('limitOutputBytes', v, 1))
     const { allowedInputFormats } = limits
     this.#limits = {
@@ -481,14 +485,6 @@ export class Pipeline {
   }
 
   #run(options: RequestOptions): Promise<Response> {
-    return (this.#pool ?? defaultPool()).run(this.#input, options, this.#limitOutputBytes, this.#timeoutMs)
+    return this.#pool.run(this.#input, options, this.#limitOutputBytes, this.#timeoutMs)
   }
-}
-
-/**
- * Creates a pipeline, like `sharp(input, options)`. Unlike sharp, only in-memory input is supported
- * (never file paths).
- */
-export function blunt(input: Input, options?: BluntOptions): Pipeline {
-  return new Pipeline(input, options)
 }

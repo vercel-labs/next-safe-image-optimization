@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, test } from 'node:test'
 
-import { Pool, blunt, defaultPool } from '../dist/index.js'
+import { Pool, defaultPool } from '../dist/index.js'
 import { NativeBackend } from '../dist/native.js'
 import type { RunResult } from '../dist/protocol.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
@@ -31,9 +31,8 @@ describe('pool', () => {
     assert.throws(() => new Pool({ concurrency: 0 }), TypeError)
     assert.throws(() => new Pool({ idleTimeoutMs: -1 }), TypeError)
     assert.throws(() => new Pool({ backend: 'other' as never }), TypeError)
-    assert.throws(() => blunt(Buffer.alloc(1), { pool: {} as never }), TypeError)
     for (const ms of [-1, -0.5, NaN, undefined, '10']) {
-      assert.throws(() => blunt(Buffer.alloc(1)).timeoutMs(ms as never), TypeError)
+      assert.throws(() => defaultPool().prepare(Buffer.alloc(1)).timeoutMs(ms as never), TypeError)
     }
   })
 
@@ -41,7 +40,7 @@ describe('pool', () => {
     const input = await fromRaw(pattern(8, 8)).png().toBuffer()
     // More than 2 ** 31 - 1 ms, which `setTimeout` would treat as 1ms, and more than a `Duration`.
     for (const ms of [3_000_000_000, Number.MAX_VALUE, Infinity]) {
-      const { info } = await blunt(input).timeoutMs(ms).toBuffer({ resolveWithObject: true })
+      const { info } = await defaultPool().prepare(input).timeoutMs(ms).toBuffer({ resolveWithObject: true })
       assert.equal(info.width, 8)
     }
   })
@@ -51,7 +50,7 @@ describe('pool', () => {
     assert.equal(pool.backend, backend)
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     const results = await Promise.all(
-      Array.from({ length: 4 }, (_, i) => blunt(input, { pool }).resize(10 + i).toBuffer({ resolveWithObject: true })),
+      Array.from({ length: 4 }, (_, i) => pool.prepare(input).resize(10 + i).toBuffer({ resolveWithObject: true })),
     )
     results.forEach(({ info }, i) => assert.equal(info.width, 10 + i))
   })
@@ -65,16 +64,16 @@ describe('pool', () => {
       'ERR_TIMEOUT',
     )
     assert.ok(performance.now() - start < 2000)
-    const { info } = await blunt(input, { pool }).timeoutMs(60_000).resize(8).toBuffer({ resolveWithObject: true })
+    const { info } = await pool.prepare(input).timeoutMs(60_000).resize(8).toBuffer({ resolveWithObject: true })
     assert.equal(info.width, 8)
   })
 
   test('idle workers keep neither themselves nor the process alive', () => {
     const script = `
-      const { blunt, Pool } = require('./dist/index.js')
+      const { Pool } = require('./dist/index.js')
       // A 1x1 PNG.
       const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==', 'base64')
-      blunt(png, { pool: new Pool({ idleTimeoutMs: 60000 }) }).toBuffer().then(() => console.log('done'))
+      new Pool({ idleTimeoutMs: 60000 }).prepare(png).toBuffer().then(() => console.log('done'))
     `
     const start = performance.now()
     const child = spawnSync(process.execPath, ['-e', script], { cwd: join(import.meta.dirname, '..'), timeout: 30_000 })
@@ -89,9 +88,9 @@ describe('pool', () => {
     const pool = new Pool({ concurrency: 1, limitProcessMemoryBytes: 48 * 1024 * 1024 })
     // 75 MB of pixels. `limitAllocatorMemoryBytes` allows it, so the allocator doesn't stop it first.
     const large = await fromRaw(pattern(5000, 5000)).png().toBuffer()
-    await assertRejectsWithCode(blunt(large, { pool, limitAllocatorMemoryBytes: 2 ** 30 }).png().toBuffer(), 'ERR_OUT_OF_MEMORY')
+    await assertRejectsWithCode(pool.prepare(large, { limitAllocatorMemoryBytes: 2 ** 30 }).png().toBuffer(), 'ERR_OUT_OF_MEMORY')
     const small = await fromRaw(pattern(30, 30)).png().toBuffer()
-    await blunt(small, { pool }).png().toBuffer()
+    await pool.prepare(small).png().toBuffer()
   })
 
   test('limitProcessMemoryBytes is validated', () => {
@@ -121,7 +120,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
     const before = new Set(servers().map(({ pid }) => pid))
     const pool = new Pool({ concurrency: 2 })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
-    await Promise.all([blunt(input, { pool }).png().toBuffer(), blunt(input, { pool }).png().toBuffer()])
+    await Promise.all([pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()])
     const all = processes()
     const added = servers().filter(({ pid }) => !before.has(pid))
     assert.equal(added.length, 1)
@@ -134,18 +133,18 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
     const before = new Set(servers().map(({ pid }) => pid))
     const pool = new Pool({ concurrency: 1 })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
-    await blunt(input, { pool }).png().toBuffer()
+    await pool.prepare(input).png().toBuffer()
     const [server] = servers().filter(({ pid }) => !before.has(pid))
     for (const { pid } of processes().filter(({ ppid }) => ppid === server!.pid)) {
       process.kill(pid, 'SIGKILL')
     }
     process.kill(server!.pid, 'SIGKILL')
     // The idle worker is gone too, which the pool may not have noticed yet.
-    await blunt(input, { pool })
+    await pool.prepare(input)
       .png()
       .toBuffer()
       .catch((error: { code?: string }) => assert.equal(error.code, 'ERR_WORKER_CRASHED'))
-    await blunt(input, { pool }).png().toBuffer()
+    await pool.prepare(input).png().toBuffer()
     const replaced = servers().filter(({ pid }) => !before.has(pid) && pid !== server!.pid)
     assert.equal(replaced.length, 1)
   })

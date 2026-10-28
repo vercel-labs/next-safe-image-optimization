@@ -103,9 +103,9 @@ mod seccomp {
         })
     }
 
-    /// Installs the filters on every thread (`SECCOMP_FILTER_FLAG_TSYNC`), including the stdin
-    /// reader. Also sets `PR_SET_NO_NEW_PRIVS`, which installing a filter without `CAP_SYS_ADMIN`
-    /// requires.
+    /// Installs the filters on every thread (`SECCOMP_FILTER_FLAG_TSYNC`). The worker is
+    /// single-threaded, but a thread started before this would otherwise be unsandboxed. Also sets
+    /// `PR_SET_NO_NEW_PRIVS`, which installing a filter without `CAP_SYS_ADMIN` requires.
     pub fn enable(filters: &Filters) -> Result<(), seccompiler::Error> {
         // The allowlist blocks `prctl` and `seccomp`, so it goes last.
         seccompiler::apply_filter_all_threads(&filters.killed)?;

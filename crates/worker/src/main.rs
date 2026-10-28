@@ -5,12 +5,15 @@
 //! `fork_server.rs`).
 //!
 //! Requests arrive on stdin as `[u64 LE length][request]`, and responses are written to stdout
-//! (see `blunt_core::protocol`). The worker handles one request at a time. It exits as soon as
-//! stdin closes, even mid-request, so that it doesn't outlive the parent.
+//! (see `blunt_core::protocol`). The worker handles one request at a time. It exits when stdin
+//! closes, and when the parent exits, even mid-request (see `requests`), so that it doesn't outlive
+//! the parent.
 
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
+#[cfg(not(target_os = "linux"))]
 use std::sync::mpsc;
+#[cfg(not(target_os = "linux"))]
 use std::thread;
 
 use blunt_core::exit_immediately;
@@ -74,14 +77,6 @@ fn main() {
     let _ = fork_server;
 
     let mut output = take_stdout();
-    let (sender, requests) = mpsc::sync_channel(0);
-    let (started, start) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = started.send(());
-        read_requests(sender)
-    });
-    // The sandbox would block the thread's own setup (like glibc registering `rseq`).
-    let _ = start.recv();
 
     #[cfg(all(
         target_os = "linux",
@@ -96,7 +91,7 @@ fn main() {
     )))]
     let _ = EXIT_SANDBOX_FAILED;
 
-    for request in requests {
+    for request in requests() {
         let response = protocol::handle(request);
         let written = output
             .write_all(&response.head)
@@ -109,26 +104,45 @@ fn main() {
     }
 }
 
-/// Reads requests on a separate thread, so that the worker notices when stdin closes (because
-/// the parent exited or killed the worker) even while it's busy.
-fn read_requests(sender: mpsc::SyncSender<Vec<u8>>) -> ! {
+/// On Linux, the main thread reads each request after handling the last one, without another
+/// thread. It doesn't need to notice stdin closing mid-request: `PR_SET_PDEATHSIG` kills the worker
+/// if its parent (Node or the fork server) exits, and otherwise, the parent kills it directly.
+#[cfg(target_os = "linux")]
+fn requests() -> impl Iterator<Item = Vec<u8>> {
     let mut stdin = io::stdin().lock();
-    loop {
-        let mut len = [0; 8];
-        if stdin.read_exact(&mut len).is_err() {
-            exit_immediately(0);
+    std::iter::repeat_with(move || read_request(&mut stdin))
+}
+
+/// Elsewhere, a separate thread reads requests, so that the worker exits as soon as stdin closes,
+/// even while it's busy. That's the only way it can notice that its parent exited (and on macOS,
+/// the only way to end a forked worker after its fork server exits).
+#[cfg(not(target_os = "linux"))]
+fn requests() -> impl Iterator<Item = Vec<u8>> {
+    let (sender, requests) = mpsc::sync_channel(0);
+    thread::spawn(move || {
+        let mut stdin = io::stdin().lock();
+        loop {
+            if sender.send(read_request(&mut stdin)).is_err() {
+                exit_immediately(0);
+            }
         }
-        let Ok(len) = usize::try_from(u64::from_le_bytes(len)) else {
-            exit_immediately(EXIT_INVALID_FRAME);
-        };
-        let mut request = Vec::with_capacity(len);
-        match (&mut stdin).take(len as u64).read_to_end(&mut request) {
-            Ok(read) if read == len => {}
-            _ => exit_immediately(0),
-        }
-        if sender.send(request).is_err() {
-            exit_immediately(0);
-        }
+    });
+    requests.into_iter()
+}
+
+/// Exits if stdin closes.
+fn read_request(stdin: &mut impl Read) -> Vec<u8> {
+    let mut len = [0; 8];
+    if stdin.read_exact(&mut len).is_err() {
+        exit_immediately(0);
+    }
+    let Ok(len) = usize::try_from(u64::from_le_bytes(len)) else {
+        exit_immediately(EXIT_INVALID_FRAME);
+    };
+    let mut request = Vec::with_capacity(len);
+    match stdin.take(len as u64).read_to_end(&mut request) {
+        Ok(read) if read == len => request,
+        _ => exit_immediately(0),
     }
 }
 

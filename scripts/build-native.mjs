@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// Builds the worker binary (`crates/worker`), and copies it to the package root as
-// `blunt-image-optimization-worker.<platform>`, where `js/native.ts` looks for it. The platform is
-// Node's (like `linux-x64-gnu`, or `darwin-arm64`).
+// CI's release build of the worker binary (`crates/worker`) for a target, which it copies to the
+// package root as `blunt-image-optimization-worker.<platform>`, where `js/native.ts` also looks for
+// it. The platform is Node's (like `linux-x64-gnu`, or `darwin-arm64`). Local builds don't need this:
+// `pnpm build` builds the worker in `target/debug`, where `js/native.ts` looks first.
 //
-// Usage: node scripts/build-native.mjs [--release] [--target <triple>] [-x] [extra cargo args]
+// Usage: node scripts/build-native.mjs --target <triple> [-x] [extra cargo args]
 //
 // `-x` cross-compiles with cargo-zigbuild.
 
@@ -34,26 +35,13 @@ function platform(triple) {
   return abi === undefined ? `${nodeOs}-${nodeArch}` : `${nodeOs}-${nodeArch}-${abi}`
 }
 
-function hostTriple() {
-  const result = spawnSync('rustc', ['-vV'], { cwd: root, encoding: 'utf8' })
-  const host = result.stdout?.match(/^host: (.+)$/m)?.[1]
-  if (result.status !== 0 || host === undefined) {
-    console.error('failed to get the host target from `rustc -vV`')
-    process.exit(1)
-  }
-  return host
-}
-
 const args = process.argv.slice(2)
-let release = false
 let cross = false
 let target
 const extra = []
 for (let i = 0; i < args.length; i++) {
   const arg = args[i]
-  if (arg === '--release' || arg === '-r') {
-    release = true
-  } else if (arg === '-x' || arg === '--cross-compile') {
+  if (arg === '-x' || arg === '--cross-compile') {
     cross = true
   } else if (arg === '--target' || arg === '-t') {
     target = args[++i]
@@ -61,22 +49,16 @@ for (let i = 0; i < args.length; i++) {
     extra.push(arg)
   }
 }
+if (target === undefined) {
+  console.error('usage: node scripts/build-native.mjs --target <triple> [-x] [extra cargo args]')
+  process.exit(1)
+}
 
-// Panics abort the worker (see the `worker` profiles in Cargo.toml).
-const profile = release ? 'worker' : 'worker-dev'
 // cargo-zigbuild takes the glibc version as a suffix (otherwise, it's zig's default), but its output
 // directory doesn't include it.
-const cargoTarget = cross && target?.endsWith('-gnu') ? `${target}.${GLIBC_VERSION}` : target
-run('cargo', [
-  cross ? 'zigbuild' : 'build',
-  '-p',
-  'blunt-worker',
-  '--profile',
-  profile,
-  ...(cargoTarget ? ['--target', cargoTarget] : []),
-  ...extra,
-])
-const name = platform(target ?? hostTriple())
+const cargoTarget = cross && target.endsWith('-gnu') ? `${target}.${GLIBC_VERSION}` : target
+run('cargo', [cross ? 'zigbuild' : 'build', '-p', 'blunt-worker', '--release', '--locked', '--target', cargoTarget, ...extra])
+const name = platform(target)
 const exe = name.startsWith('win32') ? '.exe' : ''
-const worker = join(root, 'target', ...(target ? [target] : []), profile, `blunt-image-optimization-worker${exe}`)
+const worker = join(root, 'target', target, 'release', `blunt-image-optimization-worker${exe}`)
 copyFileSync(worker, join(root, `blunt-image-optimization-worker.${name}${exe}`))

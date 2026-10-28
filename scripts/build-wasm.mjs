@@ -12,7 +12,7 @@ import { join } from 'node:path'
 
 const root = join(import.meta.dirname, '..')
 const target = 'wasm32-wasip1'
-const profile = process.argv.includes('--release') ? 'worker' : 'worker-dev'
+const release = process.argv.includes('--release')
 
 const wasiSdk = process.env.WASI_SDK_PATH
 if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
@@ -21,7 +21,7 @@ if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
 }
 
 const exe = process.platform === 'win32' ? '.exe' : ''
-const cargo = spawnSync('cargo', ['build', '-p', 'blunt-wasm', '--target', target, '--profile', profile], {
+const cargo = spawnSync('cargo', ['build', '-p', 'blunt-wasm', '--locked', '--target', target, ...(release ? ['--release'] : [])], {
   cwd: root,
   stdio: 'inherit',
   env: {
@@ -61,7 +61,7 @@ const allowedImports = new Map([
     ]),
   ],
 ])
-const file = join(root, 'target', target, profile, 'blunt_wasm.wasm')
+const file = join(root, 'target', target, release ? 'release' : 'debug', 'blunt_wasm.wasm')
 const wasm = await WebAssembly.compile(readFileSync(file))
 const disallowed = WebAssembly.Module.imports(wasm)
   .filter(({ module, name }) => !allowedImports.get(module)?.has(name))

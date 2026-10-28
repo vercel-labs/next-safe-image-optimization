@@ -1,8 +1,12 @@
 [workspace]
-members = ["crates/*"]
-# A path dependency of `blunt-core`, not a workspace member (it has its own binary and tests).
-exclude = ["vendor/avif-decode"]
+# avif-decode is only a member because turbo can't hash local packages outside the workspace. It
+# isn't a default member: it has its own binary and tests.
+members = ["crates/*", "vendor/avif-decode"]
+default-members = ["crates/*"]
 resolver = "3"
+
+[workspace.metadata]
+name = "blunt-cargo"
 
 [workspace.package]
 # Must match package.json's: `js/native.ts` passes that, and the worker checks it.
@@ -11,8 +15,13 @@ edition = "2024"
 license = "MIT"
 publish = false
 
+# Everything built is the worker process or the wasm module, where a panic just ends the process (or
+# instance), so neither profile unwinds. Tests ignore `panic`.
+[profile.dev]
+panic = "abort"
+
 # These debug-assert on malformed input, instead of returning the error that release builds do.
-# rav1d and yuv are also very slow without optimizations. Same as avif-decode's own profile.
+# rav1d and yuv are also very slow without optimizations.
 [profile.dev.package.avif-parse]
 debug-assertions = false
 
@@ -28,13 +37,4 @@ debug-assertions = false
 lto = true
 codegen-units = 1
 strip = "symbols"
-
-# For the worker process and the wasm module. A panic just ends the process (or instance), so
-# there's no need for unwinding.
-[profile.worker]
-inherits = "release"
-panic = "abort"
-
-[profile.worker-dev]
-inherits = "dev"
 panic = "abort"

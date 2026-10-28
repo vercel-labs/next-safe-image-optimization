@@ -72,6 +72,7 @@ dependencies = [
  "avif-parse",
  "bytemuck",
  "imgref",
+ "lodepng",
  "log",
  "quick-error",
  "rav1d",
@@ -427,6 +428,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
  "scopeguard",
+]
+
+[[package]]
+name = "lodepng"
+version = "3.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe7982db11054edc023a1b424dddcc65be18f71fa46ec6bde2efcfc1fb6b22da"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "libc",
+ "rgb",
 ]
 
 [[package]]

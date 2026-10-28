@@ -9,7 +9,6 @@ keywords = ["av1", "rav1d", "decoder", "heif"]
 license = "BSD-3-Clause"
 repository = "https://github.com/kornelski/avif-decode"
 edition = "2024"
-rust-version = "1.98"
 
 [[bin]]
 name = "avif-decode"
@@ -35,21 +34,12 @@ rav1d = { git = "https://github.com/memorysafety/rav1d", rev = "0c851fa046d6a364
 default = ["binary"]
 binary = ["dep:lodepng"]
 
-[profile.dev]
-opt-level = 1
-debug = "line-tables-only"
+# blunt-image-optimization: this is a workspace member (for turbo), so clippy lints it too.
+[lints.clippy]
+all = "allow"
 
-[profile.dev.package.rav1d]
-opt-level = 2
-debug-assertions = false
-
-[profile.dev.package.yuv]
-opt-level = 2
-debug-assertions = false
-
-[profile.release]
-opt-level = 3
-lto = true
+# blunt-image-optimization: profiles removed. This is a workspace member, so Cargo would ignore them
+# (with a warning). The root Cargo.toml has the ones that matter.
 
 [badges]
 maintenance = { status = "passively-maintained" }

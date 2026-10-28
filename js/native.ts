@@ -4,7 +4,7 @@
 // sends a malformed response, or output it wasn't asked for, is killed.
 
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import type { Socket } from 'node:net'
 import { constants } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -54,11 +54,19 @@ export interface WorkerBinary {
 }
 
 /**
- * The worker is in the package root when built locally, or else in the platform's package. Returns
- * `undefined` if there isn't one for this platform.
+ * The worker is in `target/debug` or `target/release` when built locally (whichever is newer), in
+ * the package root when CI built it (`scripts/build-native.mjs`), or else in the platform's package.
+ * Returns `undefined` if there isn't one for this platform.
  */
 export function findWorker(): WorkerBinary | undefined {
   const exe = process.platform === 'win32' ? '.exe' : ''
+  const built = ['debug', 'release']
+    .map((profile) => join(__dirname, '..', 'target', profile, `blunt-image-optimization-worker${exe}`))
+    .filter((path) => existsSync(path))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+  if (built.length > 0) {
+    return { path: built[0], local: true }
+  }
   for (const platform of platforms()) {
     const name = `blunt-image-optimization-worker.${platform}${exe}`
     const local = join(__dirname, '..', name)

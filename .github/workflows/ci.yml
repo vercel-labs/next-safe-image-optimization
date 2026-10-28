@@ -34,9 +34,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Uses the version and components from rust-toolchain.toml.
       - run: rustup toolchain install
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: pnpm exec turbo run format:check
+      - run: pnpm exec turbo run lint
+      - run: pnpm exec turbo run test
       # typeshare only publishes Windows binaries.
       - run: cargo install typeshare-cli --version 1.13.4 --locked
       - name: Check that generated protocol types are up to date
@@ -44,8 +44,7 @@ jobs:
           set -euo pipefail
           pnpm generate
           git diff --exit-code -- js/protocol.generated.ts
-      - run: pnpm exec turbo run build:js
-      - run: pnpm typecheck
+      - run: pnpm exec turbo run typecheck
 
   build:
     name: Build ${{ matrix.settings.target }}
@@ -85,7 +84,6 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - run: npm install --global pnpm@12.11.2
       - name: Install Rust
         shell: bash
         env:
@@ -116,7 +114,7 @@ jobs:
           chmod +x "$dir/bin/cargo-zigbuild"
           echo "$dir" >> "$GITHUB_PATH"
           echo "$dir/bin" >> "$GITHUB_PATH"
-      - run: pnpm install --frozen-lockfile
+      # Only needs Node.js, not turbo (or pnpm).
       - name: Build
         shell: bash
         env:
@@ -125,7 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           # shellcheck disable=SC2086 # FLAGS is intentionally word-split.
-          pnpm exec turbo run build:native:release -- --target "$TARGET" $FLAGS
+          node scripts/build-native.mjs --target "$TARGET" $FLAGS
       - name: Check glibc compatibility
         if: ${{ endsWith(matrix.settings.target, '-gnu') }}
         run: |
@@ -185,8 +183,9 @@ jobs:
           if-no-files-found: error
 
   # The full range of Node.js versions is only tested on Linux (glibc) and wasm. Other platforms only
-  # test the oldest version that Next.js supports. Tooling (pnpm, turbo, tsc) runs on Node.js 24, and
-  # the tests are compiled to JS (`build:test`), because Node.js 20 can't strip types.
+  # test the oldest version that Next.js supports. Tooling (pnpm, tsc) runs on Node.js 24, and the
+  # tests are compiled to JS (`build:test`), because Node.js 20 can't strip types. These jobs don't
+  # use turbo, which needs cargo (and downloads every crate) even for JS tasks.
   test:
     name: Test ${{ matrix.target }} on ${{ matrix.host }} - node@${{ matrix.node }}
     needs: build
@@ -218,7 +217,8 @@ jobs:
           architecture: ${{ matrix.architecture }}
       - run: npm install --global pnpm@12.11.2
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec turbo run build:test
+      - run: pnpm build:js
+      - run: pnpm build:test
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: worker-${{ matrix.target }}
@@ -258,7 +258,8 @@ jobs:
       - run: npm install --global pnpm@12.11.2
       # Install sharp's musl binaries (used to generate test images) for the Alpine container.
       - run: pnpm install --frozen-lockfile --libc glibc --libc musl
-      - run: pnpm exec turbo run build:test
+      - run: pnpm build:js
+      - run: pnpm build:test
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: worker-${{ matrix.target }}
@@ -296,7 +297,8 @@ jobs:
           node-version: 24
       - run: npm install --global pnpm@12.11.2
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec turbo run build:test
+      - run: pnpm build:js
+      - run: pnpm build:test
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: wasm32-wasip1

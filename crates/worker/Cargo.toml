@@ -9,6 +9,11 @@ publish.workspace = true
 name = "blunt-image-optimization-worker"
 path = "src/main.rs"
 
+[[test]]
+name = "linux_sandbox"
+# It runs itself in a child process, which installs the filters on every thread (see the file).
+harness = false
+
 [dependencies]
 blunt-core = { path = "../core" }
 
@@ -17,3 +22,7 @@ libc = { version = "0.2.190", default-features = false }
 # For the fork server's messages.
 serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
+
+[target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
+# Without `json`: the filter is built in Rust.
+seccompiler = { version = "0.5.0", default-features = false }

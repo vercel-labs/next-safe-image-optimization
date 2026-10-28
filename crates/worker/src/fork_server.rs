@@ -1,8 +1,8 @@
 //! The fork server (unix only). With `--fork-server`, the worker forks a new worker each time the
 //! parent (`js/native.ts`) asks, so that workers skip `exec` and loading the binary. It's
 //! single-threaded (forking only copies the calling thread), and never sees any image data. It has
-//! no seccomp filter: workers install theirs after forking, and a filter for the server would have
-//! to allow everything they do before that.
+//! no seccomp filter: workers install theirs after forking (compiled before the server started), and
+//! a filter for the server would have to allow everything they do before that.
 //!
 //! The parent spawns it with Node's IPC channel as fd 3 (see `node_ipc.rs`), which can pass file
 //! descriptors. For each worker, the server creates a socketpair and forks. One end is the worker's

@@ -258,11 +258,6 @@ describe('encoder options', () => {
     await assertSimilar(stored, input, 0)
   })
 
-  test('png ignores quality (sharp compatibility)', async () => {
-    const input = await inputs.png()
-    await assertSimilar(await pool.prepare(input).png({ quality: 50 }).toBuffer(), input, 0)
-  })
-
   test('grayscale stays grayscale', async () => {
     const input = await inputs['grayscale png']()
     const { info } = await pool.prepare(input).png().toBuffer({ resolveWithObject: true })

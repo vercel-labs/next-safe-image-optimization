@@ -52,8 +52,6 @@ export interface PipelineOptions {
   allowAnimated?: boolean
   /** Equivalent to calling `autoOrient()`. */
   autoOrient?: boolean
-  /** Accepted for compatibility with sharp (Next.js passes it), but ignored. */
-  sequentialRead?: boolean
 }
 
 export type BackendName = 'native' | 'wasm'
@@ -120,11 +118,6 @@ export interface PngOptions {
   compressionLevel?: number
   /** Default: `true` (sharp defaults to `false`). */
   adaptiveFiltering?: boolean
-  /**
-   * 1-100. Accepted for compatibility with sharp, but ignored. Output is always lossless truecolor;
-   * there is no palette quantization.
-   */
-  quality?: number
 }
 
 export interface WebpOptions {
@@ -385,8 +378,8 @@ export class Pipeline {
   constructor(pool: Pool, input: Input, options?: PipelineOptions) {
     this.#pool = pool
     this.#input = toUint8Array(input)
-    // The rest are the worker's limits. `sequentialRead` is ignored.
-    const { autoOrient, limitInputPixels, limitOutputBytes, sequentialRead, ...limits } = copyOptions(options)
+    // The rest are the worker's limits.
+    const { autoOrient, limitInputPixels, limitOutputBytes, ...limits } = copyOptions(options)
     this.#limitOutputBytes = optional(limitOutputBytes, (v) => checkInteger('limitOutputBytes', v, 1))
     const { allowedInputFormats } = limits
     this.#limits = {

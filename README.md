@@ -42,13 +42,13 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 ## Differences from sharp
 
 - Only in-memory input (never file paths). Pipelines are created by a pool's `prepare()`, instead of a default export.
-- Unsupported options (like `fit` or `progressive`) are rejected with a `TypeError`, instead of being ignored. Most options are validated by the worker, so `toBuffer()` or `metadata()` rejects with it, instead of the method throwing. `sequentialRead` is accepted, but ignored.
+- Unsupported options (like `fit`, `progressive`, or `sequentialRead`) are rejected with a `TypeError`, instead of being ignored. Most options are validated by the worker, so `toBuffer()` or `metadata()` rejects with it, instead of the method throwing.
 - `rotate(angle)` only supports multiples of 90. There is no `blur`, `flip`, `extract`, `composite`, etc.
 - `resize()` is always like sharp's default `fit: 'cover'` with `position: 'centre'`: there's no `fit`, `position`, or `background`. `kernel` supports `nearest`, `linear`, `cubic`, and `lanczos3` (the filters that `image` implements), and resampling isn't sharp's, so pixels differ slightly. Resizing is slower than sharp's, and its intermediate buffer (16 bytes per pixel, for the input width times the output height) counts against `limitAllocatorMemoryBytes`.
 - No HEIF input. No AVIF, HEIF, or animated output.
 - SVGs are rendered with resvg, not librsvg. Text isn't rendered (there are no fonts), `<image>` only loads `data:` URLs, and SVGZ isn't supported. That covers Next.js's OG images, whose text Satori has already converted to paths.
 - No YCbCr TIFF input, which includes most JPEG-compressed TIFFs.
-- PNG output is always lossless truecolor: `png({ quality })` is accepted but ignored (no palette quantization), and `adaptiveFiltering` defaults to `true`.
+- PNG output is always lossless truecolor: there's no `quality` (palette quantization), and `adaptiveFiltering` defaults to `true`.
 - JPEG uses `jpeg-encoder` by default, not mozjpeg, so files are somewhat larger than sharp's. `mozjpeg: true` uses mozjpeg, like sharp, but built without its SIMD assembly, so it's slower than sharp's. `progressive`, `chromaSubsampling` (always 4:2:0), `optimiseCoding` (always on), and `quantisationTable` aren't supported. JPEGs may be progressive: they always are with `mozjpeg: true` (its defaults, like sharp's preset), and never are without it.
 - CMYK JPEGs are converted to RGB naively, ignoring their ICC profile.
 - `limitInputPixels` also applies to `metadata()`, and to the size an SVG is rendered at. It doesn't apply to raster images embedded in an SVG (neither does sharp's).

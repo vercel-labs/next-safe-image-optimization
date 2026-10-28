@@ -60,8 +60,6 @@ export interface MetadataResponse {
 export interface PngOptions {
 	compressionLevel?: number;
 	adaptiveFiltering?: boolean;
-	/** Accepted for compatibility with sharp, but ignored (there's no palette quantization). */
-	quality?: number;
 }
 
 /** The filters that `image` implements, named like sharp's. */

@@ -19,7 +19,7 @@ const output = await defaultPool()
 
 - **Input:** JPEG, PNG, WebP, GIF, TIFF, AVIF, SVG. Only the first frame of animations is decoded. AVIF ICC profiles, orientation (`irot`/`imir`), and cropping (`clap`) are ignored, and grid (tiled) AVIFs and AVIF sequences are rejected.
 - `allowedInputFormats` restricts the input formats (detected from the contents, never a file extension or content type), and `allowAnimated: false` rejects animated images with `ERR_ANIMATED`. Both are checked before decoding, and also apply to `metadata()`.
-- **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp).
+- **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp). See [docs/colors.md](docs/colors.md) for bit depth, ICC, CMYK, and HDR limitations.
 - **Operations:** auto-orient, rotate (multiples of 90°), resize (sharp's default `fit: 'cover'`, centered).
 - `metadata()` reads the header without decoding pixels.
 - `timeoutMs(ms)`, like sharp's `timeout({ seconds })`, which kills the worker if processing takes too long. There's no default timeout, but you should set one for untrusted input.

@@ -50,7 +50,7 @@ const meta = await defaultPool().prepare(input).timeoutMs(5_000).metadata()
 
 ### Worker pools
 
-Images are processed in a pool of background workers, one image per worker at a time. Workers start on demand, exit when idle, and are automatically replaced if they crash or time out.
+Images are processed in a pool of background workers, one image per worker at a time. Workers start on demand, and by default, each one is replaced after processing a single image (except on Windows; see `maxImagesPerWorker`). Workers are also replaced if they crash or time out, and exit when idle.
 
 `defaultPool()` returns a shared pool sized to `os.availableParallelism()`. You can also create a pool with custom settings:
 

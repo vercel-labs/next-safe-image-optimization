@@ -17,6 +17,8 @@ export interface WasmOptions {
   maxWorkers: number
   /** Over `MAX_TIMEOUT_MS` (like `Infinity`), idle workers never exit. */
   idleTimeoutMs: number
+  /** Responses before a worker is terminated (`Infinity` for no limit). */
+  maxImagesPerWorker: number
   /** The maximum size of each instance's memory, or 0 for the most possible. */
   memoryLimit: number
 }
@@ -39,6 +41,7 @@ interface Slot {
   worker: Worker
   job?: Job
   timer?: NodeJS.Timeout
+  responses: number
 }
 
 /** The package with the wasm module, which isn't in the main package, like sharp's `@img/sharp-wasm32`. */
@@ -128,7 +131,7 @@ export class WasmBackend implements Backend {
     const memoryLimit = Math.min(this.#options.memoryLimit || MAX_MEMORY_BYTES, MAX_MEMORY_BYTES)
     const maximumPages = Math.max(INITIAL_PAGES, Math.floor(memoryLimit / PAGE_SIZE))
     const workerData: WasmWorkerData = { module, initialPages: INITIAL_PAGES, maximumPages }
-    const slot: Slot = { worker: new Worker(join(__dirname, 'wasm-worker.js'), { workerData }) }
+    const slot: Slot = { worker: new Worker(join(__dirname, 'wasm-worker.js'), { workerData }), responses: 0 }
     this.#slots.add(slot)
     slot.worker.on('message', (message: WasmWorkerMessage) => {
       const job = slot.job
@@ -182,6 +185,10 @@ export class WasmBackend implements Backend {
   }
 
   #release(slot: Slot) {
+    if (++slot.responses >= this.#options.maxImagesPerWorker) {
+      this.#discard(slot)
+      return
+    }
     const job = this.#queue.shift()
     if (job !== undefined) {
       this.#assign(slot, job)

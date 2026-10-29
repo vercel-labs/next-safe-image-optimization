@@ -33,7 +33,7 @@ A Cargo workspace:
 - Validate options in `request.rs`, not in `js/index.ts`, unless the wrapper uses them itself (pool options, `timeoutMs()`, `limitOutputBytes`).
 - Images are always 8-bit `Luma8`/`LumaA8`/`Rgb8`/`Rgba8` after `decode::normalize`.
 - Rely on the worker's memory limits and the caller's timeout, instead of configuring each decoder defensively. Only the pixel limit is checked up front. Anything allocated outside Rust (libwebp, mozjpeg) needs its own check against `Limits`.
-- Workers are untrusted. The JS wrapper validates every response, and kills a worker that sends a malformed one, or output it wasn't asked for. Each worker handles one request at a time.
+- Workers are untrusted. The JS wrapper validates every response, and kills a worker that sends a malformed one, or output it wasn't asked for. Each worker handles one request at a time, and is replaced after `maxImagesPerWorker` responses (default 1, or 64 for native workers on Windows, where spawning is slow), so a compromised worker can't see later images.
 - Workers are built with `panic = "abort"` (the `dev` and `release` profiles; tests ignore it), so there's no `catch_unwind`. A panic, abort, or out-of-memory exit only ends the worker.
 - After changing a `#[typeshare]` item, run `pnpm generate` (needs `cargo install typeshare-cli --version 1.13.4 --locked`). The framing and the `Request` enum (externally tagged, which typeshare can't export) aren't generated, so keep `crates/core/src/protocol.rs` and `js/protocol.ts` in sync by hand, and the fork server's messages in `crates/worker/src/fork_server.rs` and `js/native.ts`.
 - The worker's version (`Cargo.toml`) must match `package.json`'s, which `js/native.ts` passes it. A worker test checks this.

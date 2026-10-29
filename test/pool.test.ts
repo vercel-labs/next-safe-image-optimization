@@ -40,6 +40,12 @@ describe('pool', () => {
       new Pool({ idleTimeoutMs })
     }
     assert.throws(() => new Pool({ forkServer: 'yes' as never }), TypeError)
+    for (const maxImagesPerWorker of [0, -1, 1.5, NaN, '2']) {
+      assert.throws(() => new Pool({ maxImagesPerWorker: maxImagesPerWorker as never }), TypeError)
+    }
+    for (const maxImagesPerWorker of [1, 64, Infinity]) {
+      new Pool({ maxImagesPerWorker })
+    }
     for (const ms of [-1, -0.5, NaN, undefined, '10']) {
       assert.throws(() => defaultPool().prepare(Buffer.alloc(1)).timeoutMs(ms as never), TypeError)
     }
@@ -100,6 +106,17 @@ describe('pool', () => {
     results.forEach(({ info }, i) => assert.equal(info.width, 10 + i))
   })
 
+  test('workers can be reused', async () => {
+    const input = await fromRaw(pattern(64, 64)).png().toBuffer()
+    for (const maxImagesPerWorker of [1, 2, Infinity]) {
+      const pool = new Pool({ concurrency: 2, maxImagesPerWorker })
+      const results = await Promise.all(
+        Array.from({ length: 5 }, (_, i) => pool.prepare(input).resize(10 + i).toBuffer({ resolveWithObject: true })),
+      )
+      results.forEach(({ info }, i) => assert.equal(info.width, 10 + i))
+    }
+  })
+
   test('timeouts kill the worker, and the pool replaces it', async () => {
     const pool = new Pool({ concurrency: 1 })
     const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
@@ -146,7 +163,8 @@ describe('pool', () => {
   })
 })
 
-// Workers are forked from a fork server, except on Windows.
+// Workers are forked from a fork server, except on Windows. These tests inspect idle workers, so
+// they reuse them.
 describe('fork server', { skip: backend !== 'native' || process.platform === 'win32' }, () => {
   function processes() {
     return execFileSync('ps', ['-A', '-o', 'pid=,ppid=,args='])
@@ -164,7 +182,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
 
   test('workers are forked from a fork server', async () => {
     const before = new Set(servers().map(({ pid }) => pid))
-    const pool = new Pool({ concurrency: 2 })
+    const pool = new Pool({ concurrency: 2, maxImagesPerWorker: Infinity })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     await Promise.all([pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()])
     const all = processes()
@@ -177,7 +195,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
 
   test('the pool replaces a fork server that exits', async () => {
     const before = new Set(servers().map(({ pid }) => pid))
-    const pool = new Pool({ concurrency: 1 })
+    const pool = new Pool({ concurrency: 1, maxImagesPerWorker: Infinity })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     await pool.prepare(input).png().toBuffer()
     const [server] = servers().filter(({ pid }) => !before.has(pid))
@@ -200,7 +218,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
     const spawned = () =>
       processes().filter(({ ppid, args }) => ppid === process.pid && args.includes('safe-image-optimization-worker'))
     const before = new Set(spawned().map(({ pid }) => pid))
-    const pool = new Pool({ concurrency: 2, forkServer: false })
+    const pool = new Pool({ concurrency: 2, forkServer: false, maxImagesPerWorker: Infinity })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     await Promise.all([pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()])
     const added = spawned().filter(({ pid }) => !before.has(pid))
@@ -220,8 +238,10 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     chmodSync(path, 0o755)
     return path
   }
-  function run(workerPath: string, timeoutMs?: number, forkServer = false): Promise<RunResult> {
-    const pool = new NativeBackend({ workerPath, maxProcesses: 1, idleTimeoutMs: 1000, memoryLimit: 0, forkServer })
+  function nativeBackend(workerPath: string, forkServer = false, maxImagesPerWorker = 1): NativeBackend {
+    return new NativeBackend({ workerPath, maxProcesses: 1, idleTimeoutMs: 1000, maxImagesPerWorker, memoryLimit: 0, forkServer })
+  }
+  function run(workerPath: string, timeoutMs?: number, forkServer = false, pool = nativeBackend(workerPath, forkServer)): Promise<RunResult> {
     return pool.run(Buffer.alloc(16), '{}', { timeoutMs, maxResponseBytes: 1024 })
   }
   async function assertFails(result: Promise<RunResult>, code: string) {
@@ -259,6 +279,25 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     // Close the IPC channel but keep running. Redirecting on `exec sleep` leaves a duplicate
     // of fd 3 open in macOS's shell, so close it in a separate command.
     await assertFails(fork('exec 3<&-; exec sleep 10'), 'ERR_WORKER_CRASHED')
+  })
+
+  test('workers are replaced after maxImagesPerWorker responses', async () => {
+    // Responds to each request (30 bytes, from `run`) with how many it's handled.
+    const counter = worker(String.raw`n=0; while [ "$(head -c 30 | wc -c)" -eq 30 ]; do n=$((n + 1)); printf '\001\0\0\0\0\0\0\0%s' "$n"; done`)
+    for (const [max, expected] of [
+      [1, '1111'],
+      [2, '1212'],
+      [Infinity, '1234'],
+    ] as const) {
+      const pool = nativeBackend(counter, false, max)
+      let responses = ''
+      for (let i = 0; i < 4; i++) {
+        const { response, error } = await run(counter, undefined, false, pool)
+        assert.equal(error, undefined)
+        responses += response?.toString()
+      }
+      assert.equal(responses, expected, `maxImagesPerWorker: ${max}`)
+    }
   })
 
   test('a worker that never responds is killed', async () => {

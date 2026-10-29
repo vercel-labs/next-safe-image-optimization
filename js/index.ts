@@ -65,11 +65,41 @@ export interface PoolOptions {
    */
   idleTimeoutMs?: number
   /**
-   * The maximum memory of each worker in bytes, enforced by the OS: `RLIMIT_DATA` on Linux, and the
-   * memory's maximum size for wasm. There's no limit on macOS or Windows. This is a backstop for
-   * `limitAllocatorMemoryBytes`, and unlike it, covers the C encoders (libwebp and mozjpeg). It's per
-   * worker, not per image, so it should be larger than `limitAllocatorMemoryBytes`. `false` or
-   * `0` removes the limit (not recommended). Default: 768 MiB.
+   * The maximum number of images a worker processes before it's killed and
+   * replaced.
+   *
+   * If there is a vulnerability in an image codec, a malicious input image
+   * could corrupt memory in a worker, leaking information across requests. A
+   * limit of `1` ensures that memory is not shared across requests.
+   *
+   * `Infinity` reuses workers until they're idle for `idleTimeoutMs`.
+   *
+   * The latency overhead of `maxImagesPerWorker: 1` is roughly:
+   * - Linux native, with the fork server (default): ~0.5ms
+   * - Linux native, without the fork server: ~1-3ms
+   * - WASM: ~16ms
+   *
+   * Default: 1, except 64 for native workers on Windows, where the per-process
+   * overhead is higher.
+   */
+  maxImagesPerWorker?: number
+  /**
+   * The maximum memory of each worker process in bytes, enforced by the
+   * operating system or platform. This option is unsupported and ignored on
+   * native macOS and Windows builds.
+   *
+   * - On Linux, this is enforced using [`RLIMIT_DATA`].
+   * - On WASM, this enforced by configuring the maximum number of pages when
+   *   constructing [`WebAssembly.Memory`].
+   *
+   * [`RLIMIT_DATA`]: https://sourceware.org/glibc/manual/2.44/html_node/Limits-on-Resources.html#index-struct-rlimit64
+   * [`WebAssembly.Memory`]: https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/JavaScript_interface/Memory
+   *
+   * This is a backstop for `limitAllocatorMemoryBytes`. It covers non-Rust
+   * image codecs (libwebp and mozjpeg). This should be larger than
+   * `limitAllocatorMemoryBytes`.
+   *
+   * `false` or `0` removes the limit (not recommended). Default: 768 MiB.
    */
   limitProcessMemoryBytes?: number | false
   /**
@@ -256,12 +286,15 @@ function createBackend(options: PoolOptions): Backend {
     options.limitProcessMemoryBytes === false
       ? 0
       : (optional(options.limitProcessMemoryBytes, (v) =>
-          checkInteger('limitProcessMemoryBytes', v, 0),
-        ) ?? DEFAULT_LIMIT_PROCESS_MEMORY)
+        checkInteger('limitProcessMemoryBytes', v, 0),
+      ) ?? DEFAULT_LIMIT_PROCESS_MEMORY)
   const forkServer: unknown = options.forkServer ?? true
   if (typeof forkServer !== 'boolean') {
     throw invalid('forkServer', 'boolean', forkServer)
   }
+  const maxImagesPerWorker = optional(options.maxImagesPerWorker, (v) =>
+    v === Infinity ? v : checkInteger('maxImagesPerWorker', v, 1),
+  )
   const backend = process.env[BACKEND_VARIABLE] || undefined
   if (backend !== undefined) {
     checkOneOf(BACKEND_VARIABLE, backend, BACKENDS)
@@ -272,7 +305,7 @@ function createBackend(options: PoolOptions): Backend {
     if (wasmPath === undefined) {
       throw new Error(`${context}Install ${WASM_PACKAGE} to use the wasm backend.`)
     }
-    return new WasmBackend({ wasmPath, maxWorkers, idleTimeoutMs, memoryLimit })
+    return new WasmBackend({ wasmPath, maxWorkers, idleTimeoutMs, maxImagesPerWorker: maxImagesPerWorker ?? 1, memoryLimit })
   }
   if (backend === 'wasm') {
     return wasm('')
@@ -289,6 +322,7 @@ function createBackend(options: PoolOptions): Backend {
     workerPath: worker.path,
     maxProcesses: maxWorkers,
     idleTimeoutMs,
+    maxImagesPerWorker: maxImagesPerWorker ?? (process.platform === 'win32' ? 64 : 1),
     memoryLimit,
     forkServer,
     // Local builds show the worker's stderr. Installed ones discard it (rav1d logs errors there).
@@ -298,8 +332,8 @@ function createBackend(options: PoolOptions): Backend {
 
 /**
  * A pool of workers (processes, or threads running wasm) that process images, one image per worker
- * at a time. Workers are started on demand, and exit when idle. A worker that crashes or times out
- * is replaced.
+ * at a time. Workers are started on demand, and exit when idle or after `maxImagesPerWorker`
+ * images. A worker that crashes or times out is replaced.
  */
 export class Pool {
   /**

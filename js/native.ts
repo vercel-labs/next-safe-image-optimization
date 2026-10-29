@@ -18,6 +18,8 @@ export interface NativeOptions {
   maxProcesses: number
   /** Over `MAX_TIMEOUT_MS` (like `Infinity`), idle workers never exit. */
   idleTimeoutMs: number
+  /** Responses before a worker is killed (`Infinity` for no limit). */
+  maxImagesPerWorker: number
   /** Each worker's `RLIMIT_DATA` in bytes (Linux only), or 0 for none. */
   memoryLimit: number
   /** Fork workers from a fork server, instead of spawning each one (unix only). Default: `true`. */
@@ -396,6 +398,7 @@ interface Slot {
   response?: Buffer
   /** Bytes received of `header`, or once it's complete, of `response`. */
   received: number
+  responses: number
 }
 
 export class NativeBackend implements Backend {
@@ -482,7 +485,7 @@ export class NativeBackend implements Backend {
   }
 
   #add(worker: WorkerProcess): Slot {
-    const slot: Slot = { process: worker, header: Buffer.alloc(8), received: 0 }
+    const slot: Slot = { process: worker, header: Buffer.alloc(8), received: 0, responses: 0 }
     this.#slots.add(slot)
     const closed = () => void this.#closed(slot)
     worker.output.on('data', (chunk: Buffer) => this.#onData(slot, chunk))
@@ -564,6 +567,10 @@ export class NativeBackend implements Backend {
   }
 
   #release(slot: Slot) {
+    if (++slot.responses >= this.#options.maxImagesPerWorker) {
+      this.#discard(slot)
+      return
+    }
     const job = this.#queue.shift()
     if (job !== undefined) {
       this.#assign(slot, job)

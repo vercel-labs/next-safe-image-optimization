@@ -23,7 +23,9 @@ Image processing never runs on the main Node.js thread or in the main process's 
 
 If a worker panics, aborts, or runs out of memory while handling an image, only that worker exits. The pool rejects that image's promise with `ERR_WORKER_CRASHED` or `ERR_OUT_OF_MEMORY` and starts a new worker for subsequent images.
 
-Input buffers are copied before processing begins so JavaScript code cannot modify the input while a worker is reading it, and every response from a worker is validated before being returned to the caller. Because workers are reused sequentially across requests, a compromised worker could affect later images handled by that same worker.
+Input buffers are copied before processing begins so JavaScript code cannot modify the input while a worker is reading it, and every response from a worker is validated before being returned to the caller. 
+
+By default, each worker processes a single image and is then replaced, so an image that compromises a worker can't affect any other image. The exception is native workers on Windows, which process up to 64 images each, because starting a process is much more expensive there. The `maxImagesPerWorker` pool option changes this. With a higher value, workers are reused sequentially across requests, and a compromised worker could affect later images handled by that same worker. Replacing workers costs about 0.5 ms per image for native workers on Linux (with the fork server), and about 16 ms per image for WebAssembly workers, mostly from starting a Node.js worker thread.
 
 ## OS sandboxing
 

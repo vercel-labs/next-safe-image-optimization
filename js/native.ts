@@ -26,6 +26,13 @@ export interface NativeOptions {
   inheritStderr?: boolean
 }
 
+/**
+ * Passed through to workers on Linux, which otherwise get an empty environment. With `1`, they run
+ * without seccomp filters if installing them fails (like under QEMU's user mode emulation), instead
+ * of failing with `ERR_WORKER_SPAWN`.
+ */
+const IGNORE_SECCOMP_FAILURES = 'NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES'
+
 /** The worker exits with `EXIT_VERSION_MISMATCH` unless this matches its own version. */
 const VERSION = (require('../package.json') as { version: string }).version
 /** How long the fork server may take to reply, and to reap a worker after killing it. */
@@ -130,7 +137,7 @@ function start(options: NativeOptions, forkServer: boolean): Promise<Started | W
   let child: ChildProcess
   try {
     child = spawn(options.workerPath, args, {
-      env: {},
+      env: process.platform === 'linux' && process.env[IGNORE_SECCOMP_FAILURES] === '1' ? { [IGNORE_SECCOMP_FAILURES]: '1' } : {},
       stdio: forkServer ? ['ignore', 'ignore', stderr, 'ipc'] : ['pipe', 'pipe', stderr],
       windowsHide: true,
     })

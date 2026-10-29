@@ -112,8 +112,9 @@ describe('pool', () => {
     assert.ok(performance.now() - start < 20_000)
   })
 
-  // The OS enforces it on Linux, and wasm enforces it everywhere.
-  const enforcesProcessMemory = backend === 'wasm' || process.platform === 'linux'
+  // The OS enforces it on Linux, and wasm enforces it everywhere. QEMU's user mode emulation (CI's
+  // riscv64 tests) ignores `RLIMIT_DATA`, which would also limit QEMU's own allocations.
+  const enforcesProcessMemory = backend === 'wasm' || (process.platform === 'linux' && process.env.NSIO_TEST_QEMU !== '1')
   test('limitProcessMemoryBytes is enforced, and the worker is replaced', { skip: !enforcesProcessMemory }, async () => {
     const pool = new Pool({ concurrency: 1, limitProcessMemoryBytes: 48 * 1024 * 1024 })
     // 75 MB of pixels. `limitAllocatorMemoryBytes` allows it, so the allocator doesn't stop it first.

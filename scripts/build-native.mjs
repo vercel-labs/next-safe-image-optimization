@@ -26,7 +26,7 @@ function run(command, args) {
 /** Like `x86_64-unknown-linux-gnu` → `linux-x64-gnu`. */
 function platform(triple) {
   const [arch, , os, abi] = triple.split('-')
-  const nodeArch = { x86_64: 'x64', aarch64: 'arm64' }[arch]
+  const nodeArch = { x86_64: 'x64', aarch64: 'arm64', riscv64gc: 'riscv64' }[arch]
   const nodeOs = { darwin: 'darwin', windows: 'win32', linux: 'linux' }[os]
   if (nodeArch === undefined || nodeOs === undefined) {
     console.error(`unsupported target: ${triple}`)

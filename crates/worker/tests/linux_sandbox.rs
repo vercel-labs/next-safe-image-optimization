@@ -4,7 +4,11 @@
 
 #[cfg(all(
     target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    )
 ))]
 fn main() {
     use std::os::unix::process::ExitStatusExt;
@@ -32,7 +36,11 @@ fn main() {
 
 #[cfg(all(
     target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    )
 ))]
 fn sandboxed() -> ! {
     use std::fs::File;
@@ -50,6 +58,10 @@ fn sandboxed() -> ! {
 
 #[cfg(not(all(
     target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    )
 )))]
 fn main() {}

@@ -1,5 +1,5 @@
-//! The worker's sandbox on Linux: a memory limit, exiting with the parent, and (on x86_64 and
-//! aarch64) seccomp filters.
+//! The worker's sandbox on Linux: a memory limit, exiting with the parent, and (on x86_64, aarch64,
+//! and riscv64) seccomp filters.
 
 use std::io;
 
@@ -31,10 +31,18 @@ pub fn exit_with_parent(parent: Option<u32>) {
     }
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "riscv64"
+))]
 pub use self::seccomp::{Filters, compile_filters, enable};
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "riscv64"
+))]
 mod seccomp {
     use libc::{EPERM, c_long};
     use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, TargetArch};

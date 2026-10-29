@@ -8,9 +8,11 @@
 //! exiting.
 //!
 //! Requests arrive on stdin as `[u64 LE length][request]`, and responses are written to stdout
-//! (see `nsio_core::protocol`). The worker handles one request at a time. It exits when stdin
-//! closes, and when the parent exits, even mid-request (see `requests`), so that it doesn't outlive
-//! the parent.
+//! (see `nsio_core::protocol`). The worker handles one request at a time, and never outlives its
+//! parent: on Linux, `PR_SET_PDEATHSIG` kills it when the parent exits, even mid-request, and it
+//! only notices stdin closing between requests. `PR_SET_PDEATHSIG` isn't cross-platform, so on
+//! macOS and Windows a reader thread instead watches for stdin closing and exits the process as
+//! soon as it does, even mid-request (see `requests`).
 
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};

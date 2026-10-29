@@ -168,8 +168,9 @@ pub fn serve() {
                             {
                                 exit_immediately(EXIT_SANDBOX_FAILED);
                             }
-                            // Closes everything else: the channel, the sockets sent to the parent,
-                            // both of this socketpair's original fds, and the wake pipe.
+                            // Returning drops the server's `OwnedFd`s, closing them in the worker:
+                            // the channel, the wake pipe, both ends of this socketpair, and sockets
+                            // sent to the parent but not yet acknowledged.
                             return;
                         }
                         -1 => {

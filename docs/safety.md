@@ -10,7 +10,7 @@ Most image-parsing vulnerabilities occur while decoding untrusted input. Every s
 
 - **JPEG, PNG, WebP, GIF, and TIFF:** decoded via the `image` crate (`zune-jpeg`, `png`, `image-webp`, `gif`, and `tiff`).
 - **AVIF:** decoded via `avif-decode` (`avif-parse` and `rav1d`, built with assembly disabled).
-- **SVG:** rendered via `resvg`. External files and network URLs are never loaded; `<image>` elements only accept inline `data:` URLs.
+- **SVG:** rendered via `resvg`. External files and network URLs are never loaded; `<image>` elements only accept inline `data:` URLs. SVG input is rejected unless it's allowed explicitly, with `allowInputFormats([..., 'svg'])`, because the pixel limit doesn't apply to raster images embedded in an SVG (see below).
 
 C libraries (`libwebp` for lossy WebP and `mozjpeg` when `mozjpeg: true` is enabled) are only used for encoding, where the input is already validated pixel data produced by this library.
 
@@ -47,8 +47,12 @@ Forking makes starting replacement workers much faster, with one trade-off: fork
 
 Resource limits prevent a single image from exhausting server memory or CPU time:
 
-- **Input dimensions (`limitInputPixels`, default ~268 megapixels):** Rejects images whose `width * height` exceeds the limit before decoding pixels. For SVGs, this applies to both the declared SVG dimensions and the rendered output dimensions. However, raster images embedded inside an SVG (`<image href="data:...">`) are decoded during SVG rendering and are only bounded by the memory and timeout limits below.
-- **Per-image memory (`limitAllocatorMemoryBytes`, default 512 MiB):** Caps the total memory a worker's Rust allocator may use for a single image, including the input buffer and intermediate resize buffers. Exceeding this limit stops the worker and rejects with `ERR_LIMIT_EXCEEDED`. Before calling the C encoders (`libwebp` and `mozjpeg`), the worker also checks their estimated working memory against this limit.
-- **Per-worker memory (`limitProcessMemoryBytes`, default 768 MiB):** A hard limit on each worker's total memory, covering both Rust allocations and the C encoders. This is enforced by the OS on Linux ([`RLIMIT_DATA`]) and by the WebAssembly runtime on all platforms when using the `wasm` backend. It is not currently enforced for native workers on macOS or Windows.
-- **Output size (`limitOutputBytes`, default 128 MiB):** Caps the size of the encoded image and the maximum response size the main process will buffer from a worker.
+- **Input dimensions (`limitInputPixels()`, default ~268 megapixels):** Rejects images whose `width * height` exceeds the limit before decoding pixels. For SVGs, this applies to both the declared SVG dimensions and the rendered output dimensions. However, raster images embedded inside an SVG (`<image href="data:...">`) are decoded during SVG rendering and are only bounded by the memory and timeout limits below.
+- **Per-image memory (`limitAllocatorMemoryBytes()`, default 512 MiB):** Caps the total memory a worker's Rust allocator may use for a single image, including the input buffer and intermediate resize buffers. Exceeding this limit stops the worker and rejects with `ERR_LIMIT_EXCEEDED`. Before calling the C encoders (`libwebp` and `mozjpeg`), the worker also checks their estimated working memory against this limit.
+- **Per-worker memory (`limitProcessMemoryBytes`, default 768 MiB):** A hard limit on each worker's total memory, covering both Rust allocations and the C encoders. This is enforced by the OS on Linux ([`RLIMIT_DATA`]) and by the WebAssembly runtime on all platforms when using the `wasm` backend. It is not currently enforced for native workers on macOS or Windows. Exceeding it rejects with `ERR_OUT_OF_MEMORY` (not `ERR_LIMIT_EXCEEDED`), because the worker can't tell it apart from the system running out of memory.
+- **Output size (`limitOutputBytes()`, default 128 MiB):** Caps the size of the encoded image and the maximum response size the main process will buffer from a worker.
 - **Processing time (`timeoutMs()`):** Limits how long a worker may spend on one image (starting when a worker picks up the request). If the timer expires, the worker is forcibly terminated and the request fails with `ERR_TIMEOUT`. There is no default timeout, so you should always set `timeoutMs()` when processing untrusted input.
+
+## Out of scope
+
+- **Request queue length:** Images wait in a queue (in memory, with a copy of each input) until a worker is free, and there's no limit on its length or on how long an image waits: `timeoutMs()` starts when a worker picks up the image. Limit the size and number of concurrent requests before they reach your application, for example with a reverse proxy. To stop waiting for an image, pass a `signal` to `toBuffer()` or `metadata()`.

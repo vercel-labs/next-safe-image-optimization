@@ -34,6 +34,8 @@ export interface RunOptions {
   timeoutMs?: number
   /** A larger response is treated as a crash. */
   maxResponseBytes: number
+  /** Removes the request from the queue, or kills the worker processing it. */
+  signal?: AbortSignal
 }
 
 export interface WorkerError {
@@ -41,15 +43,29 @@ export interface WorkerError {
   message: string
 }
 
-/** Exactly one of `response` (untrusted, without the length prefix) or `error` is set. */
+/** Exactly one of `response` (untrusted, without the length prefix), `error`, or `aborted` is set. */
 export interface RunResult {
   response?: Uint8Array
   error?: WorkerError
+  /** `signal` aborted the request. */
+  aborted?: true
 }
 
 export interface Backend {
   readonly name: 'native' | 'wasm'
+  /** After `close()` or `destroy()`, resolves with `ERR_POOL_CLOSED`. */
   run(input: Uint8Array, options: string, runOptions: RunOptions): Promise<RunResult>
+  /** Finishes queued and running requests, then stops every worker. Resolves once they've exited. */
+  close(): Promise<void>
+  /** Fails queued and running requests with `ERR_POOL_CLOSED`, then like `close()`. */
+  destroy(): Promise<void>
+}
+
+export const POOL_CLOSED: WorkerError = { code: 'ERR_POOL_CLOSED', message: 'the pool is closed' }
+
+/** The `TypeError` for invalid options, with a `code` like Node's own validation errors. */
+export function invalidOptions(message: string): TypeError & { code: 'ERR_INVALID_OPTIONS' } {
+  return Object.assign(new TypeError(message), { code: 'ERR_INVALID_OPTIONS' as const })
 }
 
 const FORMATS: readonly InputFormat[] = Object.values(generated.InputFormat)
@@ -71,10 +87,10 @@ export function maxResponseBytes(limitOutputBytes: number): number {
 export function encodeOptions(options: RequestOptions): string {
   return JSON.stringify(options, (key, value: unknown) => {
     if (typeof value === 'number' && !Number.isFinite(value)) {
-      throw new TypeError(`Expected a finite number for ${key} but received ${value}`)
+      throw invalidOptions(`Expected a finite number for ${key} but received ${value}`)
     }
     if (typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol') {
-      throw new TypeError(`Expected a JSON value for ${key} but received a ${typeof value}`)
+      throw invalidOptions(`Expected a JSON value for ${key} but received a ${typeof value}`)
     }
     return value
   })

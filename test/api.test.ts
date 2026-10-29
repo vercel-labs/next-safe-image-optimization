@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import { Pipeline, SafeImageOptimizationError, defaultPool } from '../dist/index.js'
-import type { InputFormat, PipelineOptions, ResizeOptions } from '../dist/index.js'
+import type { InputFormat, ResizeOptions } from '../dist/index.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
 const pool = defaultPool()
@@ -47,7 +47,10 @@ describe('argument validation', () => {
   const rejects = (run: () => Promise<unknown>, prefix = '') =>
     assert.rejects(
       async () => await run(),
-      (error) => error instanceof TypeError && error.message.startsWith(prefix),
+      (error) =>
+        error instanceof TypeError &&
+        (error as TypeError & { code?: string }).code === 'ERR_INVALID_OPTIONS' &&
+        error.message.startsWith(prefix),
     )
 
   const cases: [string, (p: Pipeline) => Pipeline, string?][] = [
@@ -61,6 +64,7 @@ describe('argument validation', () => {
     ['resize options', (p) => p.resize(10, 10, 'cover' as never)],
     ['rotate(45)', (p) => p.rotate(45)],
     ['rotate("90")', (p) => p.rotate('90' as never)],
+    ['rotate()', (p) => (p.rotate as () => Pipeline)(), 'rotate() requires an angle'],
     ['jpeg quality 0', (p) => p.jpeg({ quality: 0 }), 'jpeg.quality must be'],
     ['jpeg quality 101', (p) => p.jpeg({ quality: 101 })],
     ['jpeg quality NaN', (p) => p.jpeg({ quality: NaN }), 'Expected a finite number for quality but received NaN'],
@@ -72,6 +76,18 @@ describe('argument validation', () => {
     ['webp quality', (p) => p.webp({ quality: () => 50 } as never), 'Expected a JSON value for quality but received a function'],
     ['webp quality bigint', (p) => p.webp({ quality: 50n } as never)],
     ['gif effort', (p) => p.gif({ effort: 0 })],
+    ['limitInputPixels(-1)', (p) => p.limitInputPixels(-1), 'limitInputPixels must be'],
+    ['limitInputPixels(1.5)', (p) => p.limitInputPixels(1.5)],
+    // 0 is the only way to remove a limit.
+    ['limitInputPixels(false)', (p) => p.limitInputPixels(false as never)],
+    ['limitInputPixels(true)', (p) => p.limitInputPixels(true as never)],
+    ['limitAllocatorMemoryBytes(-1)', (p) => p.limitAllocatorMemoryBytes(-1)],
+    ['limitOutputBytes(-1)', (p) => p.limitOutputBytes(-1)],
+    ['allowInputFormats([])', (p) => p.allowInputFormats([]), 'allowInputFormats() must not be empty'],
+    ['allowInputFormats bmp', (p) => p.allowInputFormats(['png', 'bmp' as never]), 'unknown variant `bmp`'],
+    ['allowInputFormats("png")', (p) => p.allowInputFormats('png' as never)],
+    ['animated(false)', (p) => p.animated(false as never)],
+    ['animated("all")', (p) => p.animated('all' as never), 'unknown variant `all`'],
   ]
   for (const [name, call, message] of cases) {
     test(name, async () => {
@@ -80,34 +96,14 @@ describe('argument validation', () => {
     })
   }
 
-  test('constructor options', async () => {
-    const input = await png()
-    const invalid: [PipelineOptions, string?][] = [
-      [{ limitInputPixels: -1 }],
-      [{ limitInputPixels: 1.5 }],
-      // 0 is the only way to remove a limit.
-      [{ limitInputPixels: false as never }],
-      [{ limitInputPixels: true as never }],
-      [{ limitAllocatorMemoryBytes: -1 }],
-      [{ allowedInputFormats: [] }, 'allowedInputFormats must not be empty'],
-      [{ allowedInputFormats: ['png', 'bmp' as never] }, 'unknown variant `bmp`'],
-      [{ allowedInputFormats: 'png' as never }],
-      [{ allowAnimated: 1 as never }],
-      [{ autoOrient: 'yes' as never }, 'invalid type: string'],
-      [{ failOn: 'none' } as never, 'unknown field `failOn`'],
-      [{ sequentialRead: true } as never, 'unknown field `sequentialRead`'],
-    ]
-    for (const [options, message] of invalid) {
-      await rejects(() => pool.prepare(input, options).toBuffer(), message)
-    }
-    // Only the limits apply to metadata().
-    await rejects(() => pool.prepare(input, { failOn: 'none' } as never).metadata())
-    await rejects(() => pool.prepare(input, { limitInputPixels: -1 }).metadata())
+  test('limits also apply to metadata()', async () => {
+    await rejects(() => pool.prepare(Buffer.alloc(1)).limitInputPixels(-1).metadata())
+    await rejects(() => pool.prepare(Buffer.alloc(1)).animated('all' as never).metadata())
   })
 
   test('accepts null and undefined as unset', async () => {
     const input = await png()
-    const { info } = await pool.prepare(input, { limitInputPixels: undefined })
+    const { info } = await pool.prepare(input)
       .resize(null, 15, { kernel: undefined })
       .png(null as never)
       .toBuffer({ resolveWithObject: true })
@@ -124,22 +120,24 @@ describe('argument validation', () => {
   })
 })
 
-describe('allowedInputFormats', () => {
+describe('allowInputFormats', () => {
   test('rejects other formats before decoding', async () => {
     const input = await png()
-    await pool.prepare(input, { allowedInputFormats: ['png'] }).toBuffer()
-    await pool.prepare(input, { allowedInputFormats: ['jpeg', 'png'] }).metadata()
+    await pool.prepare(input).allowInputFormats(['png']).toBuffer()
+    await pool.prepare(input).allowInputFormats(['jpeg', 'png']).metadata()
     for (const formats of [['jpeg'], ['jpeg', 'webp', 'svg']] as InputFormat[][]) {
-      await assertRejectsWithCode(pool.prepare(input, { allowedInputFormats: formats }).toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
-      await assertRejectsWithCode(pool.prepare(input, { allowedInputFormats: formats }).metadata(), 'ERR_UNSUPPORTED_FORMAT')
+      await assertRejectsWithCode(pool.prepare(input).allowInputFormats(formats).toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
+      await assertRejectsWithCode(pool.prepare(input).allowInputFormats(formats).metadata(), 'ERR_UNSUPPORTED_FORMAT')
     }
   })
 
-  test('applies to svg', async () => {
+  test('svg must be allowed explicitly', async () => {
     const input = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>')
-    await pool.prepare(input, { allowedInputFormats: ['svg'] }).png().toBuffer()
+    await assertRejectsWithCode(pool.prepare(input).png().toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
+    await assertRejectsWithCode(pool.prepare(input).metadata(), 'ERR_UNSUPPORTED_FORMAT')
+    await pool.prepare(input).allowInputFormats(['svg']).png().toBuffer()
     await assertRejectsWithCode(
-      pool.prepare(input, { allowedInputFormats: ['png'] }).png().toBuffer(),
+      pool.prepare(input).allowInputFormats(['png']).png().toBuffer(),
       'ERR_UNSUPPORTED_FORMAT',
     )
   })

@@ -8,7 +8,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
-import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY } from './protocol.js'
+import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY, POOL_CLOSED } from './protocol.js'
 import type { Backend, RunOptions, RunResult } from './protocol.js'
 import type { WasmRequest, WasmWorkerData, WasmWorkerMessage } from './wasm-worker.js'
 
@@ -34,7 +34,9 @@ const MAX_TIMEOUT_MS = 2 ** 31 - 1
 interface Job {
   request: WasmRequest
   timeoutMs?: number
+  /** Only the first call does anything. */
   resolve: (result: RunResult) => void
+  done: boolean
 }
 
 interface Slot {
@@ -78,12 +80,21 @@ export class WasmBackend implements Backend {
   #slots = new Set<Slot>()
   #idle: Slot[] = []
   #queue: Job[] = []
+  /** Workers that were terminated, until they exit. */
+  #exiting = new Set<Promise<number>>()
+  /** Set by `close()`. */
+  #closing: Promise<void> | undefined
+  /** Resolves `#closing`, once the last job finishes. */
+  #onClosed: (() => void) | undefined
 
   constructor(options: WasmOptions) {
     this.#options = options
   }
 
-  run(input: Uint8Array, options: string, runOptions: RunOptions): Promise<RunResult> {
+  run(input: Uint8Array, options: string, { timeoutMs, maxResponseBytes, signal }: RunOptions): Promise<RunResult> {
+    if (this.#closing !== undefined) {
+      return Promise.resolve({ error: POOL_CLOSED })
+    }
     // Copied now, so that the caller may reuse `input` immediately.
     const json = Buffer.from(options)
     const request = new Uint8Array(input.length + json.length + 4)
@@ -91,14 +102,74 @@ export class WasmBackend implements Backend {
     request.set(json, input.length)
     new DataView(request.buffer).setUint32(input.length + json.length, json.length, true)
     return new Promise((resolve) => {
-      const { timeoutMs, maxResponseBytes } = runOptions
-      this.#queue.push({ request: { request, maxResponseBytes }, timeoutMs, resolve })
+      const onAbort = () => this.#abort(job)
+      const job: Job = {
+        request: { request, maxResponseBytes },
+        timeoutMs,
+        done: false,
+        resolve: (result) => {
+          if (!job.done) {
+            job.done = true
+            signal?.removeEventListener('abort', onAbort)
+            resolve(result)
+          }
+        },
+      }
+      if (signal?.aborted) {
+        job.resolve({ aborted: true })
+        return
+      }
+      signal?.addEventListener('abort', onAbort)
+      this.#queue.push(job)
       this.#dispatch()
     })
   }
 
+  close(): Promise<void> {
+    this.#closing ??= new Promise((resolve) => {
+      this.#onClosed = resolve
+      for (const slot of [...this.#idle]) {
+        this.#discard(slot)
+      }
+      this.#dispatch()
+    })
+    return this.#closing
+  }
+
+  destroy(): Promise<void> {
+    const jobs = this.#queue.splice(0)
+    for (const slot of this.#slots) {
+      if (slot.job !== undefined) {
+        jobs.push(slot.job)
+      }
+    }
+    for (const job of jobs) {
+      job.resolve({ error: POOL_CLOSED })
+    }
+    const closed = this.close()
+    for (const slot of [...this.#slots]) {
+      this.#discard(slot)
+    }
+    return closed
+  }
+
+  #abort(job: Job) {
+    job.resolve({ aborted: true })
+    const index = this.#queue.indexOf(job)
+    if (index !== -1) {
+      this.#queue.splice(index, 1)
+      // In case it was the last job before closing.
+      this.#dispatch()
+    }
+    for (const slot of this.#slots) {
+      if (slot.job === job) {
+        this.#discard(slot)
+      }
+    }
+  }
+
   #dispatch() {
-    if (this.#module === undefined) {
+    if (this.#module === undefined && this.#queue.length > 0) {
       this.#loading ??= this.#load()
       return
     }
@@ -108,9 +179,21 @@ export class WasmBackend implements Backend {
         if (this.#slots.size >= this.#options.maxWorkers) {
           return
         }
-        slot = this.#spawn(this.#module)
+        slot = this.#spawn(this.#module!)
       }
       this.#assign(slot, this.#queue.shift()!)
+    }
+    // Closing discards idle workers, so once there are none left, every job has finished.
+    if (this.#onClosed !== undefined && this.#slots.size === 0) {
+      const onClosed = this.#onClosed
+      this.#onClosed = undefined
+      // Idle workers don't keep the process alive, but whoever awaits `close()` should see it
+      // resolve.
+      const keepAlive = setTimeout(() => {}, MAX_TIMEOUT_MS)
+      void Promise.all(this.#exiting).then(() => {
+        clearTimeout(keepAlive)
+        onClosed()
+      })
     }
   }
 
@@ -122,7 +205,6 @@ export class WasmBackend implements Backend {
       for (const job of this.#queue.splice(0)) {
         job.resolve(failure('ERR_WORKER_SPAWN', `failed to load the wasm module: ${String(error)}`))
       }
-      return
     }
     this.#dispatch()
   }
@@ -195,6 +277,10 @@ export class WasmBackend implements Backend {
       this.#assign(slot, job)
       return
     }
+    if (this.#closing !== undefined) {
+      this.#discard(slot)
+      return
+    }
     this.#idle.push(slot)
     // Idle workers don't keep the process alive.
     slot.worker.unref()
@@ -209,11 +295,14 @@ export class WasmBackend implements Backend {
       return
     }
     clearTimeout(slot.timer)
+    slot.job = undefined
     const index = this.#idle.indexOf(slot)
     if (index !== -1) {
       this.#idle.splice(index, 1)
     }
-    void slot.worker.terminate()
+    const terminated = slot.worker.terminate()
+    this.#exiting.add(terminated)
+    void terminated.then(() => this.#exiting.delete(terminated))
     // Replace the worker if there's queued work.
     this.#dispatch()
   }

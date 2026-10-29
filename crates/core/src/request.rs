@@ -9,7 +9,7 @@ use typeshare_annotation::typeshare;
 use crate::decode::InputFormat;
 use crate::encode::{GifSpec, JpegSpec, OutputFormat, OutputSpec, PngSpec, WebpSpec};
 use crate::error::{Error, Result};
-use crate::limits::Limits;
+use crate::limits::{Animated, Limits};
 use crate::ops::{self, ResizeSpec};
 use crate::pipeline::Pipeline;
 
@@ -87,7 +87,7 @@ pub struct LimitOptions {
     limit_allocator_memory_bytes: Option<f64>,
     limit_output_bytes: Option<f64>,
     allowed_input_formats: Option<Vec<InputFormat>>,
-    allow_animated: Option<bool>,
+    animated: Option<Animated>,
 }
 
 #[typeshare]
@@ -164,11 +164,11 @@ pub fn parse_limits(options: Option<LimitOptions>) -> Result<Limits> {
         }
         if let Some(formats) = options.allowed_input_formats {
             if formats.is_empty() {
-                return Err(invalid("allowedInputFormats must not be empty".into()));
+                return Err(invalid("allowInputFormats() must not be empty".into()));
             }
             limits.input_formats = formats;
         }
-        limits.animated = options.allow_animated.unwrap_or(limits.animated);
+        limits.animated = options.animated.unwrap_or(limits.animated);
     }
     Ok(limits)
 }
@@ -345,7 +345,7 @@ mod tests {
             ),
             (
                 r#"{"metadata":{"allowedInputFormats":[]}}"#,
-                "allowedInputFormats must not be empty",
+                "allowInputFormats() must not be empty",
             ),
             (
                 r#"{"metadata":{"allowedInputFormats":["bmp"]}}"#,

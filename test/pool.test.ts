@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 import { Pool, defaultPool } from '../dist/index.js'
 import { NativeBackend } from '../dist/native.js'
+import { findWasm } from '../dist/wasm.js'
 import type { RunResult } from '../dist/protocol.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
@@ -153,7 +154,7 @@ describe('pool', () => {
     const pool = new Pool({ concurrency: 1, limitProcessMemoryBytes: 48 * 1024 * 1024 })
     // 75 MB of pixels. `limitAllocatorMemoryBytes` allows it, so the allocator doesn't stop it first.
     const large = await fromRaw(pattern(5000, 5000)).png().toBuffer()
-    await assertRejectsWithCode(pool.prepare(large, { limitAllocatorMemoryBytes: 2 ** 30 }).png().toBuffer(), 'ERR_OUT_OF_MEMORY')
+    await assertRejectsWithCode(pool.prepare(large).limitAllocatorMemoryBytes(2 ** 30).png().toBuffer(), 'ERR_OUT_OF_MEMORY')
     const small = await fromRaw(pattern(30, 30)).png().toBuffer()
     await pool.prepare(small).png().toBuffer()
   })
@@ -164,6 +165,109 @@ describe('pool', () => {
     }
     new Pool({ limitProcessMemoryBytes: 0 })
   })
+})
+
+describe('shutdown', () => {
+  const small = () => fromRaw(pattern(64, 64)).png().toBuffer()
+
+  test('close() finishes submitted images, then rejects new ones', async () => {
+    const pool = new Pool({ concurrency: 1 })
+    const input = await small()
+    // The second one is queued.
+    const submitted = [pool.prepare(input).resize(10).toBuffer(), pool.prepare(input).resize(11).toBuffer()]
+    const closed = pool.close()
+    assert.equal(pool.close(), closed)
+    await assertRejectsWithCode(pool.prepare(input).toBuffer(), 'ERR_POOL_CLOSED')
+    await Promise.all([...submitted, closed])
+  })
+
+  test('destroy() rejects submitted images', async () => {
+    const pool = new Pool({ concurrency: 1 })
+    const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
+    const submitted = [pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()].map((promise) =>
+      assertRejectsWithCode(promise, 'ERR_POOL_CLOSED'),
+    )
+    await Promise.all([pool.destroy(), ...submitted])
+    await assertRejectsWithCode(pool.prepare(input).toBuffer(), 'ERR_POOL_CLOSED')
+  })
+
+  test('destroy() after close() stops waiting', async () => {
+    const pool = new Pool({ concurrency: 1 })
+    const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
+    const submitted = assertRejectsWithCode(pool.prepare(input).png().toBuffer(), 'ERR_POOL_CLOSED')
+    const closed = pool.close()
+    await Promise.all([pool.destroy(), closed, submitted])
+  })
+
+  test('an unused pool closes', async () => {
+    await new Pool().close()
+    await new Pool().destroy()
+  })
+
+  test('Symbol.asyncDispose closes the pool', async () => {
+    const pool = new Pool()
+    await pool.prepare(await small()).toBuffer()
+    await pool[Symbol.asyncDispose]()
+    await assertRejectsWithCode(pool.prepare(await small()).toBuffer(), 'ERR_POOL_CLOSED')
+  })
+})
+
+describe('abort', () => {
+  const small = () => fromRaw(pattern(64, 64)).png().toBuffer()
+  /** Takes long enough to abort while it's being processed. */
+  const slow = () => fromRaw(noise(3000, 3000)).png({ compressionLevel: 0 }).toBuffer()
+
+  test('an aborted signal rejects with its reason', async () => {
+    const reason = new Error('stop')
+    const input = await small()
+    await assert.rejects(defaultPool().prepare(input).toBuffer({ signal: AbortSignal.abort(reason) }), (error) => error === reason)
+    await assert.rejects(defaultPool().prepare(input).metadata({ signal: AbortSignal.abort(reason) }), (error) => error === reason)
+  })
+
+  test('signal is validated', async () => {
+    await assert.rejects(defaultPool().prepare(await small()).toBuffer({ signal: 'abort' as never }), { code: 'ERR_INVALID_OPTIONS' })
+  })
+
+  test('aborting kills the worker processing the image, and the pool replaces it', async () => {
+    const pool = new Pool({ concurrency: 1 })
+    const controller = new AbortController()
+    const aborted = assert.rejects(pool.prepare(await slow()).png().toBuffer({ signal: controller.signal }), { name: 'AbortError' })
+    setTimeout(() => controller.abort(), 20)
+    await aborted
+    await pool.prepare(await small()).png().toBuffer()
+  })
+
+  test('aborting removes a queued image', async () => {
+    const pool = new Pool({ concurrency: 1 })
+    const input = await small()
+    const controller = new AbortController()
+    const first = pool.prepare(input).png().toBuffer()
+    const second = assert.rejects(pool.prepare(input).png().toBuffer({ signal: controller.signal }), { name: 'AbortError' })
+    controller.abort()
+    await Promise.all([first, second])
+  })
+
+  test('disposing a pipeline aborts its images', async () => {
+    const pipeline = defaultPool().prepare(await slow()).png()
+    const aborted = assert.rejects(pipeline.toBuffer(), { name: 'AbortError' })
+    await pipeline[Symbol.asyncDispose]()
+    await aborted
+    await assert.rejects(pipeline.toBuffer(), { name: 'AbortError' })
+  })
+})
+
+test('ERR_BACKEND_UNAVAILABLE', { skip: findWasm() !== undefined && 'the wasm module is installed' }, (t) => {
+  const name = 'NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND'
+  const previous = process.env[name]
+  t.after(() => {
+    if (previous === undefined) {
+      delete process.env[name]
+    } else {
+      process.env[name] = previous
+    }
+  })
+  process.env[name] = 'wasm'
+  assert.throws(() => new Pool(), { name: 'SafeImageOptimizationError', code: 'ERR_BACKEND_UNAVAILABLE' })
 })
 
 // Workers are forked from a fork server, except on Windows. These tests inspect idle workers, so
@@ -214,6 +318,17 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
     await pool.prepare(input).png().toBuffer()
     const replaced = servers().filter(({ pid }) => !before.has(pid) && pid !== server!.pid)
     assert.equal(replaced.length, 1)
+  })
+
+  test('close() stops the workers and the fork server', async () => {
+    const before = new Set(servers().map(({ pid }) => pid))
+    const pool = new Pool({ concurrency: 2, maxImagesPerWorker: 0 })
+    const input = await fromRaw(pattern(64, 64)).png().toBuffer()
+    await Promise.all([pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()])
+    const [server] = servers().filter(({ pid }) => !before.has(pid))
+    assert.equal(processes().filter(({ ppid }) => ppid === server!.pid).length, 2)
+    await pool.close()
+    assert.ok(!processes().some(({ pid, ppid }) => pid === server!.pid || ppid === server!.pid))
   })
 
   // Last, because the first test checks that nothing is spawned directly.
@@ -301,6 +416,28 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
       }
       assert.equal(responses, expected, `maxImagesPerWorker: ${max}`)
     }
+  })
+
+  // `close()` only resolves once the worker has exited, which would take 10s if it wasn't killed.
+  test('aborting kills the worker', async () => {
+    const pool = nativeBackend(worker('exec sleep 10'))
+    const controller = new AbortController()
+    const start = performance.now()
+    const result = pool.run(Buffer.alloc(16), '{}', { maxResponseBytes: 1024, signal: controller.signal })
+    setTimeout(() => controller.abort(), 100)
+    assert.deepEqual(await result, { aborted: true })
+    await pool.close()
+    assert.ok(performance.now() - start < 5000)
+  })
+
+  test('destroy() kills busy workers', async () => {
+    const pool = nativeBackend(worker('exec sleep 10'))
+    const start = performance.now()
+    const result = pool.run(Buffer.alloc(16), '{}', { maxResponseBytes: 1024 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await pool.destroy()
+    assert.equal((await result).error?.code, 'ERR_POOL_CLOSED')
+    assert.ok(performance.now() - start < 5000)
   })
 
   test('a worker that never responds is killed', async () => {

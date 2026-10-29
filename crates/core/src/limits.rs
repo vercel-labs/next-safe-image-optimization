@@ -1,3 +1,6 @@
+use serde::Deserialize;
+use typeshare_annotation::typeshare;
+
 use crate::decode::InputFormat;
 use crate::error::{Error, Result};
 
@@ -20,11 +23,21 @@ pub struct Limits {
     pub output_bytes: u64,
     /// Checked right after detecting the format, before any decoding.
     pub input_formats: Vec<InputFormat>,
-    /// If false, animated images are rejected (see `decode::raster_decoder`). Otherwise, only their
-    /// first frame is decoded, for now. In the future, transforms may keep every frame when the
-    /// output format supports animation (e.g. GIF or WebP), which would decode with `image`'s
-    /// `AnimationDecoder::into_frames`.
-    pub animated: bool,
+    pub animated: Animated,
+}
+
+/// What to do with animated input. A future mode may keep every frame when the output format
+/// supports animation (e.g. GIF or WebP), which would decode with `image`'s
+/// `AnimationDecoder::into_frames`.
+#[typeshare]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Animated {
+    /// Decode only the first frame.
+    FirstFrame,
+    /// Reject animated input with `ERR_ANIMATED`, before decoding any pixels (see
+    /// `decode::raster_decoder`).
+    Reject,
 }
 
 impl Default for Limits {
@@ -33,8 +46,8 @@ impl Default for Limits {
             input_pixels: DEFAULT_INPUT_PIXELS,
             memory: DEFAULT_MEMORY,
             output_bytes: DEFAULT_OUTPUT_BYTES,
-            input_formats: InputFormat::ALL.to_vec(),
-            animated: true,
+            input_formats: InputFormat::DEFAULT_ALLOWED.to_vec(),
+            animated: Animated::FirstFrame,
         }
     }
 }

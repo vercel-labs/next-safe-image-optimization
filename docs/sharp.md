@@ -9,26 +9,28 @@ Because of these different goals, `@next/safe-image-optimization` is not a drop-
 
 ## API and pipeline
 
-- **Pools instead of a default function:** Pipelines are created with `defaultPool().prepare(input, options)` or `pool.prepare(input, options)` instead of calling `sharp(input, options)`.
-- **In-memory input only:** Input must be a `Buffer`, `Uint8Array`, `ArrayBuffer`, or `ArrayBufferView`. File paths and streams are not supported.
-- **Strict option validation:** Unsupported or unknown options (such as `fit`, `progressive`, or `sequentialRead`) are rejected with a `TypeError` instead of being ignored. Most options are validated in the worker when `toBuffer()` or `metadata()` is called, so invalid options reject the returned promise rather than throwing synchronously.
+- **Pools instead of a default function:** Pipelines are created with `defaultPool().prepare(input)` or `pool.prepare(input)` instead of calling `sharp(input, options)`.
+- **Limits are chained methods:** Instead of constructor options (like sharp's `limitInputPixels`), limits are set with `.limitInputPixels()`, `.limitAllocatorMemoryBytes()`, `.limitOutputBytes()`, `.allowInputFormats()`, `.animated()`, and `.timeoutMs()`.
+- **Cancellation and shutdown:** `toBuffer()` and `metadata()` accept an `AbortSignal` (`{ signal }`), and pools can be shut down with `close()` or `destroy()`.
+- **In-memory input only:** Input must be a `Buffer`, `Uint8Array` (or another `ArrayBufferView`), `ArrayBuffer`, or `SharedArrayBuffer`. File paths and streams are not supported.
+- **Strict option validation:** Unsupported or unknown options (such as `fit` or `progressive`) are rejected with a `TypeError` instead of being ignored. Most options are validated in the worker when `toBuffer()` or `metadata()` is called, so invalid options reject the returned promise rather than throwing synchronously.
 - **Timeouts:** Set timeouts in milliseconds with `timeoutMs(ms)` instead of sharp's `timeout({ seconds })`.
-- **Errors:** Processing failures reject with a `SafeImageOptimizationError` that has a stable `code` property (such as `ERR_UNSUPPORTED_FORMAT`, `ERR_LIMIT_EXCEEDED`, or `ERR_TIMEOUT`).
+- **Errors:** Processing failures reject with a `SafeImageOptimizationError` that has a stable `code` property (such as `ERR_UNSUPPORTED_FORMAT`, `ERR_LIMIT_EXCEEDED`, or `ERR_TIMEOUT`). Invalid options are `TypeError`s with the code `ERR_INVALID_OPTIONS`.
 - **`limitInputPixels`:** Applies to `metadata()` and to the target render size of SVGs, in addition to raster decoding. Like sharp, it does not apply to raster images embedded inside an SVG.
 - **Removing limits:** `0` removes any limit or timeout, like sharp's `limitInputPixels: 0` and `timeout({ seconds: 0 })`. `limitInputPixels` doesn't accept sharp's `false` (no limit) or `true` (the default).
 
 ## Operations
 
 - **Resizing:** `resize()` always behaves like sharp's default `fit: 'cover'` with centered cropping (`position: 'centre'`). Other `fit` modes, crop positions, and background colors are not supported. Supported resampling `kernel` values are `nearest`, `linear`, `cubic`, and `lanczos3`. Because resizing uses Rust's `image` crate rather than libvips, output pixels differ slightly and resizing is slower.
-- **Rotation:** `rotate(angle)` only supports multiples of 90°. Calling `rotate()` with no arguments (or `autoOrient()`) rotates the image according to its EXIF orientation.
+- **Rotation:** `rotate(angle)` only supports multiples of 90°. Unlike sharp, `rotate()` without an angle throws a `TypeError` instead of auto-orienting; use `autoOrient()`, which always runs before `rotate(angle)`.
 - **Other operations:** Operations that Next.js does not use—such as `extract`, `flip`, `flop`, `blur`, `sharpen`, `composite`, `flatten`, and `trim`—are not included.
 
 ## Formats
 
 - **Unsupported formats:** HEIF input is not supported. AVIF, HEIF, and TIFF output are not supported.
-- **Animated images:** Only the first frame of animated GIF, WebP, APNG, and AVIF images is decoded, and animated output is not supported. Passing `allowAnimated: false` rejects animated inputs with `ERR_ANIMATED` before decoding.
+- **Animated images:** Only the first frame of animated GIF, WebP, APNG, and AVIF images is decoded (`animated('first-frame')`, the default), and animated output is not supported. `animated('reject')` rejects animated inputs with `ERR_ANIMATED` before decoding.
 - **AVIF input:** Grid (tiled) AVIFs and AVIF image sequences are rejected. Orientation (`irot`, `imir`) and cropping (`clap`) properties in the AVIF container are ignored.
-- **SVG input:** SVGs are rendered with `resvg` instead of `librsvg`. Text elements are not rendered (no fonts are bundled; Next.js Open Graph images convert text to paths with Satori), `<image>` elements only load `data:` URLs, and compressed `.svgz` files are not supported.
+- **SVG input:** SVG is rejected unless allowed explicitly with `allowInputFormats()`, because the pixel limit doesn't apply to raster images embedded in an SVG. SVGs are rendered with `resvg` instead of `librsvg`. Text elements are not rendered (no fonts are bundled; Next.js Open Graph images convert text to paths with Satori), `<image>` elements only load `data:` URLs, and compressed `.svgz` files are not supported.
 - **TIFF input:** YCbCr TIFFs (which includes most JPEG-compressed TIFFs) are not supported.
 - **JPEG output:** Encodes baseline JPEGs with the pure-Rust `jpeg-encoder` crate by default, which produces somewhat larger files than sharp. Passing `mozjpeg: true` uses mozjpeg with the same preset as sharp (including progressive encoding), though it is compiled without assembly optimizations and is slower than in sharp. Individual options like `progressive`, `chromaSubsampling` (always 4:2:0), `optimiseCoding` (always enabled), and `quantisationTable` are not configurable.
 - **PNG output:** Always produces lossless truecolor PNGs. Palette quantization (`palette` / `quality`) is not supported, and `adaptiveFiltering` defaults to `true` (sharp defaults to `false`).

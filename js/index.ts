@@ -1,7 +1,7 @@
 import { availableParallelism } from 'node:os'
 
 import { NativeBackend, findWorker } from './native.js'
-import { InvalidResponseError, decodeResponse, encodeOptions, maxResponseBytes } from './protocol.js'
+import { InvalidResponseError, decodeResponse, encodeOptions, invalidOptions, maxResponseBytes } from './protocol.js'
 import type { Backend, LimitOptions, RequestOptions, Response, TransformOptions, Unchecked } from './protocol.js'
 import type * as generated from './protocol.generated.js'
 import { WASM_PACKAGE, WasmBackend, findWasm } from './wasm.js'
@@ -9,52 +9,16 @@ import { WASM_PACKAGE, WasmBackend, findWasm } from './wasm.js'
 export type InputFormat = `${generated.InputFormat}`
 export type OutputFormat = `${generated.OutputFormat}`
 export type Kernel = `${generated.Kernel}`
+/**
+ * What to do with animated input (see `Pipeline.animated()`). PNG (APNG), WebP, and AVIF count as
+ * animated if their header declares an animation, and GIF if it has more than one frame.
+ * - `'first-frame'`: decode only the first frame.
+ * - `'reject'`: reject animated input with `ERR_ANIMATED`, before decoding it.
+ */
+export type Animated = `${generated.Animated}`
 
-export type Input = Uint8Array | ArrayBuffer | ArrayBufferView
-
-export interface PipelineOptions {
-  /**
-   * Reject input images where `width * height` exceeds this. 0 means no limit (not
-   * recommended). Default: `268402689` (`0x3FFF * 0x3FFF`), like sharp.
-   *
-   * For SVGs, this applies to the natural size and the rendered size, but **not** to raster images
-   * embedded in the SVG (`<image href="data:...">`). Those are only bounded by
-   * `limitAllocatorMemoryBytes`, `limitProcessMemoryBytes`, and `timeoutMs()`.
-   */
-  limitInputPixels?: number
-  /**
-   * The maximum memory in bytes that processing may allocate, including the input. The worker's
-   * allocator enforces this, by exiting the worker, which doesn't cover the C encoders (libwebp and
-   * mozjpeg); see the pool's `limitProcessMemoryBytes` for that. Each stage (decode, resize, encode) also estimates
-   * its memory before it runs, for a clearer error. 0 means no limit (not recommended).
-   * Default: 512 MiB.
-   */
-  limitAllocatorMemoryBytes?: number
-  /**
-   * The maximum size in bytes of the encoded image. Larger output is rejected with
-   * `ERR_LIMIT_EXCEEDED`. The pool also enforces it when it reads the worker's response, so a
-   * misbehaving worker can't make it buffer more. 0 means no limit (not recommended).
-   * Default: 128 MiB.
-   */
-  limitOutputBytes?: number
-  /**
-   * Reject input in any other format with `ERR_UNSUPPORTED_FORMAT`, before decoding it. The format
-   * is always detected from the input's contents. Must not be empty. Default: every `InputFormat`.
-   */
-  allowedInputFormats?: readonly InputFormat[]
-  /**
-   * `false` rejects animated input with `ERR_ANIMATED`, before decoding it. Otherwise, only the
-   * first frame is decoded. PNG (APNG), WebP, and AVIF count as animated if their header declares an
-   * animation, and GIF if it has more than one frame. Default: `true`.
-   *
-   * A future version may transform every frame of an animated image when this is `true`, depending
-   * on the output format (e.g. GIF or WebP). Set this to `false` if you rely on only the first frame
-   * being decoded.
-   */
-  allowAnimated?: boolean
-  /** Equivalent to calling `autoOrient()`. */
-  autoOrient?: boolean
-}
+/** The encoded image, in memory (never a file path). `Buffer` and `Uint8Array` are `ArrayBufferView`s. */
+export type Input = ArrayBufferView | ArrayBuffer | SharedArrayBuffer
 
 export type BackendName = 'native' | 'wasm'
 
@@ -64,6 +28,9 @@ export interface PoolOptions {
   /**
    * Milliseconds before an idle worker exits. 0 means no limit: idle workers never exit. Idle
    * workers don't keep the process alive either way. Default: 10000.
+   *
+   * Workers are only idle if they're reused, so this has no effect with `maxImagesPerWorker: 1`
+   * (the default, except on Windows).
    */
   idleTimeoutMs?: number
   /**
@@ -97,9 +64,12 @@ export interface PoolOptions {
    * [`RLIMIT_DATA`]: https://sourceware.org/glibc/manual/2.44/html_node/Limits-on-Resources.html#index-struct-rlimit64
    * [`WebAssembly.Memory`]: https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/JavaScript_interface/Memory
    *
-   * This is a backstop for `limitAllocatorMemoryBytes`. It covers non-Rust
+   * This is a backstop for `limitAllocatorMemoryBytes()`. It covers non-Rust
    * image codecs (libwebp and mozjpeg). This should be larger than
-   * `limitAllocatorMemoryBytes`.
+   * `limitAllocatorMemoryBytes()`.
+   *
+   * Exceeding it fails with `ERR_OUT_OF_MEMORY`, not `ERR_LIMIT_EXCEEDED`: to the worker, it's
+   * the same as the system running out of memory.
    *
    * 0 means no limit (not recommended). Default: 768 MiB.
    */
@@ -185,26 +155,54 @@ export interface Metadata {
   autoOrient: { width: number; height: number }
 }
 
-export interface ToBufferOptions {
+export interface MetadataOptions {
+  /**
+   * Aborts processing: the image is removed from the queue, or the worker processing it is killed.
+   * The promise rejects with `signal.reason`.
+   */
+  signal?: AbortSignal
+}
+
+export interface ToBufferOptions extends MetadataOptions {
   resolveWithObject?: boolean
 }
 
+/**
+ * `SafeImageOptimizationError`'s codes:
+ * - `ERR_UNSUPPORTED_FORMAT`: the input's format isn't supported, or isn't allowed by
+ *   `allowInputFormats()`, or the output format isn't supported.
+ * - `ERR_ANIMATED`: the input is animated, with `animated('reject')`.
+ * - `ERR_LIMIT_EXCEEDED`: the image exceeded `limitInputPixels()`, `limitAllocatorMemoryBytes()`, or
+ *   `limitOutputBytes()`.
+ * - `ERR_DECODE_FAILED`, `ERR_ENCODE_FAILED`: the input is invalid, or encoding failed.
+ * - `ERR_INTERNAL`: a bug.
+ * - `ERR_TIMEOUT`: processing took longer than `timeoutMs()`.
+ * - `ERR_OUT_OF_MEMORY`: the worker ran out of memory, either because it exceeded the pool's
+ *   `limitProcessMemoryBytes`, or because the system did.
+ * - `ERR_WORKER_CRASHED`: the worker crashed, or sent an invalid response.
+ * - `ERR_WORKER_SPAWN`: the worker couldn't be started.
+ * - `ERR_BACKEND_UNAVAILABLE`: thrown by `new Pool()` (and `defaultPool()`) if there's no native
+ *   worker binary for this platform and `@next/safe-image-optimization-wasm32` isn't installed, or
+ *   `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND` chose a backend that isn't available.
+ * - `ERR_POOL_CLOSED`: the pool was closed before the image was submitted, or destroyed before it
+ *   finished.
+ *
+ * Invalid options throw (or reject with) a `TypeError` instead, with the code `ERR_INVALID_OPTIONS`.
+ */
 export type ErrorCode =
-  /** Errors from the worker. `ERR_ANIMATED`: the input is animated, with `allowAnimated: false`. */
   | Exclude<`${generated.ErrorCode}`, 'ERR_INVALID_OPTIONS'>
-  /** Processing took longer than `timeoutMs()`. */
   | 'ERR_TIMEOUT'
-  /** The worker ran out of memory. */
   | 'ERR_OUT_OF_MEMORY'
-  /** The worker crashed or sent an invalid response. */
   | 'ERR_WORKER_CRASHED'
-  /** The worker couldn't be started. */
   | 'ERR_WORKER_SPAWN'
+  | 'ERR_BACKEND_UNAVAILABLE'
+  | 'ERR_POOL_CLOSED'
 
 /**
- * Errors from processing an image. Invalid options are `TypeError`s instead. Most are only
- * validated by the worker, so `toBuffer()` or `metadata()` rejects with them. The input, the pool
- * and its options, `timeoutMs()`, and `limitOutputBytes` throw immediately.
+ * Errors from processing an image (see `ErrorCode`). Invalid options are `TypeError`s instead. Most
+ * are only validated by the worker, so `toBuffer()` or `metadata()` rejects with them. The input,
+ * the pool and its options, `timeoutMs()`, `limitOutputBytes()`, and `rotate()` without an angle
+ * throw immediately.
  */
 export class SafeImageOptimizationError extends Error {
   readonly code: ErrorCode
@@ -217,7 +215,7 @@ export class SafeImageOptimizationError extends Error {
 }
 
 function invalid(name: string, expected: string, value: unknown): TypeError {
-  return new TypeError(`Expected ${expected} for ${name} but received ${String(value)} of type ${typeof value}`)
+  return invalidOptions(`Expected ${expected} for ${name} but received ${String(value)} of type ${typeof value}`)
 }
 
 function checkInteger(name: string, value: unknown, min: number): number {
@@ -260,6 +258,13 @@ function checkOneOf<T extends string>(name: string, value: unknown, allowed: rea
   return value as T
 }
 
+function checkSignal(signal: unknown): AbortSignal | undefined {
+  if (signal !== undefined && !(signal instanceof AbortSignal)) {
+    throw invalid('signal', 'AbortSignal', signal)
+  }
+  return signal
+}
+
 function toUint8Array(input: Input): Uint8Array {
   if (input instanceof Uint8Array) {
     return input
@@ -295,10 +300,11 @@ function createBackend(options: PoolOptions): Backend {
     checkOneOf(BACKEND_VARIABLE, backend, BACKENDS)
   }
   const maxWorkers = concurrency ?? availableParallelism()
+  const unavailable = (message: string) => new SafeImageOptimizationError('ERR_BACKEND_UNAVAILABLE', message)
   const wasm = (context: string) => {
     const wasmPath = findWasm()
     if (wasmPath === undefined) {
-      throw new Error(`${context}Install ${WASM_PACKAGE} to use the wasm backend.`)
+      throw unavailable(`${context}Install ${WASM_PACKAGE} to use the wasm backend.`)
     }
     return new WasmBackend({ wasmPath, maxWorkers, idleTimeoutMs, maxImagesPerWorker: maxImagesPerWorker ?? 1, memoryLimit })
   }
@@ -309,7 +315,7 @@ function createBackend(options: PoolOptions): Backend {
   if (worker === undefined) {
     const noNative = `There's no native worker binary for ${process.platform}-${process.arch}.`
     if (backend === 'native') {
-      throw new Error(noNative)
+      throw unavailable(noNative)
     }
     return wasm(`${noNative} `)
   }
@@ -329,6 +335,9 @@ function createBackend(options: PoolOptions): Backend {
  * A pool of workers (processes, or threads running wasm) that process images, one image per worker
  * at a time. Workers are started on demand, and exit when idle or after `maxImagesPerWorker`
  * images. A worker that crashes or times out is replaced.
+ *
+ * Idle workers don't keep the process alive, so a pool doesn't need to be closed. To stop its
+ * workers, call `close()` (or use `await using`), or `destroy()`.
  */
 export class Pool {
   /**
@@ -340,18 +349,38 @@ export class Pool {
    */
   readonly backend: BackendName
   #backend: Backend
+  #closed = false
 
   constructor(options: PoolOptions = {}) {
     this.#backend = createBackend(options)
     this.backend = this.#backend.name
   }
 
+  /** Creates a pipeline that processes `input` with this pool's workers. */
+  prepare(input: Input): Pipeline {
+    return new Pipeline(this, input)
+  }
+
   /**
-   * Creates a pipeline that processes `input` with this pool's workers. Only in-memory input is
-   * supported (never file paths).
+   * Shuts the pool down gracefully: images submitted from now on reject with `ERR_POOL_CLOSED`,
+   * but the ones already submitted (including queued ones) are still processed. Resolves once
+   * they've finished and every worker has exited. Calling it again returns the same promise.
+   *
+   * `await using pool = new Pool()` calls this at the end of the scope.
    */
-  prepare(input: Input, options?: PipelineOptions): Pipeline {
-    return new Pipeline(this, input, options)
+  close(): Promise<void> {
+    this.#closed = true
+    return this.#backend.close()
+  }
+
+  /**
+   * Shuts the pool down immediately: kills every worker, and rejects images that are queued or
+   * being processed (and ones submitted later) with `ERR_POOL_CLOSED`. Resolves once every worker
+   * has exited. Can also be called after `close()`, to stop waiting for its images.
+   */
+  destroy(): Promise<void> {
+    this.#closed = true
+    return this.#backend.destroy()
   }
 
   /** @internal */
@@ -360,11 +389,20 @@ export class Pool {
     options: RequestOptions,
     limitOutputBytes: number | undefined,
     timeoutMs?: number,
+    signal?: AbortSignal,
   ): Promise<Response> {
+    signal?.throwIfAborted()
+    if (this.#closed) {
+      throw new SafeImageOptimizationError('ERR_POOL_CLOSED', 'the pool is closed')
+    }
     const result = await this.#backend.run(input, encodeOptions(options), {
       timeoutMs,
       maxResponseBytes: maxResponseBytes(limitOutputBytes ?? DEFAULT_LIMIT_OUTPUT_BYTES),
+      signal,
     })
+    if (result.aborted) {
+      throw signal!.reason
+    }
     if (result.error) {
       throw new SafeImageOptimizationError(result.error.code as ErrorCode, result.error.message)
     }
@@ -379,17 +417,25 @@ export class Pool {
     }
     if (response.kind === 'error') {
       if (response.code === 'ERR_INVALID_OPTIONS') {
-        throw new TypeError(response.message)
+        throw invalidOptions(response.message)
       }
       throw new SafeImageOptimizationError(response.code, response.message)
     }
     return response
   }
+
+  /** `close()`. */
+  [Symbol.asyncDispose](): Promise<void> {
+    return this.close()
+  }
 }
 
 let globalPool: Pool | undefined
 
-/** A shared pool, created with default options on first use. */
+/**
+ * A shared pool, created with default options on first use. Closing it closes it for every caller,
+ * and later calls return the same (closed) pool.
+ */
 export function defaultPool(): Pool {
   globalPool ??= new Pool()
   return globalPool
@@ -398,33 +444,82 @@ export function defaultPool(): Pool {
 /**
  * A chainable image processing pipeline, similar to a sharp instance, created by `Pool.prepare()`.
  * Operations always run in this order, regardless of call order: auto-orient, rotate, resize.
+ *
+ * A pipeline can process its input more than once (e.g. `metadata()`, then `toBuffer()`).
  */
 export class Pipeline {
   #input: Uint8Array
   #pool: Pool
-  #limits: Unchecked<LimitOptions>
+  #limits: Unchecked<LimitOptions> = {}
   /** Validated here, because the response's maximum size depends on it. */
   #limitOutputBytes: number | undefined
   #timeoutMs: number | undefined
-  #autoOrient: unknown
+  #autoOrient = false
   #rotate: unknown
   #resize: ResizeOptions | undefined
   #output: Pick<Unchecked<TransformOptions>, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
+  /** Aborted when the pipeline is disposed. */
+  #disposed = new AbortController()
+  #pending = new Set<Promise<unknown>>()
 
   /** @internal Use `Pool.prepare()`. */
-  constructor(pool: Pool, input: Input, options?: PipelineOptions) {
+  constructor(pool: Pool, input: Input) {
     this.#pool = pool
     this.#input = toUint8Array(input)
-    // The rest are the worker's limits.
-    const { autoOrient, limitOutputBytes, ...limits } = copyOptions(options)
-    this.#limitOutputBytes = optional(limitOutputBytes, (v) => checkInteger('limitOutputBytes', v, 0))
-    const { allowedInputFormats } = limits
-    this.#limits = {
-      ...limits,
-      limitOutputBytes: this.#limitOutputBytes,
-      allowedInputFormats: Array.isArray(allowedInputFormats) ? [...allowedInputFormats] : allowedInputFormats,
-    }
-    this.#autoOrient = autoOrient
+  }
+
+  /**
+   * Rejects input images where `width * height` exceeds this, with `ERR_LIMIT_EXCEEDED`. 0 means no
+   * limit (not recommended). Default: `268402689` (`0x3FFF * 0x3FFF`), like sharp.
+   *
+   * For SVGs, this applies to the natural size and the rendered size, but **not** to raster images
+   * embedded in the SVG (`<image href="data:...">`). Those are only bounded by
+   * `limitAllocatorMemoryBytes()`, the pool's `limitProcessMemoryBytes`, and `timeoutMs()`.
+   */
+  limitInputPixels(pixels: number): this {
+    this.#limits.limitInputPixels = pixels
+    return this
+  }
+
+  /**
+   * The maximum memory in bytes that processing may allocate, including the input. The worker's
+   * allocator enforces this, by exiting the worker, which doesn't cover the C encoders (libwebp and
+   * mozjpeg); see the pool's `limitProcessMemoryBytes` for that. Each stage (decode, resize,
+   * encode) also estimates its memory before it runs, for a clearer error. Either way, exceeding it
+   * fails with `ERR_LIMIT_EXCEEDED`. 0 means no limit (not recommended). Default: 512 MiB.
+   */
+  limitAllocatorMemoryBytes(bytes: number): this {
+    this.#limits.limitAllocatorMemoryBytes = bytes
+    return this
+  }
+
+  /**
+   * The maximum size in bytes of the encoded image. Larger output is rejected with
+   * `ERR_LIMIT_EXCEEDED`. The pool also enforces it when it reads the worker's response, so a
+   * misbehaving worker can't make it buffer more. 0 means no limit (not recommended).
+   * Default: 128 MiB.
+   */
+  limitOutputBytes(bytes: number): this {
+    this.#limitOutputBytes = checkInteger('limitOutputBytes', bytes, 0)
+    this.#limits.limitOutputBytes = bytes
+    return this
+  }
+
+  /**
+   * Rejects input in any other format with `ERR_UNSUPPORTED_FORMAT`, before decoding it. The format
+   * is always detected from the input's contents. Must not be empty. Default: every `InputFormat`
+   * except `'svg'`, which must be allowed explicitly: the pixel limit doesn't apply to raster images
+   * embedded in an SVG (see `limitInputPixels()`).
+   */
+  allowInputFormats(formats: readonly InputFormat[]): this {
+    this.#limits.allowedInputFormats = Array.isArray(formats) ? [...formats] : formats
+    return this
+  }
+
+  /** What to do with animated input (see `Animated`). Default: `'first-frame'`. */
+  animated(mode: Animated): this {
+    this.#limits.animated = mode
+    return this
   }
 
   /**
@@ -441,19 +536,26 @@ export class Pipeline {
     return this
   }
 
-  /** Rotates using the EXIF orientation, which is then stripped (like all metadata). */
+  /**
+   * Rotates and flips the image using its EXIF orientation, which is then stripped (like all
+   * metadata). Runs before `rotate()` and `resize()`, regardless of call order.
+   */
   autoOrient(): this {
     this.#autoOrient = true
     return this
   }
 
   /**
-   * Without an angle, auto-orients (like sharp). With an angle, rotates clockwise after
-   * auto-orientation. Only multiples of 90 are supported.
+   * Rotates clockwise by `angle` degrees, which must be a multiple of 90 (negative angles rotate
+   * counterclockwise). Calling it again replaces the angle. This ignores the EXIF orientation, unless
+   * `autoOrient()` is also called, which runs first.
+   *
+   * Unlike sharp's, this doesn't auto-orient without an angle: `rotate()` throws a `TypeError`. Use
+   * `autoOrient()` instead.
    */
-  rotate(angle?: number): this {
+  rotate(angle: number): this {
     if (angle === undefined) {
-      return this.autoOrient()
+      throw invalidOptions('rotate() requires an angle. To rotate using the EXIF orientation, use autoOrient().')
     }
     this.#rotate = angle
     return this
@@ -497,6 +599,7 @@ export class Pipeline {
   toBuffer(options?: ToBufferOptions & { resolveWithObject?: false }): Promise<Buffer>
   toBuffer(options: ToBufferOptions & { resolveWithObject: true }): Promise<{ data: Buffer; info: OutputInfo }>
   async toBuffer(options: ToBufferOptions = {}): Promise<Buffer | { data: Buffer; info: OutputInfo }> {
+    const { resolveWithObject, signal } = copyOptions(options)
     const transform: Unchecked<TransformOptions> = {
       limits: this.#limits,
       autoOrient: this.#autoOrient,
@@ -504,17 +607,22 @@ export class Pipeline {
       resize: this.#resize,
       ...this.#output,
     }
-    const response = await this.#run({ transform })
+    const response = await this.#run({ transform }, signal)
     if (response.kind !== 'transform') {
       throw new SafeImageOptimizationError('ERR_WORKER_CRASHED', `the worker sent a ${response.kind} response to a transform`)
     }
     const { data, info } = response
-    return options.resolveWithObject ? { data, info } : data
+    return resolveWithObject ? { data, info } : data
   }
 
-  /** Reads the image header without decoding pixels. Ignores all operations except `timeoutMs()`. */
-  async metadata(): Promise<Metadata> {
-    const metadata = await this.#run({ metadata: this.#limits })
+  /**
+   * Reads the image header without decoding pixels. Only the limits apply (`limitInputPixels()`,
+   * `limitAllocatorMemoryBytes()`, `allowInputFormats()`, `animated()`, and `timeoutMs()`), and
+   * other operations are ignored.
+   */
+  async metadata(options: MetadataOptions = {}): Promise<Metadata> {
+    const { signal } = copyOptions(options)
+    const metadata = await this.#run({ metadata: this.#limits }, signal)
     if (metadata.kind !== 'metadata') {
       throw new SafeImageOptimizationError('ERR_WORKER_CRASHED', `the worker sent a ${metadata.kind} response to metadata`)
     }
@@ -533,7 +641,27 @@ export class Pipeline {
     }
   }
 
-  #run(options: RequestOptions): Promise<Response> {
-    return this.#pool.run(this.#input, options, this.#limitOutputBytes, this.#timeoutMs)
+  async #run(options: RequestOptions, signal: unknown): Promise<Response> {
+    const disposed = this.#disposed.signal
+    const checked = checkSignal(signal)
+    const combined = checked === undefined ? disposed : AbortSignal.any([checked, disposed])
+    const promise = this.#pool.run(this.#input, options, this.#limitOutputBytes, this.#timeoutMs, combined)
+    this.#pending.add(promise)
+    try {
+      return await promise
+    } finally {
+      this.#pending.delete(promise)
+    }
+  }
+
+  /**
+   * Aborts any of the pipeline's images that are still queued or being processed (killing their
+   * workers), and resolves once they've stopped. Their promises, and ones for images submitted
+   * later, reject with an `AbortError`. Called by `await using pipeline = pool.prepare(input)`. To
+   * abort individual images, pass a `signal` to `toBuffer()` or `metadata()`.
+   */
+  async [Symbol.asyncDispose](): Promise<void> {
+    this.#disposed.abort()
+    await Promise.allSettled(this.#pending)
   }
 }

@@ -8,15 +8,14 @@ An image optimization library for Node.js, built for Next.js's image optimizer (
 const { defaultPool } = require('@next/safe-image-optimization')
 
 const output = await defaultPool()
-  .prepare(input, {
-    allowedInputFormats: ['jpeg', 'png', 'webp', 'avif'],
-    limitInputPixels: 268402689,
-  })
-  .rotate() // auto-orient using EXIF metadata
-  .resize(640, null, { withoutEnlargement: true })
+  .prepare(input)
+  .allowInputFormats(['jpeg', 'png', 'webp', 'avif'])
+  .limitInputPixels(268402689)
   .timeoutMs(10_000)
+  .autoOrient() // using EXIF metadata
+  .resize(640, null, { withoutEnlargement: true })
   .webp({ quality: 75 })
-  .toBuffer()
+  .toBuffer({ signal: request.signal }) // abort if the client disconnects
 ```
 
 To read an image's format and dimensions without decoding its pixels:
@@ -36,21 +35,23 @@ const meta = await defaultPool().prepare(input).timeoutMs(5_000).metadata()
 
 ### Supported formats and operations
 
-- **Input formats:** JPEG, PNG, WebP, GIF, TIFF, AVIF, and SVG (in-memory `Buffer` or `Uint8Array` only).
+- **Input formats:** JPEG, PNG, WebP, GIF, TIFF, AVIF, and SVG (in-memory `Buffer`, typed array, or `ArrayBuffer` only). SVG must be allowed explicitly with `.allowInputFormats()`.
 - **Output formats:** JPEG (`.jpeg()`), PNG (`.png()`), WebP (`.webp()`), and GIF (`.gif()`). Output is always 8-bit sRGB with metadata stripped.
 - **Operations:**
-  - `.autoOrient()` or `.rotate()`: orient using EXIF metadata, or rotate by a multiple of 90°.
+  - `.autoOrient()`: orient using EXIF metadata.
+  - `.rotate(angle)`: rotate by a multiple of 90° (after `.autoOrient()`, if it's also called).
   - `.resize(width, height, options)`: resize while preserving aspect ratio (cropping from the center when both width and height are given), with `withoutEnlargement`, `withoutReduction`, and `kernel` options.
-- **Input restrictions and limits:**
-  - `allowedInputFormats` restricts which formats are accepted (detected from the file contents).
-  - `allowAnimated: false` rejects animated images with `ERR_ANIMATED` before decoding; otherwise, only the first frame is decoded.
-  - `limitInputPixels`, `limitAllocatorMemoryBytes`, and `limitOutputBytes` bound image dimensions, memory use, and output size.
+- **Input restrictions and limits** (`0` removes a limit):
+  - `.allowInputFormats(formats)` restricts which formats are accepted (detected from the file contents).
+  - `.animated('reject')` rejects animated images with `ERR_ANIMATED` before decoding. With `.animated('first-frame')` (the default), only the first frame is decoded.
+  - `.limitInputPixels()`, `.limitAllocatorMemoryBytes()`, and `.limitOutputBytes()` bound image dimensions, memory use, and output size.
   - `.timeoutMs(ms)` cancels processing if an image takes too long. There is no default timeout, so you should set one when handling untrusted images.
-- **Errors:** Processing errors throw a `SafeImageOptimizationError` with a stable `code` property (such as `ERR_UNSUPPORTED_FORMAT`, `ERR_LIMIT_EXCEEDED`, or `ERR_TIMEOUT`). Invalid options throw a `TypeError`.
+- **Cancellation:** `.toBuffer({ signal })` and `.metadata({ signal })` accept an `AbortSignal`.
+- **Errors:** Processing errors throw a `SafeImageOptimizationError` with a stable `code` property (such as `ERR_UNSUPPORTED_FORMAT`, `ERR_LIMIT_EXCEEDED`, or `ERR_TIMEOUT`). Invalid options throw a `TypeError` with the code `ERR_INVALID_OPTIONS`.
 
 ### Worker pools
 
-Images are processed in a pool of background workers, one image per worker at a time. Workers start on demand, and by default, each one is replaced after processing a single image (except on Windows; see `maxImagesPerWorker`). Workers are also replaced if they crash or time out, and exit when idle.
+Images are processed in a pool of background workers, one image per worker at a time. Workers start on demand, and by default, each one is replaced after processing a single image (except on Windows; see `maxImagesPerWorker`). Workers are also replaced if they crash or time out. With `maxImagesPerWorker` above 1, they're reused, and exit after `idleTimeoutMs` without work.
 
 `defaultPool()` returns a shared pool sized to `os.availableParallelism()`. You can also create a pool with custom settings:
 
@@ -59,11 +60,14 @@ const { Pool } = require('@next/safe-image-optimization')
 
 const pool = new Pool({
   concurrency: 4,
+  maxImagesPerWorker: 16,
   idleTimeoutMs: 30_000,
 })
 
 const output = await pool.prepare(input).timeoutMs(10_000).webp().toBuffer()
 ```
+
+Idle workers don't keep the process alive, so pools don't need to be closed. To stop a pool's workers, `await pool.close()` finishes the images already submitted first, and `await pool.destroy()` stops them immediately. `await using pool = new Pool()` closes the pool at the end of the scope.
 
 ## Purpose
 

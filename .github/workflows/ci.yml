@@ -235,7 +235,7 @@ jobs:
         shell: bash
 
   test-musl:
-    name: Test ${{ matrix.target }} - node@${{ matrix.node }}
+    name: Test ${{ matrix.target }} - node@${{ matrix.node.version }}
     needs: build
     runs-on: ${{ startsWith(matrix.target, 'aarch64') && 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
     permissions:
@@ -247,7 +247,9 @@ jobs:
           - x86_64-unknown-linux-musl
           - aarch64-unknown-linux-musl
         node:
-          - '20.9'
+          # The digest is the multi-arch index's, so it works on both runners.
+          - version: '26.13.0'
+            image: node:26.13.0-alpine3.24@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -268,11 +270,11 @@ jobs:
       - run: chmod +x safe-image-optimization-worker.*
       - name: Test in Alpine
         env:
-          NODE_VERSION: ${{ matrix.node }}
+          IMAGE: ${{ matrix.node.image }}
         run: |
           set -euo pipefail
           docker run --rm -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" \
-            "node:$NODE_VERSION-alpine" node --test test/*.test.js
+            "$IMAGE" node --test test/*.test.js
 
   test-wasm:
     name: Test wasm32-wasip1 - node@${{ matrix.node }}

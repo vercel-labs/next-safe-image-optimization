@@ -1,6 +1,6 @@
 # WebAssembly backend
 
-Alongside native worker processes, `@next/safe-image-optimization` has a WebAssembly (`wasm32-wasip1`) build of the same image processing pipeline. Like sharp's `@img/sharp-wasm32`, it's published as a separate package, `@next/safe-image-optimization-wasm32`, so that installs on platforms with a native binary don't download it. Install it alongside the main package:
+Alongside native worker processes, `@next/safe-image-optimization` has a WebAssembly (`wasm32-wasip1`) build of the same image processing pipeline. Install it alongside the main package:
 
 ```sh
 npm install @next/safe-image-optimization @next/safe-image-optimization-wasm32
@@ -10,12 +10,7 @@ npm install @next/safe-image-optimization @next/safe-image-optimization-wasm32
 
 By default, a `Pool` uses native worker processes when a native binary is available for the current platform, and otherwise falls back to the WebAssembly backend, if `@next/safe-image-optimization-wasm32` is installed. If neither is available, creating a `Pool` throws an error.
 
-You can also choose the WebAssembly backend explicitly:
-
-- **Per pool:** `new Pool({ backend: 'wasm' })`
-- **With an environment variable:** `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm`
-
-To require the native backend and throw an error if no native binary is available, pass `backend: 'native'`. Likewise, `backend: 'wasm'` throws an error if `@next/safe-image-optimization-wasm32` isn't installed.
+To choose the WebAssembly backend explicitly, set the `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm` environment variable. It's read when each `Pool` is created, and creating one throws an error if `@next/safe-image-optimization-wasm32` isn't installed. Likewise, `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=native` requires the native backend, and throws an error if no native binary is available. `pool.backend` reports which backend a pool uses.
 
 ## How it works
 

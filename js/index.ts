@@ -57,14 +57,6 @@ export interface PipelineOptions {
 export type BackendName = 'native' | 'wasm'
 
 export interface PoolOptions {
-  /**
-   * `'native'` processes images in worker processes. `'wasm'` processes them in worker threads,
-   * with a wasm build. Default: the `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND` environment variable,
-   * or else `'native'`, falling back to `'wasm'` if there's no native worker binary for this
-   * platform. The wasm build is in a separate package, `@next/safe-image-optimization-wasm32`,
-   * which isn't installed by default.
-   */
-  backend?: BackendName
   /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
   concurrency?: number
   /**
@@ -255,6 +247,7 @@ function toUint8Array(input: Input): Uint8Array {
 const DEFAULT_LIMIT_OUTPUT_BYTES = 128 * 1024 * 1024
 const DEFAULT_LIMIT_PROCESS_MEMORY = 768 * 1024 * 1024
 const BACKENDS: readonly BackendName[] = ['native', 'wasm']
+const BACKEND_VARIABLE = 'NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND'
 
 function createBackend(options: PoolOptions): Backend {
   const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1))
@@ -269,9 +262,9 @@ function createBackend(options: PoolOptions): Backend {
   if (typeof forkServer !== 'boolean') {
     throw invalid('forkServer', 'boolean', forkServer)
   }
-  const backend = options.backend ?? process.env.NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND
+  const backend = process.env[BACKEND_VARIABLE] || undefined
   if (backend !== undefined) {
-    checkOneOf('backend', backend, BACKENDS)
+    checkOneOf(BACKEND_VARIABLE, backend, BACKENDS)
   }
   const maxWorkers = concurrency ?? availableParallelism()
   const wasm = (context: string) => {
@@ -309,6 +302,13 @@ function createBackend(options: PoolOptions): Backend {
  * is replaced.
  */
 export class Pool {
+  /**
+   * `'native'` processes images in worker processes. `'wasm'` processes them in worker threads,
+   * with a wasm build. The `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND` environment variable chooses one
+   * (read when the pool is created). Otherwise, it's `'native'`, falling back to `'wasm'` if
+   * there's no native worker binary for this platform. The wasm build is in a separate package,
+   * `@next/safe-image-optimization-wasm32`, which isn't installed by default.
+   */
   readonly backend: BackendName
   #backend: Backend
 

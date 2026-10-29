@@ -15,7 +15,7 @@ Native worker binaries are built for the following operating systems and CPU arc
 | macOS (10.13+) | `arm64` (Apple Silicon), `x64` (Intel) | |
 | Windows | `x64`, `arm64` | MSVC builds |
 
-On any other platform or architecture where Node.js runs, the pool automatically falls back to the [WebAssembly backend](wasm.md) if `@next/safe-image-optimization-wasm32` is installed (unless `backend: 'native'` is explicitly set).
+On any other platform or architecture where Node.js runs, the pool automatically falls back to the [WebAssembly backend](wasm.md) if `@next/safe-image-optimization-wasm32` is installed (unless `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=native` is set).
 
 ## OS-specific safety features
 

@@ -39,11 +39,26 @@ describe('pool', () => {
     for (const idleTimeoutMs of [0, 1.5, 3_000_000_000, Infinity]) {
       new Pool({ idleTimeoutMs })
     }
-    assert.throws(() => new Pool({ backend: 'other' as never }), TypeError)
     assert.throws(() => new Pool({ forkServer: 'yes' as never }), TypeError)
     for (const ms of [-1, -0.5, NaN, undefined, '10']) {
       assert.throws(() => defaultPool().prepare(Buffer.alloc(1)).timeoutMs(ms as never), TypeError)
     }
+  })
+
+  test('the backend environment variable is validated', (t) => {
+    const name = 'NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND'
+    const previous = process.env[name]
+    t.after(() => {
+      if (previous === undefined) {
+        delete process.env[name]
+      } else {
+        process.env[name] = previous
+      }
+    })
+    process.env[name] = 'other'
+    assert.throws(() => new Pool(), TypeError)
+    process.env[name] = backend
+    assert.equal(new Pool().backend, backend)
   })
 
   test('very long timeouts never expire', async () => {

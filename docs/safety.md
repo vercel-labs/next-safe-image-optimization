@@ -14,7 +14,7 @@ Most image-parsing vulnerabilities occur while decoding untrusted input. Every s
 
 C libraries (`libwebp` for lossy WebP and `mozjpeg` when `mozjpeg: true` is enabled) are only used for encoding, where the input is already validated pixel data produced by this library.
 
-## Worker isolation
+## Process isolation
 
 Image processing never runs on the main Node.js thread or in the main process's memory space. Instead, a pool of workers processes one image at a time:
 
@@ -27,12 +27,13 @@ Input buffers are copied before processing begins so JavaScript code cannot modi
 
 ## OS sandboxing
 
-Native worker processes run with minimal privileges:
+On Linux (`x64`, `arm64`, and `riscv64`), each worker installs a [`seccomp` system call filter](https://en.wikipedia.org/wiki/Seccomp) before processing any images. Once active, the worker cannot access the filesystem, open network sockets, or spawn new processes.
 
-- Workers start with an empty environment.
-- On Linux (`x64`, `arm64`, and `riscv64`), each worker installs a `seccomp` system call filter before processing any images. Once active, the worker can only read from and write to its existing pipes, manage its own memory, and exit. It cannot access the filesystem, open network sockets, or spawn new processes.
+If a Linux worker fails to install its `seccomp` filter on a supported platform, it exits immediately and requests fail with `ERR_WORKER_SPAWN` unless `NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES=1` is set.
 
-If a Linux worker fails to install its `seccomp` filter (for example, when running under QEMU user-mode emulation, which does not support `seccomp`), it exits immediately and requests fail with `ERR_WORKER_SPAWN`. For testing in those environments, setting `NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES=1` allows workers to run without the filter. Do not enable this when processing untrusted images.
+Linux and WebAssembly enforce platform-level memory limits. On Linux, this is accomplished using [`RLIMIT_DATA`].
+
+[`RLIMIT_DATA`]: https://sourceware.org/glibc/manual/2.44/html_node/Limits-on-Resources.html#index-struct-rlimit64
 
 ### Worker fork server
 
@@ -46,6 +47,6 @@ Resource limits prevent a single image from exhausting server memory or CPU time
 
 - **Input dimensions (`limitInputPixels`, default ~268 megapixels):** Rejects images whose `width * height` exceeds the limit before decoding pixels. For SVGs, this applies to both the declared SVG dimensions and the rendered output dimensions. However, raster images embedded inside an SVG (`<image href="data:...">`) are decoded during SVG rendering and are only bounded by the memory and timeout limits below.
 - **Per-image memory (`limitAllocatorMemoryBytes`, default 512 MiB):** Caps the total memory a worker's Rust allocator may use for a single image, including the input buffer and intermediate resize buffers. Exceeding this limit stops the worker and rejects with `ERR_LIMIT_EXCEEDED`. Before calling the C encoders (`libwebp` and `mozjpeg`), the worker also checks their estimated working memory against this limit.
-- **Per-worker memory (`limitProcessMemoryBytes`, default 768 MiB):** A hard limit on each worker's total memory, covering both Rust allocations and the C encoders. This is enforced by the OS on Linux (`RLIMIT_DATA`) and by the WebAssembly runtime on all platforms when using the `wasm` backend. It is not currently enforced for native workers on macOS or Windows.
+- **Per-worker memory (`limitProcessMemoryBytes`, default 768 MiB):** A hard limit on each worker's total memory, covering both Rust allocations and the C encoders. This is enforced by the OS on Linux ([`RLIMIT_DATA`]) and by the WebAssembly runtime on all platforms when using the `wasm` backend. It is not currently enforced for native workers on macOS or Windows.
 - **Output size (`limitOutputBytes`, default 128 MiB):** Caps the size of the encoded image and the maximum response size the main process will buffer from a worker.
-- **Processing time (`timeoutMs()`):** Limits how long a worker may spend on one image (starting when a worker picks up the request). If the timer expires, the worker is terminated and the request fails with `ERR_TIMEOUT`. There is no default timeout, so you should always set `timeoutMs()` when processing untrusted input.
+- **Processing time (`timeoutMs()`):** Limits how long a worker may spend on one image (starting when a worker picks up the request). If the timer expires, the worker is forcibly terminated and the request fails with `ERR_TIMEOUT`. There is no default timeout, so you should always set `timeoutMs()` when processing untrusted input.

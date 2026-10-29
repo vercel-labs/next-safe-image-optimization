@@ -10,7 +10,7 @@ fn main() {
     use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, Stdio};
 
-    const SANDBOXED: &str = "BLUNT_TEST_SANDBOXED";
+    const SANDBOXED: &str = "NSIO_TEST_SANDBOXED";
     if std::env::var_os(SANDBOXED).is_some() {
         sandboxed();
     }
@@ -37,7 +37,7 @@ fn main() {
 fn sandboxed() -> ! {
     use std::fs::File;
 
-    use blunt_worker::linux_sandbox::{compile_filters, enable};
+    use nsio_worker::linux_sandbox::{compile_filters, enable};
 
     let open = || File::open("/").map(drop).map_err(|err| err.raw_os_error());
     assert_eq!(open(), Ok(()));

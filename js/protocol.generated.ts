@@ -10,7 +10,7 @@ export enum ErrorCode {
 	Internal = "ERR_INTERNAL",
 	/** The input is animated, with `allowAnimated: false`. */
 	Animated = "ERR_ANIMATED",
-	/** Thrown as a `TypeError`, not a `BluntError`. */
+	/** Thrown as a `TypeError`, not a `SafeImageOptimizationError`. */
 	InvalidOptions = "ERR_INVALID_OPTIONS",
 }
 

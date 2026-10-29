@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 
 import type Sharp from 'sharp'
 
-import { BluntError } from '../dist/index.js'
+import { SafeImageOptimizationError } from '../dist/index.js'
 import type { ErrorCode } from '../dist/index.js'
 
 /** sharp's ES module uses import attributes (`with`), which need Node.js 20.10, so this loads its CommonJS one. */
@@ -70,7 +70,7 @@ export async function assertSimilar(actual: Buffer, expected: Buffer, tolerance:
 
 export async function assertRejectsWithCode(promise: Promise<unknown>, code: ErrorCode) {
   await assert.rejects(promise, (error: unknown) => {
-    assert.ok(error instanceof BluntError, `expected a BluntError, got ${String(error)}`)
+    assert.ok(error instanceof SafeImageOptimizationError, `expected a SafeImageOptimizationError, got ${String(error)}`)
     assert.equal(error.code, code, error.message)
     return true
   })

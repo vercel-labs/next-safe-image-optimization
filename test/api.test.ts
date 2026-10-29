@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { BluntError, Pipeline, defaultPool } from '../dist/index.js'
+import { Pipeline, SafeImageOptimizationError, defaultPool } from '../dist/index.js'
 import type { InputFormat, PipelineOptions, ResizeOptions } from '../dist/index.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
@@ -10,7 +10,7 @@ const png = () => fromRaw(pattern(40, 30, 4)).png().toBuffer()
 
 test('uses the expected backend', () => {
   // So that CI can't silently test the native backend instead of the wasm one, or vice versa.
-  assert.equal(pool.backend, process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND ?? 'native')
+  assert.equal(pool.backend, process.env.NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND ?? 'native')
 })
 
 describe('input', () => {
@@ -166,13 +166,13 @@ describe('output', () => {
     assert.deepEqual(a, b)
   })
 
-  test('errors are BluntErrors with a code', async () => {
+  test('errors are SafeImageOptimizationErrors with a code', async () => {
     const error = await pool.prepare(Buffer.from('not an image'))
       .toBuffer()
       .catch((e: unknown) => e)
-    assert.ok(error instanceof BluntError)
+    assert.ok(error instanceof SafeImageOptimizationError)
     assert.ok(error instanceof Error)
-    assert.equal(error.name, 'BluntError')
+    assert.equal(error.name, 'SafeImageOptimizationError')
     assert.equal(error.code, 'ERR_UNSUPPORTED_FORMAT')
   })
 })

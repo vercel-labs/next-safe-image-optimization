@@ -181,7 +181,7 @@ describe('svg', () => {
   })
 
   test('only loads data urls', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'blunt-svg-'))
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'nsio-svg-'))
     try {
       const file = path.join(dir, 'red.png')
       await writeFile(file, await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).png().toBuffer())

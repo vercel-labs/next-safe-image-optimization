@@ -28,8 +28,8 @@ use std::os::unix::net::UnixStream;
 use std::ptr;
 use std::sync::atomic::{AtomicI32, Ordering};
 
-use blunt_core::exit_immediately;
-use blunt_core::protocol::{EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED};
+use nsio_core::exit_immediately;
+use nsio_core::protocol::{EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED};
 use serde::{Deserialize, Serialize};
 
 use crate::node_ipc::{self, Channel, Event};

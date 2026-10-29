@@ -27,7 +27,7 @@ pub fn exit_with_parent(parent: Option<u32>) {
     unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) };
     // In case the parent exited before `prctl`.
     if parent.is_some_and(|pid| unsafe { libc::getppid() } as u32 != pid) {
-        blunt_core::exit_immediately(0);
+        nsio_core::exit_immediately(0);
     }
 }
 

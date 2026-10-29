@@ -6,7 +6,7 @@ default-members = ["crates/*"]
 resolver = "3"
 
 [workspace.metadata]
-name = "blunt-cargo"
+name = "nsio-cargo"
 
 [workspace.package]
 # Must match package.json's: `js/native.ts` passes that, and the worker checks it.

@@ -5,7 +5,7 @@
 //! `fork_server.rs`).
 //!
 //! Requests arrive on stdin as `[u64 LE length][request]`, and responses are written to stdout
-//! (see `blunt_core::protocol`). The worker handles one request at a time. It exits when stdin
+//! (see `nsio_core::protocol`). The worker handles one request at a time. It exits when stdin
 //! closes, and when the parent exits, even mid-request (see `requests`), so that it doesn't outlive
 //! the parent.
 
@@ -16,10 +16,10 @@ use std::sync::mpsc;
 #[cfg(not(target_os = "linux"))]
 use std::thread;
 
-use blunt_core::exit_immediately;
-use blunt_core::protocol::{self, EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED, EXIT_VERSION_MISMATCH};
+use nsio_core::exit_immediately;
+use nsio_core::protocol::{self, EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED, EXIT_VERSION_MISMATCH};
 #[cfg(target_os = "linux")]
-use blunt_worker::linux_sandbox;
+use nsio_worker::linux_sandbox;
 
 #[cfg(unix)]
 mod fork_server;
@@ -27,7 +27,7 @@ mod fork_server;
 mod node_ipc;
 
 #[global_allocator]
-static GLOBAL: blunt_core::ExitOnOom = blunt_core::ExitOnOom;
+static GLOBAL: nsio_core::ExitOnOom = nsio_core::ExitOnOom;
 
 fn main() {
     let mut args = std::env::args_os().skip(1);

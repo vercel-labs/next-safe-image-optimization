@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // CI's release build of the worker binary (`crates/worker`) for a target, which it copies to the
-// package root as `blunt-image-optimization-worker.<platform>`, where `js/native.ts` also looks for
+// package root as `safe-image-optimization-worker.<platform>`, where `js/native.ts` also looks for
 // it. The platform is Node's (like `linux-x64-gnu`, or `darwin-arm64`). Local builds don't need this:
 // `pnpm build` builds the worker in `target/debug`, where `js/native.ts` looks first.
 //
@@ -57,8 +57,8 @@ if (target === undefined) {
 // cargo-zigbuild takes the glibc version as a suffix (otherwise, it's zig's default), but its output
 // directory doesn't include it.
 const cargoTarget = cross && target.endsWith('-gnu') ? `${target}.${GLIBC_VERSION}` : target
-run('cargo', [cross ? 'zigbuild' : 'build', '-p', 'blunt-worker', '--release', '--locked', '--target', cargoTarget, ...extra])
+run('cargo', [cross ? 'zigbuild' : 'build', '-p', 'nsio-worker', '--release', '--locked', '--target', cargoTarget, ...extra])
 const name = platform(target)
 const exe = name.startsWith('win32') ? '.exe' : ''
-const worker = join(root, 'target', target, 'release', `blunt-image-optimization-worker${exe}`)
-copyFileSync(worker, join(root, `blunt-image-optimization-worker.${name}${exe}`))
+const worker = join(root, 'target', target, 'release', `safe-image-optimization-worker${exe}`)
+copyFileSync(worker, join(root, `safe-image-optimization-worker.${name}${exe}`))

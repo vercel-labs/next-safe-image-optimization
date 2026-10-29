@@ -1,11 +1,11 @@
-# blunt-image-optimization
+# @next/safe-image-optimization
 
 A safer image optimization library for Node.js, intended to replace [sharp](https://sharp.pixelplumbing.com/) in Next.js's image optimizer. The API is loosely based on sharp's, so it's easy to switch, but much smaller. It isn't a drop-in replacement: sharp compatibility is a rough guideline, not a rule, and the API differs where that makes it clearer (like `timeoutMs(ms)` instead of `timeout({ seconds })`).
 
 sharp (libvips) decodes untrusted images with C libraries. This library decodes with memory-safe Rust decoders from the [image-rs](https://github.com/image-rs) ecosystem, configured with explicit memory limits, in sandboxed worker processes.
 
 ```js
-const { defaultPool } = require('blunt-image-optimization')
+const { defaultPool } = require('@next/safe-image-optimization')
 
 const output = await defaultPool()
   .prepare(input, { limitInputPixels: 268402689 })
@@ -23,7 +23,7 @@ const output = await defaultPool()
 - **Operations:** auto-orient, rotate (multiples of 90°), resize (sharp's default `fit: 'cover'`, centered).
 - `metadata()` reads the header without decoding pixels.
 - `timeoutMs(ms)`, like sharp's `timeout({ seconds })`, which kills the worker if processing takes too long. There's no default timeout, but you should set one for untrusted input.
-- Errors are `BluntError`s with a stable `code`.
+- Errors are `SafeImageOptimizationError`s with a stable `code`.
 - TypeScript types are included.
 
 ## Safety model
@@ -79,13 +79,13 @@ pnpm test:wasm
 Images are processed by a pool of workers, one image per worker at a time. Workers start on demand, exit when idle, and are replaced if they crash or time out. `defaultPool()` is a shared pool with up to `os.availableParallelism()` workers. To configure one:
 
 ```js
-const { Pool } = require('blunt-image-optimization')
+const { Pool } = require('@next/safe-image-optimization')
 
 const pool = new Pool({ concurrency: 4, idleTimeoutMs: 30_000 })
 const output = await pool.prepare(input).timeoutMs(10_000).webp().toBuffer()
 ```
 
-The native backend uses worker processes. Without a native worker binary for the platform, or with `backend: 'wasm'` (or `BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm`), workers are threads running a wasm build. `limitProcessMemoryBytes` limits each worker's memory. On Linux and macOS, `forkServer: false` spawns each native worker, instead of forking it from a fork server (which is faster, but weakens ASLR, see the safety model).
+The native backend uses worker processes. Without a native worker binary for the platform, or with `backend: 'wasm'` (or `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm`), workers are threads running a wasm build. `limitProcessMemoryBytes` limits each worker's memory. On Linux and macOS, `forkServer: false` spawns each native worker, instead of forking it from a fork server (which is faster, but weakens ASLR, see the safety model).
 
 ## Future work
 

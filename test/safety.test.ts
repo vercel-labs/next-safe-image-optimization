@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { deflateSync } from 'node:zlib'
 
-import { BluntError, defaultPool } from '../dist/index.js'
+import { SafeImageOptimizationError, defaultPool } from '../dist/index.js'
 import { MAX_JSON_BYTES } from '../dist/protocol.generated.js'
 import { InvalidResponseError, decodeResponse } from '../dist/protocol.js'
 import { assertRejectsWithCode, crc32, fromRaw, pattern, sharp } from './helpers.ts'
@@ -73,7 +73,7 @@ describe('limits', () => {
     // The decoded image (30 KB) fits, but not with the decoder's and encoder's buffers.
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
     await assert.rejects(pool.prepare(input, { limitAllocatorMemoryBytes: 60_000 }).toBuffer(), (error: unknown) => {
-      assert.ok(error instanceof BluntError)
+      assert.ok(error instanceof SafeImageOptimizationError)
       assert.equal(error.code, 'ERR_LIMIT_EXCEEDED')
       assert.match(error.message, /allocated more than limitAllocatorMemoryBytes/)
       return true
@@ -164,7 +164,7 @@ describe('limits', () => {
     try {
       await pool.prepare(input).toBuffer()
     } catch (error) {
-      assert.ok(error instanceof BluntError && error.code === 'ERR_LIMIT_EXCEEDED', String(error))
+      assert.ok(error instanceof SafeImageOptimizationError && error.code === 'ERR_LIMIT_EXCEEDED', String(error))
     }
     assert.ok(performance.now() - start < 5000)
   })
@@ -251,7 +251,7 @@ describe('limits', () => {
     }
     for (const [name, input] of Object.entries(inputs)) {
       await assert.rejects(pool.prepare(input).toBuffer(), (error: unknown) => {
-        assert.ok(error instanceof BluntError, `${name}: ${String(error)}`)
+        assert.ok(error instanceof SafeImageOptimizationError, `${name}: ${String(error)}`)
         assert.equal(error.code, 'ERR_UNSUPPORTED_FORMAT', `${name}: ${error.message}`)
         assert.match(error.message, /input is not a JPEG/, name)
         return true
@@ -310,7 +310,7 @@ describe('malformed input never crashes or panics', () => {
         try {
           await pool.prepare(input).resize(32).png().toBuffer()
         } catch (error) {
-          assert.ok(error instanceof BluntError, String(error))
+          assert.ok(error instanceof SafeImageOptimizationError, String(error))
           assert.ok(allowed.has(error.code), `${error.code}: ${error.message}`)
         }
       }

@@ -39,7 +39,7 @@ interface Slot {
   timer?: NodeJS.Timeout
 }
 
-const WASM_PATH = join(__dirname, '..', 'blunt-image-optimization.wasm')
+const WASM_PATH = join(__dirname, '..', 'safe-image-optimization.wasm')
 
 function failure(code: string, message: string): RunResult {
   return { error: { code, message } }

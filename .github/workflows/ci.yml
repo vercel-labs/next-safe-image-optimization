@@ -128,7 +128,7 @@ jobs:
         if: ${{ endsWith(matrix.settings.target, '-gnu') }}
         run: |
           set -euo pipefail
-          for file in blunt-image-optimization-worker.*; do
+          for file in safe-image-optimization-worker.*; do
             newest=$(objdump -T "$file" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
             echo "$file requires $newest"
             if [ "$(printf '%s\nGLIBC_2.28\n' "$newest" | sort -V | tail -1)" != "GLIBC_2.28" ]; then
@@ -139,7 +139,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: worker-${{ matrix.settings.target }}
-          path: blunt-image-optimization-worker.*
+          path: safe-image-optimization-worker.*
           if-no-files-found: error
 
   build-wasm:
@@ -179,7 +179,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wasm32-wasip1
-          path: blunt-image-optimization.wasm
+          path: safe-image-optimization.wasm
           if-no-files-found: error
 
   # The full range of Node.js versions is only tested on Linux (glibc) and wasm. Other platforms only
@@ -225,7 +225,7 @@ jobs:
           path: .
       # Artifacts don't keep file permissions.
       - if: ${{ runner.os != 'Windows' }}
-        run: chmod +x blunt-image-optimization-worker.*
+        run: chmod +x safe-image-optimization-worker.*
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
@@ -265,7 +265,7 @@ jobs:
           name: worker-${{ matrix.target }}
           path: .
       # Artifacts don't keep file permissions.
-      - run: chmod +x blunt-image-optimization-worker.*
+      - run: chmod +x safe-image-optimization-worker.*
       - name: Test in Alpine
         env:
           NODE_VERSION: ${{ matrix.node }}
@@ -308,4 +308,4 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: node --test test/*.test.js
         env:
-          BLUNT_IMAGE_OPTIMIZATION_BACKEND: wasm
+          NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND: wasm

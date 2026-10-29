@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn ignores_files() {
-        let path = std::env::temp_dir().join(format!("blunt-svg-test-{}.png", std::process::id()));
+        let path = std::env::temp_dir().join(format!("nsio-svg-test-{}.png", std::process::id()));
         std::fs::write(&path, green_png()).unwrap();
         let path_str = path.to_str().unwrap();
         let absolute = parse(&with_image(path_str));

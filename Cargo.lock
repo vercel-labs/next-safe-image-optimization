@@ -110,45 +110,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blunt-core"
-version = "0.1.0"
-dependencies = [
- "avif-decode",
- "avif-parse",
- "bytemuck",
- "gif",
- "image",
- "jpeg-encoder",
- "libc",
- "libwebp-sys",
- "moxcms",
- "mozjpeg",
- "png",
- "resvg",
- "serde",
- "serde_json",
- "typeshare-annotation",
-]
-
-[[package]]
-name = "blunt-wasm"
-version = "0.1.0"
-dependencies = [
- "blunt-core",
-]
-
-[[package]]
-name = "blunt-worker"
-version = "0.1.0"
-dependencies = [
- "blunt-core",
- "libc",
- "seccompiler",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "byte-slice-cast"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -517,6 +478,45 @@ checksum = "706bf8a5e8c8ddb99128c3291d31bd21f4bcde17f0f4c20ec678d85c74faa149"
 dependencies = [
  "jobserver",
  "log",
+]
+
+[[package]]
+name = "nsio-core"
+version = "0.1.0"
+dependencies = [
+ "avif-decode",
+ "avif-parse",
+ "bytemuck",
+ "gif",
+ "image",
+ "jpeg-encoder",
+ "libc",
+ "libwebp-sys",
+ "moxcms",
+ "mozjpeg",
+ "png",
+ "resvg",
+ "serde",
+ "serde_json",
+ "typeshare-annotation",
+]
+
+[[package]]
+name = "nsio-wasm"
+version = "0.1.0"
+dependencies = [
+ "nsio-core",
+]
+
+[[package]]
+name = "nsio-worker"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "nsio-core",
+ "seccompiler",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

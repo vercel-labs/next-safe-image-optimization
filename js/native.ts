@@ -61,21 +61,21 @@ export interface WorkerBinary {
 export function findWorker(): WorkerBinary | undefined {
   const exe = process.platform === 'win32' ? '.exe' : ''
   const built = ['debug', 'release']
-    .map((profile) => join(__dirname, '..', 'target', profile, `blunt-image-optimization-worker${exe}`))
+    .map((profile) => join(__dirname, '..', 'target', profile, `safe-image-optimization-worker${exe}`))
     .filter((path) => existsSync(path))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
   if (built.length > 0) {
     return { path: built[0], local: true }
   }
   for (const platform of platforms()) {
-    const name = `blunt-image-optimization-worker.${platform}${exe}`
+    const name = `safe-image-optimization-worker.${platform}${exe}`
     const local = join(__dirname, '..', name)
     if (existsSync(local)) {
       return { path: local, local: true }
     }
     let path
     try {
-      path = join(dirname(require.resolve(`blunt-image-optimization-${platform}/package.json`)), name)
+      path = join(dirname(require.resolve(`@next/safe-image-optimization-${platform}/package.json`)), name)
     } catch {
       continue
     }

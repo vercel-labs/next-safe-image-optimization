@@ -1,7 +1,7 @@
 # Pure Rust AVIF decoder and AVIF to PNG converter
 
 > [!NOTE]
-> This is a vendored fork of [kornelski/avif-decode](https://github.com/kornelski/avif-decode), used by blunt-image-optimization. It's a squashed git subtree of upstream commit `2be10e2`. Changes from upstream:
+> This is a vendored fork of [kornelski/avif-decode](https://github.com/kornelski/avif-decode), used by @next/safe-image-optimization. It's a squashed git subtree of upstream commit `2be10e2`. Changes from upstream:
 >
 > - rav1d's asm is disabled on all targets (only the `bitdepth_8` and `bitdepth_16` features), so that decoding is entirely Rust.
 > - rav1d is a git dependency on an unreleased revision, for its Rust API (`rav1d::Decoder`) instead of the `dav1d_*` C API, which avoids `unsafe` FFI calls.

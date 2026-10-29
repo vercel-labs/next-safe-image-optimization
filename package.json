@@ -1,5 +1,5 @@
 {
-  "name": "blunt-image-optimization",
+  "name": "@next/safe-image-optimization",
   "version": "0.1.0",
   "description": "A safer image optimization library for Node.js, built on memory-safe Rust decoders",
   "license": "MIT",
@@ -8,24 +8,23 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "blunt-image-optimization.wasm"
+    "safe-image-optimization.wasm"
   ],
   "engines": {
     "node": ">= 20.9.0"
   },
   "scripts": {
-    "build": "turbo run build:native build:js",
-    "build:release": "turbo run build:native:release build:js",
-    "build:native": "node scripts/build-native.mjs",
-    "build:native:release": "node scripts/build-native.mjs --release",
+    "build": "turbo run nsio-worker#build build:js",
+    "build:release": "turbo run nsio-worker#build:release build:js",
     "build:wasm": "node scripts/build-wasm.mjs",
     "build:wasm:release": "node scripts/build-wasm.mjs --release",
     "build:js": "tsc -p tsconfig.json",
+    "build:test": "tsc -p test/tsconfig.json",
     "generate": "typeshare crates/core --lang=typescript --output-file=js/protocol.generated.ts",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
-    "test:wasm": "BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm node --run test",
+    "test:wasm": "NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm node --run test",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit",
-    "lint": "cargo fmt --check && cargo clippy --all-targets -- -D warnings && pnpm typecheck"
+    "lint": "turbo run lint format:check typecheck"
   },
   "packageManager": "pnpm@12.11.2",
   "devDependencies": {

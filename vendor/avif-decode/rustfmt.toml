@@ -1,0 +1,3 @@
+# @next/safe-image-optimization: upstream doesn't use rustfmt, and `cargo fmt` checks every
+# workspace member, including this one.
+disable_all_formatting = true

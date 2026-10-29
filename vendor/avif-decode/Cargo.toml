@@ -9,7 +9,6 @@ keywords = ["av1", "rav1d", "decoder", "heif"]
 license = "BSD-3-Clause"
 repository = "https://github.com/kornelski/avif-decode"
 edition = "2024"
-rust-version = "1.98"
 
 [[bin]]
 name = "avif-decode"
@@ -26,7 +25,7 @@ quick-error = "2.0.1"
 rgb = { version = "0.8.53", default-features = false, features = ["bytemuck"] }
 yuv = "0.8.19"
 
-# blunt-image-optimization: asm is disabled on all targets, so that decoding is entirely Rust.
+# @next/safe-image-optimization: asm is disabled on all targets, so that decoding is entirely Rust.
 # Unreleased rav1d for its Rust API (`rav1d::Decoder`). Panics in the C API (`dav1d_*`) can't
 # unwind, so they abort the process.
 rav1d = { git = "https://github.com/memorysafety/rav1d", rev = "0c851fa046d6a36430570459283e5886fbdd8a66", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
@@ -35,21 +34,12 @@ rav1d = { git = "https://github.com/memorysafety/rav1d", rev = "0c851fa046d6a364
 default = ["binary"]
 binary = ["dep:lodepng"]
 
-[profile.dev]
-opt-level = 1
-debug = "line-tables-only"
+# @next/safe-image-optimization: this is a workspace member (for turbo), so clippy lints it too.
+[lints.clippy]
+all = "allow"
 
-[profile.dev.package.rav1d]
-opt-level = 2
-debug-assertions = false
-
-[profile.dev.package.yuv]
-opt-level = 2
-debug-assertions = false
-
-[profile.release]
-opt-level = 3
-lto = true
+# @next/safe-image-optimization: profiles removed. This is a workspace member, so Cargo would ignore
+# them (with a warning). The root Cargo.toml has the ones that matter.
 
 [badges]
 maintenance = { status = "passively-maintained" }

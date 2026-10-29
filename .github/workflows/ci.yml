@@ -15,13 +15,12 @@ concurrency:
 env:
   CARGO_INCREMENTAL: '0'
   CARGO_TERM_COLOR: always
-  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
   MACOSX_DEPLOYMENT_TARGET: '10.13'
 
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -31,13 +30,13 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - run: corepack enable
+      - run: npm install --global pnpm@12.11.2
       - run: pnpm install --frozen-lockfile
       # Uses the version and components from rust-toolchain.toml.
       - run: rustup toolchain install
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: pnpm exec turbo run format:check
+      - run: pnpm exec turbo run lint
+      - run: pnpm exec turbo run test
       # typeshare only publishes Windows binaries.
       - run: cargo install typeshare-cli --version 1.13.4 --locked
       - name: Check that generated protocol types are up to date
@@ -45,8 +44,7 @@ jobs:
           set -euo pipefail
           pnpm generate
           git diff --exit-code -- js/protocol.generated.ts
-      - run: pnpm exec turbo run build:js
-      - run: pnpm typecheck
+      - run: pnpm exec turbo run typecheck
 
   build:
     name: Build ${{ matrix.settings.target }}
@@ -67,16 +65,16 @@ jobs:
             target: aarch64-pc-windows-msvc
           # Linux targets use cargo-zigbuild. For gnu targets, scripts/build-native.mjs targets glibc
           # 2.28, the same as official Node.js binaries.
-          - host: ubuntu-latest
+          - host: ubuntu-26.04
             target: x86_64-unknown-linux-gnu
             flags: -x
-          - host: ubuntu-latest
+          - host: ubuntu-26.04
             target: aarch64-unknown-linux-gnu
             flags: -x
-          - host: ubuntu-latest
+          - host: ubuntu-26.04
             target: x86_64-unknown-linux-musl
             flags: -x
-          - host: ubuntu-latest
+          - host: ubuntu-26.04
             target: aarch64-unknown-linux-musl
             flags: -x
     steps:
@@ -86,7 +84,6 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - run: corepack enable
       - name: Install Rust
         shell: bash
         env:
@@ -117,7 +114,7 @@ jobs:
           chmod +x "$dir/bin/cargo-zigbuild"
           echo "$dir" >> "$GITHUB_PATH"
           echo "$dir/bin" >> "$GITHUB_PATH"
-      - run: pnpm install --frozen-lockfile
+      # Only needs Node.js, not turbo (or pnpm).
       - name: Build
         shell: bash
         env:
@@ -126,12 +123,12 @@ jobs:
         run: |
           set -euo pipefail
           # shellcheck disable=SC2086 # FLAGS is intentionally word-split.
-          pnpm exec turbo run build:native:release -- --target "$TARGET" $FLAGS
+          node scripts/build-native.mjs --target "$TARGET" $FLAGS
       - name: Check glibc compatibility
         if: ${{ endsWith(matrix.settings.target, '-gnu') }}
         run: |
           set -euo pipefail
-          for file in blunt-image-optimization-worker.*; do
+          for file in safe-image-optimization-worker.*; do
             newest=$(objdump -T "$file" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
             echo "$file requires $newest"
             if [ "$(printf '%s\nGLIBC_2.28\n' "$newest" | sort -V | tail -1)" != "GLIBC_2.28" ]; then
@@ -142,12 +139,12 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: worker-${{ matrix.settings.target }}
-          path: blunt-image-optimization-worker.*
+          path: safe-image-optimization-worker.*
           if-no-files-found: error
 
   build-wasm:
     name: Build wasm32-wasip1
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     env:
@@ -160,7 +157,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - run: corepack enable
+      - run: npm install --global pnpm@12.11.2
       - name: Install Rust
         run: |
           set -euo pipefail
@@ -182,71 +179,65 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wasm32-wasip1
-          path: blunt-image-optimization.wasm
+          path: safe-image-optimization.wasm
           if-no-files-found: error
 
+  # The full range of Node.js versions is only tested on Linux (glibc) and wasm. Other platforms only
+  # test the oldest version that Next.js supports. Tooling (pnpm, tsc) runs on Node.js 24, and the
+  # tests are compiled to JS (`build:test`), because Node.js 20 can't strip types. These jobs don't
+  # use turbo, which needs cargo (and downloads every crate) even for JS tasks.
   test:
-    name: Test ${{ matrix.settings.target }} - node@${{ matrix.node }}
+    name: Test ${{ matrix.target }} on ${{ matrix.host }} - node@${{ matrix.node }}
     needs: build
-    runs-on: ${{ matrix.settings.host }}
+    runs-on: ${{ matrix.host }}
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        settings:
-          - host: macos-latest
-            target: aarch64-apple-darwin
-            architecture: arm64
+        include:
+          - { host: ubuntu-26.04, target: x86_64-unknown-linux-gnu, node: '20' }
+          - { host: ubuntu-26.04, target: x86_64-unknown-linux-gnu, node: '22' }
+          - { host: ubuntu-26.04, target: x86_64-unknown-linux-gnu, node: '24' }
+          - { host: ubuntu-26.04, target: x86_64-unknown-linux-gnu, node: '26' }
+          - { host: ubuntu-22.04, target: x86_64-unknown-linux-gnu, node: '20.9' }
+          - { host: ubuntu-26.04-arm, target: aarch64-unknown-linux-gnu, node: '20.9' }
+          - { host: macos-latest, target: aarch64-apple-darwin, node: '20.9' }
           # Runs under Rosetta.
-          - host: macos-latest
-            target: x86_64-apple-darwin
-            architecture: x64
-          - host: windows-latest
-            target: x86_64-pc-windows-msvc
-            architecture: x64
-          - host: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            architecture: arm64
-          - host: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            architecture: x64
-          - host: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            architecture: arm64
-        node:
-          - '22'
-          - '24'
-          - '26'
+          - { host: macos-latest, target: x86_64-apple-darwin, architecture: x64, node: '20.9' }
+          - { host: windows-latest, target: x86_64-pc-windows-msvc, node: '20.9' }
+          - { host: windows-11-arm, target: aarch64-pc-windows-msvc, node: '20.9' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Install with node 24, which still bundles corepack.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          architecture: ${{ matrix.settings.architecture }}
-      - run: corepack enable
+          architecture: ${{ matrix.architecture }}
+      - run: npm install --global pnpm@12.11.2
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec turbo run build:js
+      - run: pnpm build:js
+      - run: pnpm build:test
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: worker-${{ matrix.settings.target }}
+          name: worker-${{ matrix.target }}
           path: .
       # Artifacts don't keep file permissions.
       - if: ${{ runner.os != 'Windows' }}
-        run: chmod +x blunt-image-optimization-worker.*
+        run: chmod +x safe-image-optimization-worker.*
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
-          architecture: ${{ matrix.settings.architecture }}
-      - run: node --run test
+          architecture: ${{ matrix.architecture }}
+      # Bash expands the glob (Node.js 20's test runner doesn't), including on Windows.
+      - run: node --test test/*.test.js
+        shell: bash
 
   test-musl:
-    name: Test ${{ matrix.target }} - node@${{ matrix.node }}
+    name: Test ${{ matrix.target }} - node@${{ matrix.node.version }}
     needs: build
-    runs-on: ${{ startsWith(matrix.target, 'aarch64') && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: ${{ startsWith(matrix.target, 'aarch64') && 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
     permissions:
       contents: read
     strategy:
@@ -256,9 +247,9 @@ jobs:
           - x86_64-unknown-linux-musl
           - aarch64-unknown-linux-musl
         node:
-          - '22'
-          - '24'
-          - '26'
+          # The digest is the multi-arch index's, so it works on both runners.
+          - version: '26.13.0'
+            image: node:26.13.0-alpine3.24@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -266,34 +257,36 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - run: corepack enable
+      - run: npm install --global pnpm@12.11.2
       # Install sharp's musl binaries (used to generate test images) for the Alpine container.
       - run: pnpm install --frozen-lockfile --libc glibc --libc musl
-      - run: pnpm exec turbo run build:js
+      - run: pnpm build:js
+      - run: pnpm build:test
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: worker-${{ matrix.target }}
           path: .
       # Artifacts don't keep file permissions.
-      - run: chmod +x blunt-image-optimization-worker.*
+      - run: chmod +x safe-image-optimization-worker.*
       - name: Test in Alpine
         env:
-          NODE_VERSION: ${{ matrix.node }}
+          IMAGE: ${{ matrix.node.image }}
         run: |
           set -euo pipefail
           docker run --rm -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" \
-            "node:$NODE_VERSION-alpine" node --run test
+            "$IMAGE" node --test test/*.test.js
 
   test-wasm:
     name: Test wasm32-wasip1 - node@${{ matrix.node }}
     needs: build-wasm
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
         node:
+          - '20'
           - '22'
           - '24'
           - '26'
@@ -304,9 +297,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - run: corepack enable
+      - run: npm install --global pnpm@12.11.2
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec turbo run build:js
+      - run: pnpm build:js
+      - run: pnpm build:test
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: wasm32-wasip1
@@ -314,6 +308,6 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
-      - run: node --run test
+      - run: node --test test/*.test.js
         env:
-          BLUNT_IMAGE_OPTIMIZATION_BACKEND: wasm
+          NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND: wasm

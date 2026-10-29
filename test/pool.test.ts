@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { Pool, defaultPool } from '../dist/index.js'
 import { NativeBackend } from '../dist/native.js'
@@ -105,7 +106,7 @@ describe('pool', () => {
       new Pool({ idleTimeoutMs: 60000 }).prepare(png).toBuffer().then(() => console.log('done'))
     `
     const start = performance.now()
-    const child = spawnSync(process.execPath, ['-e', script], { cwd: join(import.meta.dirname, '..'), timeout: 30_000 })
+    const child = spawnSync(process.execPath, ['-e', script], { cwd: fileURLToPath(new URL('..', import.meta.url)), timeout: 30_000 })
     assert.equal(child.stdout.toString().trim(), 'done', child.stderr.toString())
     assert.equal(child.status, 0)
     assert.ok(performance.now() - start < 20_000)
@@ -155,7 +156,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
     assert.equal(added.length, 1)
     assert.ok(all.some(({ ppid }) => ppid === added[0]!.pid))
     // Nothing else is spawned directly.
-    assert.ok(!all.some(({ ppid, args }) => ppid === process.pid && args.includes('blunt-image-optimization-worker') && !args.includes('--fork-server')))
+    assert.ok(!all.some(({ ppid, args }) => ppid === process.pid && args.includes('safe-image-optimization-worker') && !args.includes('--fork-server')))
   })
 
   test('the pool replaces a fork server that exits', async () => {
@@ -181,7 +182,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
   // Last, because the first test checks that nothing is spawned directly.
   test('forkServer: false spawns each worker', async () => {
     const spawned = () =>
-      processes().filter(({ ppid, args }) => ppid === process.pid && args.includes('blunt-image-optimization-worker'))
+      processes().filter(({ ppid, args }) => ppid === process.pid && args.includes('safe-image-optimization-worker'))
     const before = new Set(spawned().map(({ pid }) => pid))
     const pool = new Pool({ concurrency: 2, forkServer: false })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
@@ -195,7 +196,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
 // The native backend's handling of misbehaving workers, with shell scripts standing in for the
 // worker binary (or the fork server, which they fail to start).
 describe('native worker failures', { skip: backend !== 'native' || process.platform === 'win32' }, () => {
-  const dir = mkdtempSync(join(tmpdir(), 'blunt-test-'))
+  const dir = mkdtempSync(join(tmpdir(), 'nsio-test-'))
   let count = 0
   function worker(script: string): string {
     const path = join(dir, `worker-${count++}.sh`)
@@ -258,13 +259,13 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
   })
 
   test('the worker gets an empty environment', async () => {
-    process.env.BLUNT_TEST_SECRET = 'secret'
+    process.env.NSIO_TEST_SECRET = 'secret'
     try {
-      const script = String.raw`env | grep -q BLUNT_TEST_SECRET && printf '\001\0\0\0\0\0\0\0y' || printf '\001\0\0\0\0\0\0\0n'; exec sleep 10`
+      const script = String.raw`env | grep -q NSIO_TEST_SECRET && printf '\001\0\0\0\0\0\0\0y' || printf '\001\0\0\0\0\0\0\0n'; exec sleep 10`
       const { response } = await run(worker(script))
       assert.equal(response?.toString(), 'n')
     } finally {
-      delete process.env.BLUNT_TEST_SECRET
+      delete process.env.NSIO_TEST_SECRET
     }
   })
 })

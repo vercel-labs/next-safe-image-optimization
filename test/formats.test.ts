@@ -3,13 +3,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, test } from 'node:test'
-import { crc32, gzipSync } from 'node:zlib'
-
-import sharp from 'sharp'
+import { gzipSync } from 'node:zlib'
 
 import { defaultPool } from '../dist/index.js'
 import type { OutputFormat } from '../dist/index.js'
-import { assertRejectsWithCode, assertSimilar, formatOf, fromRaw, pattern } from './helpers.ts'
+import { assertRejectsWithCode, assertSimilar, crc32, formatOf, fromRaw, pattern, sharp } from './helpers.ts'
 
 const pool = defaultPool()
 const rgb = pattern(96, 64)
@@ -183,7 +181,7 @@ describe('svg', () => {
   })
 
   test('only loads data urls', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'blunt-svg-'))
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'nsio-svg-'))
     try {
       const file = path.join(dir, 'red.png')
       await writeFile(file, await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).png().toBuffer())
@@ -258,11 +256,6 @@ describe('encoder options', () => {
     const compressed = await pool.prepare(input).png({ compressionLevel: 9 }).toBuffer()
     assert.ok(stored.length > compressed.length)
     await assertSimilar(stored, input, 0)
-  })
-
-  test('png ignores quality (sharp compatibility)', async () => {
-    const input = await inputs.png()
-    await assertSimilar(await pool.prepare(input).png({ quality: 50 }).toBuffer(), input, 0)
   })
 
   test('grayscale stays grayscale', async () => {

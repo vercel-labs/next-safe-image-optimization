@@ -29,9 +29,9 @@ export interface WasmWorkerMessage {
 
 interface Exports {
   _initialize?(): void
-  blunt_alloc(len: number): number
-  blunt_handle(ptr: number, len: number): number
-  blunt_free_response(): void
+  nsio_alloc(len: number): number
+  nsio_handle(ptr: number, len: number): number
+  nsio_free_response(): void
 }
 
 const ERRNO_SUCCESS = 0
@@ -125,9 +125,9 @@ const wasm = instance.exports as unknown as Exports
 wasm._initialize?.()
 
 function handle({ request, maxResponseBytes }: WasmRequest): Uint8Array {
-  const ptr = wasm.blunt_alloc(request.length)
+  const ptr = wasm.nsio_alloc(request.length)
   new Uint8Array(memory.buffer, ptr, request.length).set(request)
-  const parts = wasm.blunt_handle(ptr, request.length)
+  const parts = wasm.nsio_handle(ptr, request.length)
   const [headPtr, headLen, dataPtr, dataLen] = new Uint32Array(memory.buffer, parts, 4)
   if (headLen < 8) {
     throw new Error('invalid response')
@@ -142,7 +142,7 @@ function handle({ request, maxResponseBytes }: WasmRequest): Uint8Array {
   const response = new Uint8Array(head.length + data.length)
   response.set(head)
   response.set(data, head.length)
-  wasm.blunt_free_response()
+  wasm.nsio_free_response()
   return response
 }
 

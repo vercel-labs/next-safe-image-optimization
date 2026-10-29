@@ -2,10 +2,10 @@
 //! JS can choose its maximum size, and the only other imports are a few WASI functions that JS
 //! stubs out.
 //!
-//! To process a request, JS calls `blunt_alloc(len)`, writes the request (see
-//! `blunt_core::protocol`) to the returned pointer, and calls `blunt_handle(ptr, len)`. That
+//! To process a request, JS calls `nsio_alloc(len)`, writes the request (see
+//! `nsio_core::protocol`) to the returned pointer, and calls `nsio_handle(ptr, len)`. That
 //! returns a pointer to four `u32`s, `[head pointer, head length, data pointer, data length]`.
-//! After copying the response out, JS calls `blunt_free_response()`.
+//! After copying the response out, JS calls `nsio_free_response()`.
 //!
 //! A panic traps, and running out of memory calls `proc_exit` with `EXIT_OUT_OF_MEMORY`. Either way,
 //! JS discards the instance.
@@ -13,10 +13,10 @@
 use std::mem::ManuallyDrop;
 use std::sync::Mutex;
 
-use blunt_core::protocol::{self, Frame};
+use nsio_core::protocol::{self, Frame};
 
 #[global_allocator]
-static GLOBAL: blunt_core::ExitOnOom = blunt_core::ExitOnOom;
+static GLOBAL: nsio_core::ExitOnOom = nsio_core::ExitOnOom;
 
 struct Current {
     /// Owns the buffers that `parts` points to.
@@ -27,16 +27,16 @@ struct Current {
 static CURRENT: Mutex<Option<Box<Current>>> = Mutex::new(None);
 
 #[unsafe(no_mangle)]
-pub extern "C" fn blunt_alloc(len: usize) -> *mut u8 {
+pub extern "C" fn nsio_alloc(len: usize) -> *mut u8 {
     ManuallyDrop::new(Vec::<u8>::with_capacity(len)).as_mut_ptr()
 }
 
 /// # Safety
 ///
-/// `ptr` must come from `blunt_alloc(len)`, and the request must be fully written.
+/// `ptr` must come from `nsio_alloc(len)`, and the request must be fully written.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn blunt_handle(ptr: *mut u8, len: usize) -> *const u32 {
-    // SAFETY: `blunt_alloc` allocated a `Vec` with capacity `len`, and JS initialized it.
+pub unsafe extern "C" fn nsio_handle(ptr: *mut u8, len: usize) -> *const u32 {
+    // SAFETY: `nsio_alloc` allocated a `Vec` with capacity `len`, and JS initialized it.
     let request = unsafe { Vec::from_raw_parts(ptr, len, len) };
     let response = protocol::handle(request);
     let parts = [
@@ -55,6 +55,6 @@ pub unsafe extern "C" fn blunt_handle(ptr: *mut u8, len: usize) -> *const u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn blunt_free_response() {
+pub extern "C" fn nsio_free_response() {
     CURRENT.lock().unwrap().take();
 }

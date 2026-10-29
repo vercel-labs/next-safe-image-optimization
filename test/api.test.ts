@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { BluntError, Pipeline, defaultPool } from '../dist/index.js'
+import { Pipeline, SafeImageOptimizationError, defaultPool } from '../dist/index.js'
 import type { InputFormat, PipelineOptions, ResizeOptions } from '../dist/index.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
@@ -10,7 +10,7 @@ const png = () => fromRaw(pattern(40, 30, 4)).png().toBuffer()
 
 test('uses the expected backend', () => {
   // So that CI can't silently test the native backend instead of the wasm one, or vice versa.
-  assert.equal(pool.backend, process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND ?? 'native')
+  assert.equal(pool.backend, process.env.NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND ?? 'native')
 })
 
 describe('input', () => {
@@ -67,7 +67,7 @@ describe('argument validation', () => {
     ['jpeg progressive', (p) => p.jpeg({ progressive: true } as never)],
     ['jpeg mozjpeg', (p) => p.jpeg({ mozjpeg: 'yes' as never })],
     ['png compressionLevel', (p) => p.png({ compressionLevel: 10 })],
-    ['png quality', (p) => p.png({ quality: 0 })],
+    ['png quality', (p) => p.png({ quality: 50 } as never), 'unknown field `quality`'],
     ['webp effort', (p) => p.webp({ effort: 7 })],
     ['webp quality', (p) => p.webp({ quality: () => 50 } as never), 'Expected a JSON value for quality but received a function'],
     ['webp quality bigint', (p) => p.webp({ quality: 50n } as never)],
@@ -92,6 +92,7 @@ describe('argument validation', () => {
       [{ allowAnimated: 1 as never }],
       [{ autoOrient: 'yes' as never }, 'invalid type: string'],
       [{ failOn: 'none' } as never, 'unknown field `failOn`'],
+      [{ sequentialRead: true } as never, 'unknown field `sequentialRead`'],
     ]
     for (const [options, message] of invalid) {
       await rejects(() => pool.prepare(input, options).toBuffer(), message)
@@ -103,7 +104,7 @@ describe('argument validation', () => {
 
   test('accepts null and undefined as unset', async () => {
     const input = await png()
-    const { info } = await pool.prepare(input, { limitInputPixels: undefined, sequentialRead: true })
+    const { info } = await pool.prepare(input, { limitInputPixels: undefined })
       .resize(null, 15, { kernel: undefined })
       .png(null as never)
       .toBuffer({ resolveWithObject: true })
@@ -165,13 +166,13 @@ describe('output', () => {
     assert.deepEqual(a, b)
   })
 
-  test('errors are BluntErrors with a code', async () => {
+  test('errors are SafeImageOptimizationErrors with a code', async () => {
     const error = await pool.prepare(Buffer.from('not an image'))
       .toBuffer()
       .catch((e: unknown) => e)
-    assert.ok(error instanceof BluntError)
+    assert.ok(error instanceof SafeImageOptimizationError)
     assert.ok(error instanceof Error)
-    assert.equal(error.name, 'BluntError')
+    assert.equal(error.name, 'SafeImageOptimizationError')
     assert.equal(error.code, 'ERR_UNSUPPORTED_FORMAT')
   })
 })

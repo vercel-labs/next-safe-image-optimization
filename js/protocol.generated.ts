@@ -10,7 +10,7 @@ export enum ErrorCode {
 	Internal = "ERR_INTERNAL",
 	/** The input is animated, with `allowAnimated: false`. */
 	Animated = "ERR_ANIMATED",
-	/** Thrown as a `TypeError`, not a `BluntError`. */
+	/** Thrown as a `TypeError`, not a `SafeImageOptimizationError`. */
 	InvalidOptions = "ERR_INVALID_OPTIONS",
 }
 
@@ -60,8 +60,6 @@ export interface MetadataResponse {
 export interface PngOptions {
 	compressionLevel?: number;
 	adaptiveFiltering?: boolean;
-	/** Accepted for compatibility with sharp, but ignored (there's no palette quantization). */
-	quality?: number;
 }
 
 /** The filters that `image` implements, named like sharp's. */

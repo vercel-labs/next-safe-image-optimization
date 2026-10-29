@@ -52,8 +52,6 @@ export interface PipelineOptions {
   allowAnimated?: boolean
   /** Equivalent to calling `autoOrient()`. */
   autoOrient?: boolean
-  /** Accepted for compatibility with sharp (Next.js passes it), but ignored. */
-  sequentialRead?: boolean
 }
 
 export type BackendName = 'native' | 'wasm'
@@ -61,8 +59,9 @@ export type BackendName = 'native' | 'wasm'
 export interface PoolOptions {
   /**
    * `'native'` processes images in worker processes. `'wasm'` processes them in worker threads,
-   * with a wasm build. Default: the `BLUNT_IMAGE_OPTIMIZATION_BACKEND` environment variable, or
-   * else `'native'`, falling back to `'wasm'` if there's no native worker binary for this platform.
+   * with a wasm build. Default: the `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND` environment variable,
+   * or else `'native'`, falling back to `'wasm'` if there's no native worker binary for this
+   * platform.
    */
   backend?: BackendName
   /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
@@ -120,11 +119,6 @@ export interface PngOptions {
   compressionLevel?: number
   /** Default: `true` (sharp defaults to `false`). */
   adaptiveFiltering?: boolean
-  /**
-   * 1-100. Accepted for compatibility with sharp, but ignored. Output is always lossless truecolor;
-   * there is no palette quantization.
-   */
-  quality?: number
 }
 
 export interface WebpOptions {
@@ -187,12 +181,12 @@ export type ErrorCode =
  * validated by the worker, so `toBuffer()` or `metadata()` rejects with them. The input, the pool
  * and its options, `timeoutMs()`, and `limitOutputBytes` throw immediately.
  */
-export class BluntError extends Error {
+export class SafeImageOptimizationError extends Error {
   readonly code: ErrorCode
 
   constructor(code: ErrorCode, message: string) {
     super(message)
-    this.name = 'BluntError'
+    this.name = 'SafeImageOptimizationError'
     this.code = code
   }
 }
@@ -274,7 +268,7 @@ function createBackend(options: PoolOptions): Backend {
   if (typeof forkServer !== 'boolean') {
     throw invalid('forkServer', 'boolean', forkServer)
   }
-  const backend = options.backend ?? process.env.BLUNT_IMAGE_OPTIMIZATION_BACKEND
+  const backend = options.backend ?? process.env.NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND
   if (backend !== undefined) {
     checkOneOf('backend', backend, BACKENDS)
   }
@@ -336,14 +330,14 @@ export class Pool {
       maxResponseBytes: maxResponseBytes(limitOutputBytes ?? DEFAULT_LIMIT_OUTPUT_BYTES),
     })
     if (result.error) {
-      throw new BluntError(result.error.code as ErrorCode, result.error.message)
+      throw new SafeImageOptimizationError(result.error.code as ErrorCode, result.error.message)
     }
     let response
     try {
       response = decodeResponse(result.response!)
     } catch (error) {
       if (error instanceof InvalidResponseError) {
-        throw new BluntError('ERR_WORKER_CRASHED', `the worker sent an invalid response: ${error.message}`)
+        throw new SafeImageOptimizationError('ERR_WORKER_CRASHED', `the worker sent an invalid response: ${error.message}`)
       }
       throw error
     }
@@ -351,7 +345,7 @@ export class Pool {
       if (response.code === 'ERR_INVALID_OPTIONS') {
         throw new TypeError(response.message)
       }
-      throw new BluntError(response.code, response.message)
+      throw new SafeImageOptimizationError(response.code, response.message)
     }
     return response
   }
@@ -385,8 +379,8 @@ export class Pipeline {
   constructor(pool: Pool, input: Input, options?: PipelineOptions) {
     this.#pool = pool
     this.#input = toUint8Array(input)
-    // The rest are the worker's limits. `sequentialRead` is ignored.
-    const { autoOrient, limitInputPixels, limitOutputBytes, sequentialRead, ...limits } = copyOptions(options)
+    // The rest are the worker's limits.
+    const { autoOrient, limitInputPixels, limitOutputBytes, ...limits } = copyOptions(options)
     this.#limitOutputBytes = optional(limitOutputBytes, (v) => checkInteger('limitOutputBytes', v, 1))
     const { allowedInputFormats } = limits
     this.#limits = {
@@ -478,7 +472,7 @@ export class Pipeline {
     }
     const response = await this.#run({ transform })
     if (response.kind !== 'transform') {
-      throw new BluntError('ERR_WORKER_CRASHED', `the worker sent a ${response.kind} response to a transform`)
+      throw new SafeImageOptimizationError('ERR_WORKER_CRASHED', `the worker sent a ${response.kind} response to a transform`)
     }
     const { data, info } = response
     return options.resolveWithObject ? { data, info } : data
@@ -488,7 +482,7 @@ export class Pipeline {
   async metadata(): Promise<Metadata> {
     const metadata = await this.#run({ metadata: this.#limits })
     if (metadata.kind !== 'metadata') {
-      throw new BluntError('ERR_WORKER_CRASHED', `the worker sent a ${metadata.kind} response to metadata`)
+      throw new SafeImageOptimizationError('ERR_WORKER_CRASHED', `the worker sent a ${metadata.kind} response to metadata`)
     }
     const swap = metadata.orientation >= 5
     return {

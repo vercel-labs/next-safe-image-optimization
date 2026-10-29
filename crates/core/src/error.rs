@@ -38,7 +38,7 @@ pub enum ErrorCode {
     /// The input is animated, with `allowAnimated: false`.
     #[serde(rename = "ERR_ANIMATED")]
     Animated,
-    /// Thrown as a `TypeError`, not a `BluntError`.
+    /// Thrown as a `TypeError`, not a `SafeImageOptimizationError`.
     #[serde(rename = "ERR_INVALID_OPTIONS")]
     InvalidOptions,
 }

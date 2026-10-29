@@ -1,11 +1,11 @@
-# blunt-image-optimization
+# @next/safe-image-optimization
 
 A safer image optimization library for Node.js, intended to replace [sharp](https://sharp.pixelplumbing.com/) in Next.js's image optimizer. The API is loosely based on sharp's, so it's easy to switch, but much smaller. It isn't a drop-in replacement: sharp compatibility is a rough guideline, not a rule, and the API differs where that makes it clearer (like `timeoutMs(ms)` instead of `timeout({ seconds })`).
 
 sharp (libvips) decodes untrusted images with C libraries. This library decodes with memory-safe Rust decoders from the [image-rs](https://github.com/image-rs) ecosystem, configured with explicit memory limits, in sandboxed worker processes.
 
 ```js
-const { defaultPool } = require('blunt-image-optimization')
+const { defaultPool } = require('@next/safe-image-optimization')
 
 const output = await defaultPool()
   .prepare(input, { limitInputPixels: 268402689 })
@@ -19,11 +19,11 @@ const output = await defaultPool()
 
 - **Input:** JPEG, PNG, WebP, GIF, TIFF, AVIF, SVG. Only the first frame of animations is decoded. AVIF ICC profiles, orientation (`irot`/`imir`), and cropping (`clap`) are ignored, and grid (tiled) AVIFs and AVIF sequences are rejected.
 - `allowedInputFormats` restricts the input formats (detected from the contents, never a file extension or content type), and `allowAnimated: false` rejects animated images with `ERR_ANIMATED`. Both are checked before decoding, and also apply to `metadata()`.
-- **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp).
+- **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp). See [docs/colors.md](docs/colors.md) for bit depth, ICC, CMYK, and HDR limitations.
 - **Operations:** auto-orient, rotate (multiples of 90°), resize (sharp's default `fit: 'cover'`, centered).
 - `metadata()` reads the header without decoding pixels.
 - `timeoutMs(ms)`, like sharp's `timeout({ seconds })`, which kills the worker if processing takes too long. There's no default timeout, but you should set one for untrusted input.
-- Errors are `BluntError`s with a stable `code`.
+- Errors are `SafeImageOptimizationError`s with a stable `code`.
 - TypeScript types are included.
 
 ## Safety model
@@ -42,20 +42,20 @@ See [AGENTS.md](AGENTS.md) for per-decoder details.
 ## Differences from sharp
 
 - Only in-memory input (never file paths). Pipelines are created by a pool's `prepare()`, instead of a default export.
-- Unsupported options (like `fit` or `progressive`) are rejected with a `TypeError`, instead of being ignored. Most options are validated by the worker, so `toBuffer()` or `metadata()` rejects with it, instead of the method throwing. `sequentialRead` is accepted, but ignored.
+- Unsupported options (like `fit`, `progressive`, or `sequentialRead`) are rejected with a `TypeError`, instead of being ignored. Most options are validated by the worker, so `toBuffer()` or `metadata()` rejects with it, instead of the method throwing.
 - `rotate(angle)` only supports multiples of 90. There is no `blur`, `flip`, `extract`, `composite`, etc.
 - `resize()` is always like sharp's default `fit: 'cover'` with `position: 'centre'`: there's no `fit`, `position`, or `background`. `kernel` supports `nearest`, `linear`, `cubic`, and `lanczos3` (the filters that `image` implements), and resampling isn't sharp's, so pixels differ slightly. Resizing is slower than sharp's, and its intermediate buffer (16 bytes per pixel, for the input width times the output height) counts against `limitAllocatorMemoryBytes`.
 - No HEIF input. No AVIF, HEIF, or animated output.
 - SVGs are rendered with resvg, not librsvg. Text isn't rendered (there are no fonts), `<image>` only loads `data:` URLs, and SVGZ isn't supported. That covers Next.js's OG images, whose text Satori has already converted to paths.
 - No YCbCr TIFF input, which includes most JPEG-compressed TIFFs.
-- PNG output is always lossless truecolor: `png({ quality })` is accepted but ignored (no palette quantization), and `adaptiveFiltering` defaults to `true`.
+- PNG output is always lossless truecolor: there's no `quality` (palette quantization), and `adaptiveFiltering` defaults to `true`.
 - JPEG uses `jpeg-encoder` by default, not mozjpeg, so files are somewhat larger than sharp's. `mozjpeg: true` uses mozjpeg, like sharp, but built without its SIMD assembly, so it's slower than sharp's. `progressive`, `chromaSubsampling` (always 4:2:0), `optimiseCoding` (always on), and `quantisationTable` aren't supported. JPEGs may be progressive: they always are with `mozjpeg: true` (its defaults, like sharp's preset), and never are without it.
 - CMYK JPEGs are converted to RGB naively, ignoring their ICC profile.
 - `limitInputPixels` also applies to `metadata()`, and to the size an SVG is rendered at. It doesn't apply to raster images embedded in an SVG (neither does sharp's).
 
 ## Development
 
-Requires Rust (version pinned in `rust-toolchain.toml`), Node.js 24, and pnpm (via corepack).
+Requires Rust (version pinned in `rust-toolchain.toml`), Node.js 24, and pnpm 12 (`npm install --global pnpm`, which switches itself to the version in `package.json`).
 
 ```sh
 pnpm install
@@ -79,13 +79,13 @@ pnpm test:wasm
 Images are processed by a pool of workers, one image per worker at a time. Workers start on demand, exit when idle, and are replaced if they crash or time out. `defaultPool()` is a shared pool with up to `os.availableParallelism()` workers. To configure one:
 
 ```js
-const { Pool } = require('blunt-image-optimization')
+const { Pool } = require('@next/safe-image-optimization')
 
 const pool = new Pool({ concurrency: 4, idleTimeoutMs: 30_000 })
 const output = await pool.prepare(input).timeoutMs(10_000).webp().toBuffer()
 ```
 
-The native backend uses worker processes. Without a native worker binary for the platform, or with `backend: 'wasm'` (or `BLUNT_IMAGE_OPTIMIZATION_BACKEND=wasm`), workers are threads running a wasm build. `limitProcessMemoryBytes` limits each worker's memory. On Linux and macOS, `forkServer: false` spawns each native worker, instead of forking it from a fork server (which is faster, but weakens ASLR, see the safety model).
+The native backend uses worker processes. Without a native worker binary for the platform, or with `backend: 'wasm'` (or `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm`), workers are threads running a wasm build. `limitProcessMemoryBytes` limits each worker's memory. On Linux and macOS, `forkServer: false` spawns each native worker, instead of forking it from a fork server (which is faster, but weakens ASLR, see the safety model).
 
 ## Future work
 

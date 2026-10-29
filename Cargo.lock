@@ -72,6 +72,7 @@ dependencies = [
  "avif-parse",
  "bytemuck",
  "imgref",
+ "lodepng",
  "log",
  "quick-error",
  "rav1d",
@@ -106,44 +107,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "886559b1e163d56c765bc3a985febb4eee8009f625244511d8ee3c432e08c066"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "blunt-core"
-version = "0.1.0"
-dependencies = [
- "avif-decode",
- "avif-parse",
- "bytemuck",
- "gif",
- "image",
- "jpeg-encoder",
- "libc",
- "libwebp-sys",
- "moxcms",
- "mozjpeg",
- "png",
- "resvg",
- "serde",
- "serde_json",
- "typeshare-annotation",
-]
-
-[[package]]
-name = "blunt-wasm"
-version = "0.1.0"
-dependencies = [
- "blunt-core",
-]
-
-[[package]]
-name = "blunt-worker"
-version = "0.1.0"
-dependencies = [
- "blunt-core",
- "libc",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -430,6 +393,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodepng"
+version = "3.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe7982db11054edc023a1b424dddcc65be18f71fa46ec6bde2efcfc1fb6b22da"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "libc",
+ "rgb",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -503,6 +478,45 @@ checksum = "706bf8a5e8c8ddb99128c3291d31bd21f4bcde17f0f4c20ec678d85c74faa149"
 dependencies = [
  "jobserver",
  "log",
+]
+
+[[package]]
+name = "nsio-core"
+version = "0.1.0"
+dependencies = [
+ "avif-decode",
+ "avif-parse",
+ "bytemuck",
+ "gif",
+ "image",
+ "jpeg-encoder",
+ "libc",
+ "libwebp-sys",
+ "moxcms",
+ "mozjpeg",
+ "png",
+ "resvg",
+ "serde",
+ "serde_json",
+ "typeshare-annotation",
+]
+
+[[package]]
+name = "nsio-wasm"
+version = "0.1.0"
+dependencies = [
+ "nsio-core",
+]
+
+[[package]]
+name = "nsio-worker"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "nsio-core",
+ "seccompiler",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -735,6 +749,15 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "seccompiler"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4ae55de56877481d112a559bbc12667635fdaf5e005712fd4e2b2fa50ffc884"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "serde"

@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
 
-import sharp from 'sharp'
+import type Sharp from 'sharp'
 
-import { BluntError } from '../dist/index.js'
+import { SafeImageOptimizationError } from '../dist/index.js'
 import type { ErrorCode } from '../dist/index.js'
+
+/** sharp's ES module uses import attributes (`with`), which need Node.js 20.10, so this loads its CommonJS one. */
+export const sharp: typeof Sharp = createRequire(import.meta.url)('sharp')
 
 export interface RawImage {
   data: Buffer
@@ -66,7 +70,7 @@ export async function assertSimilar(actual: Buffer, expected: Buffer, tolerance:
 
 export async function assertRejectsWithCode(promise: Promise<unknown>, code: ErrorCode) {
   await assert.rejects(promise, (error: unknown) => {
-    assert.ok(error instanceof BluntError, `expected a BluntError, got ${String(error)}`)
+    assert.ok(error instanceof SafeImageOptimizationError, `expected a SafeImageOptimizationError, got ${String(error)}`)
     assert.equal(error.code, code, error.message)
     return true
   })
@@ -78,4 +82,16 @@ export function formatOf(buffer: Buffer): string {
   if (buffer.subarray(0, 3).toString('latin1') === 'GIF') return 'gif'
   if (buffer.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp'
   return 'unknown'
+}
+
+/** The CRC-32 that PNG chunks use. `zlib.crc32` needs Node.js 20.15. */
+export function crc32(data: Uint8Array): number {
+  let crc = 0xffffffff
+  for (const byte of data) {
+    crc ^= byte
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1))
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0
 }

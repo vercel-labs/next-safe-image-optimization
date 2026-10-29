@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import sharp from 'sharp'
-
 import { defaultPool } from '../dist/index.js'
-import { assertSimilar, fromRaw, pattern } from './helpers.ts'
+import { assertSimilar, fromRaw, pattern, sharp } from './helpers.ts'
 
 const pool = defaultPool()
 const photo = () => fromRaw(pattern(400, 300)).png().toBuffer()

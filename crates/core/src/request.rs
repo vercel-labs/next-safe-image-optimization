@@ -57,8 +57,6 @@ struct JpegOptions {
 struct PngOptions {
     compression_level: Option<f64>,
     adaptive_filtering: Option<bool>,
-    /// Accepted for compatibility with sharp, but ignored (there's no palette quantization).
-    quality: Option<f64>,
 }
 
 #[typeshare]
@@ -212,9 +210,6 @@ fn parse_output(options: &mut TransformOptions) -> Result<Option<OutputSpec>> {
                     spec.compression_level = int("png.compressionLevel", level, 0.0, 9.0)? as u8;
                 }
                 spec.adaptive_filtering = o.adaptive_filtering.unwrap_or(spec.adaptive_filtering);
-                if let Some(q) = o.quality {
-                    int("png.quality", q, 1.0, 100.0)?;
-                }
             }
             OutputSpec::Png(spec)
         }
@@ -324,8 +319,8 @@ mod tests {
                 "invalid type: string",
             ),
             (
-                r#"{"transform":{"format":"png","png":{"quality":0}}}"#,
-                "png.quality must be",
+                r#"{"transform":{"format":"png","png":{"compressionLevel":10}}}"#,
+                "png.compressionLevel must be",
             ),
             (
                 r#"{"transform":{"format":"avif"}}"#,

@@ -1,26 +1,81 @@
 {
   "$schema": "https://turborepo.com/schema.json",
-  // cargo reads many environment variables (CARGO_*, CC_*, ...).
-  "envMode": "loose",
+  // Tasks only see the variables listed here, and turbo's defaults (PATH, HOME, TMP, GITHUB_*, ...).
+  // Anything else (like a RUSTFLAGS in someone's shell) is ignored, so builds are reproducible.
+  "envMode": "strict",
+  // Where cargo and rustup are installed, if not in the default location. CI sets CARGO_TERM_COLOR.
+  "globalPassThroughEnv": ["CARGO_HOME", "RUSTUP_HOME", "CARGO_TERM_COLOR"],
+  "futureFlags": {
+    // Each crate is a package, and the workspace is `nsio-cargo` (`[workspace.metadata]` in
+    // Cargo.toml), with built-in `build`, `test`, `check`, `lint`, and `format` tasks. Even tasks
+    // that don't use Rust need cargo, because turbo runs `cargo metadata` first.
+    "experimentalCargoWorkspaces": true,
+    // For `command`.
+    "experimentalTaskCommand": true
+  },
   "tasks": {
-    // Cargo has its own incremental cache, which also knows about inputs turbo can't see (the
-    // toolchain, the target, RUSTFLAGS, ...).
-    "build:native": {
-      "cache": false
+    // The built-in commands use `--workspace`, which includes vendor/avif-decode. These only include
+    // the default members (crates/*).
+    "nsio-cargo#lint": {
+      "command": ["cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"]
     },
-    "build:native:release": {
-      "cache": false
+    "nsio-cargo#test": {
+      "command": ["cargo", "test", "--locked"],
+      // The worker's tests check its version against package.json's.
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/package.json"]
     },
-    "build:wasm": {
-      "cache": false
+    "nsio-cargo#format:check": {
+      "command": ["cargo", "fmt", "--all", "--check"]
     },
-    "build:wasm:release": {
-      "cache": false
+
+    // `pnpm build` uses the built-in `nsio-worker#build` (cached, with the worker as its output).
+    // This is the same with `--release`, which can't be passed with `-- --release` when `build:js`
+    // runs alongside it. A task with a `command` doesn't get the built-in hashing (only the crate's
+    // own files), so these are the files the worker is built from.
+    "nsio-worker#build:release": {
+      "command": ["cargo", "build", "--package=nsio-worker", "--locked", "--release"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/crates/core/Cargo.toml",
+        "$TURBO_ROOT$/crates/core/src/**",
+        "$TURBO_ROOT$/vendor/avif-decode/Cargo.toml",
+        "$TURBO_ROOT$/vendor/avif-decode/src/**",
+        "$TURBO_ROOT$/Cargo.toml",
+        "$TURBO_ROOT$/Cargo.lock",
+        "$TURBO_ROOT$/rust-toolchain.toml",
+        "$TURBO_ROOT$/.cargo/config.toml"
+      ],
+      "outputs": [
+        "$TURBO_ROOT$/target/release/safe-image-optimization-worker",
+        "$TURBO_ROOT$/target/release/safe-image-optimization-worker.exe"
+      ]
+    },
+
+    // Root package.json scripts. The wasm build goes through a script that turbo can't see into
+    // (wasi-sdk's C compiler, and the import check), so it isn't cached. Cargo has its own
+    // incremental cache.
+    "//#build:wasm": {
+      "cache": false,
+      "passThroughEnv": ["WASI_SDK_PATH"]
+    },
+    "//#build:wasm:release": {
+      "cache": false,
+      "passThroughEnv": ["WASI_SDK_PATH"]
     },
     // Doesn't depend on the native build (the worker is only spawned), so it runs alongside it.
-    "build:js": {
+    "//#build:js": {
       "inputs": ["js/**", "tsconfig.json"],
       "outputs": ["dist/**"]
+    },
+    // Compiles the tests in place (for Node.js 20, which can't strip types), against dist/*.d.ts.
+    "//#build:test": {
+      "dependsOn": ["//#build:js"],
+      "inputs": ["test/**/*.ts", "test/tsconfig.json", "test/package.json"],
+      "outputs": ["test/*.js"]
+    },
+    "//#typecheck": {
+      "dependsOn": ["//#build:js"],
+      "inputs": ["js/**", "tsconfig.json", "test/**/*.ts", "test/tsconfig.json", "test/package.json"]
     }
   }
 }

@@ -1,4 +1,6 @@
 {
+  // `pnpm test` runs these with type stripping. `build:test` compiles them in place, for Node.js
+  // versions without it (Node.js 20).
   "compilerOptions": {
     "target": "es2023",
     "lib": ["es2023"],
@@ -6,8 +8,7 @@
     "moduleResolution": "nodenext",
     "types": ["node"],
     "strict": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true
   },

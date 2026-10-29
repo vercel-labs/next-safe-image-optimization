@@ -3,8 +3,9 @@
 // discarded after a timeout or a crash (a trap or `proc_exit`), since its memory may be in an
 // inconsistent state.
 
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
 import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY } from './protocol.js'
@@ -12,6 +13,7 @@ import type { Backend, RunOptions, RunResult } from './protocol.js'
 import type { WasmRequest, WasmWorkerData, WasmWorkerMessage } from './wasm-worker.js'
 
 export interface WasmOptions {
+  wasmPath: string
   maxWorkers: number
   /** Over `MAX_TIMEOUT_MS` (like `Infinity`), idle workers never exit. */
   idleTimeoutMs: number
@@ -39,7 +41,27 @@ interface Slot {
   timer?: NodeJS.Timeout
 }
 
-const WASM_PATH = join(__dirname, '..', 'safe-image-optimization.wasm')
+/** The package with the wasm module, which isn't in the main package, like sharp's `@img/sharp-wasm32`. */
+export const WASM_PACKAGE = '@next/safe-image-optimization-wasm32'
+const WASM_FILE = 'safe-image-optimization.wasm'
+
+/**
+ * The wasm module is in the package root when built locally or by CI (`scripts/build-wasm.mjs`),
+ * or else in `WASM_PACKAGE`. Returns `undefined` if neither has it.
+ */
+export function findWasm(): string | undefined {
+  const local = join(__dirname, '..', WASM_FILE)
+  if (existsSync(local)) {
+    return local
+  }
+  let path
+  try {
+    path = join(dirname(require.resolve(`${WASM_PACKAGE}/package.json`)), WASM_FILE)
+  } catch {
+    return undefined
+  }
+  return existsSync(path) ? path : undefined
+}
 
 function failure(code: string, message: string): RunResult {
   return { error: { code, message } }
@@ -91,7 +113,7 @@ export class WasmBackend implements Backend {
 
   async #load() {
     try {
-      this.#module = await WebAssembly.compile(await readFile(WASM_PATH))
+      this.#module = await WebAssembly.compile(await readFile(this.#options.wasmPath))
     } catch (error) {
       this.#loading = undefined
       for (const job of this.#queue.splice(0)) {

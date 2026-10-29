@@ -15,7 +15,7 @@ Native worker binaries are built for the following operating systems and CPU arc
 | macOS (10.13+) | `arm64` (Apple Silicon), `x64` (Intel) | |
 | Windows | `x64`, `arm64` | MSVC builds |
 
-On any other platform or architecture where Node.js runs, the pool automatically falls back to the [WebAssembly backend](wasm.md) (unless `backend: 'native'` is explicitly set).
+On any other platform or architecture where Node.js runs, the pool automatically falls back to the [WebAssembly backend](wasm.md) if `@next/safe-image-optimization-wasm32` is installed (unless `backend: 'native'` is explicitly set).
 
 ## OS-specific safety features
 
@@ -36,5 +36,5 @@ Both `@next/safe-image-optimization` and sharp require Node.js `>= 20.9.0` and p
 
 The main differences in platform support are:
 
-- **Additional native architectures in sharp:** sharp also publishes prebuilt native binaries for 32-bit ARM Linux (`linux-arm`), 64-bit PowerPC Linux (`linux-ppc64`), IBM Z Linux (`linux-s390x`), and 32-bit x86 Windows (`win32-ia32`). On those platforms, `@next/safe-image-optimization` uses the WebAssembly backend instead.
-- **WebAssembly fallback:** `@next/safe-image-optimization` includes its WebAssembly build in the main package and falls back to it automatically when no native binary is installed, whereas sharp distributes its WebAssembly support through separate `@img/sharp-wasm32` packages.
+- **Additional native architectures in sharp:** sharp also publishes prebuilt native binaries for 32-bit ARM Linux (`linux-arm`), 64-bit PowerPC Linux (`linux-ppc64`), IBM Z Linux (`linux-s390x`), and 32-bit x86 Windows (`win32-ia32`). On those platforms, `@next/safe-image-optimization` uses the WebAssembly backend instead (with `@next/safe-image-optimization-wasm32` installed).
+- **WebAssembly fallback:** like sharp's `@img/sharp-wasm32`, the WebAssembly build is in a separate package (`@next/safe-image-optimization-wasm32`) that isn't installed by default. Unlike sharp, `@next/safe-image-optimization` falls back to it automatically when it's installed and no native binary is.

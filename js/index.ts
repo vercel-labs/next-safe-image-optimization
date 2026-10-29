@@ -4,7 +4,7 @@ import { NativeBackend, findWorker } from './native.js'
 import { InvalidResponseError, decodeResponse, encodeOptions, maxResponseBytes } from './protocol.js'
 import type { Backend, LimitOptions, RequestOptions, Response, TransformOptions, Unchecked } from './protocol.js'
 import type * as generated from './protocol.generated.js'
-import { WasmBackend } from './wasm.js'
+import { WASM_PACKAGE, WasmBackend, findWasm } from './wasm.js'
 
 export type InputFormat = `${generated.InputFormat}`
 export type OutputFormat = `${generated.OutputFormat}`
@@ -61,7 +61,8 @@ export interface PoolOptions {
    * `'native'` processes images in worker processes. `'wasm'` processes them in worker threads,
    * with a wasm build. Default: the `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND` environment variable,
    * or else `'native'`, falling back to `'wasm'` if there's no native worker binary for this
-   * platform.
+   * platform. The wasm build is in a separate package, `@next/safe-image-optimization-wasm32`,
+   * which isn't installed by default.
    */
   backend?: BackendName
   /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
@@ -273,17 +274,23 @@ function createBackend(options: PoolOptions): Backend {
     checkOneOf('backend', backend, BACKENDS)
   }
   const maxWorkers = concurrency ?? availableParallelism()
-  const wasm = () =>
-    new WasmBackend({ maxWorkers, idleTimeoutMs, memoryLimit })
+  const wasm = (context: string) => {
+    const wasmPath = findWasm()
+    if (wasmPath === undefined) {
+      throw new Error(`${context}Install ${WASM_PACKAGE} to use the wasm backend.`)
+    }
+    return new WasmBackend({ wasmPath, maxWorkers, idleTimeoutMs, memoryLimit })
+  }
   if (backend === 'wasm') {
-    return wasm()
+    return wasm('')
   }
   const worker = findWorker()
   if (worker === undefined) {
+    const noNative = `There's no native worker binary for ${process.platform}-${process.arch}.`
     if (backend === 'native') {
-      throw new Error(`There's no native worker binary for ${process.platform}-${process.arch}`)
+      throw new Error(noNative)
     }
-    return wasm()
+    return wasm(`${noNative} `)
   }
   return new NativeBackend({
     workerPath: worker.path,

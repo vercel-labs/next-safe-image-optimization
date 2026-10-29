@@ -7,8 +7,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist",
-    "safe-image-optimization.wasm"
+    "dist"
   ],
   "engines": {
     "node": ">= 20.9.0"

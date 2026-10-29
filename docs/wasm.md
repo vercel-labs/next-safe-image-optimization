@@ -1,17 +1,21 @@
 # WebAssembly backend
 
-Alongside native worker processes, `@next/safe-image-optimization` ships a WebAssembly (`wasm32-wasip1`) build of the same image processing pipeline.
+Alongside native worker processes, `@next/safe-image-optimization` has a WebAssembly (`wasm32-wasip1`) build of the same image processing pipeline. Like sharp's `@img/sharp-wasm32`, it's published as a separate package, `@next/safe-image-optimization-wasm32`, so that installs on platforms with a native binary don't download it. Install it alongside the main package:
+
+```sh
+npm install @next/safe-image-optimization @next/safe-image-optimization-wasm32
+```
 
 ## When it is used
 
-By default, a `Pool` uses native worker processes when a native binary is available for the current platform, and automatically falls back to the WebAssembly backend otherwise.
+By default, a `Pool` uses native worker processes when a native binary is available for the current platform, and otherwise falls back to the WebAssembly backend, if `@next/safe-image-optimization-wasm32` is installed. If neither is available, creating a `Pool` throws an error.
 
 You can also choose the WebAssembly backend explicitly:
 
 - **Per pool:** `new Pool({ backend: 'wasm' })`
 - **With an environment variable:** `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm`
 
-To require the native backend and throw an error if no native binary is available, pass `backend: 'native'`.
+To require the native backend and throw an error if no native binary is available, pass `backend: 'native'`. Likewise, `backend: 'wasm'` throws an error if `@next/safe-image-optimization-wasm32` isn't installed.
 
 ## How it works
 
@@ -21,7 +25,7 @@ The WebAssembly backend runs a pool of Node.js `worker_threads`. Each worker thr
 - **Memory limits:** Each WebAssembly instance's memory is capped by the pool's `limitProcessMemoryBytes` option (default 768 MiB), in addition to the per-image `limitAllocatorMemoryBytes` limit (default 512 MiB). Unlike the native backend, this hard limit works on macOS and Windows as well as Linux.
 - **Crash and timeout recovery:** If an image exceeds a memory limit, triggers a WebAssembly trap (such as a Rust panic), or exceeds `timeoutMs()`, the worker thread is terminated and replaced before the next request.
 
-Compared to native worker processes, the WebAssembly backend runs anywhere Node.js runs without needing a platform-specific binary, but image processing is slower and runs in threads within the Node.js process rather than separate OS processes (`forkServer` is ignored).
+Compared to native worker processes, the WebAssembly backend runs anywhere Node.js runs (with the same `@next/safe-image-optimization-wasm32` package on every platform), but image processing is slower and runs in threads within the Node.js process rather than separate OS processes (`forkServer` is ignored).
 
 ## Building and testing from source
 

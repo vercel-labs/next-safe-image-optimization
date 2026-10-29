@@ -15,6 +15,7 @@ Because of these different goals, `@next/safe-image-optimization` is not a drop-
 - **Timeouts:** Set timeouts in milliseconds with `timeoutMs(ms)` instead of sharp's `timeout({ seconds })`.
 - **Errors:** Processing failures reject with a `SafeImageOptimizationError` that has a stable `code` property (such as `ERR_UNSUPPORTED_FORMAT`, `ERR_LIMIT_EXCEEDED`, or `ERR_TIMEOUT`).
 - **`limitInputPixels`:** Applies to `metadata()` and to the target render size of SVGs, in addition to raster decoding. Like sharp, it does not apply to raster images embedded inside an SVG.
+- **Removing limits:** `0` removes any limit or timeout, like sharp's `limitInputPixels: 0` and `timeout({ seconds: 0 })`. `limitInputPixels` doesn't accept sharp's `false` (no limit) or `true` (the default).
 
 ## Operations
 

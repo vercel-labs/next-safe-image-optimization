@@ -14,25 +14,27 @@ export type Input = Uint8Array | ArrayBuffer | ArrayBufferView
 
 export interface PipelineOptions {
   /**
-   * Reject input images where `width * height` exceeds this. `true` uses the default; `false` or
-   * `0` removes the limit (not recommended). Default: `268402689` (`0x3FFF * 0x3FFF`), like sharp.
+   * Reject input images where `width * height` exceeds this. 0 means no limit (not
+   * recommended). Default: `268402689` (`0x3FFF * 0x3FFF`), like sharp.
    *
    * For SVGs, this applies to the natural size and the rendered size, but **not** to raster images
    * embedded in the SVG (`<image href="data:...">`). Those are only bounded by
    * `limitAllocatorMemoryBytes`, `limitProcessMemoryBytes`, and `timeoutMs()`.
    */
-  limitInputPixels?: number | boolean
+  limitInputPixels?: number
   /**
    * The maximum memory in bytes that processing may allocate, including the input. The worker's
    * allocator enforces this, by exiting the worker, which doesn't cover the C encoders (libwebp and
    * mozjpeg); see the pool's `limitProcessMemoryBytes` for that. Each stage (decode, resize, encode) also estimates
-   * its memory before it runs, for a clearer error. Default: 512 MiB.
+   * its memory before it runs, for a clearer error. 0 means no limit (not recommended).
+   * Default: 512 MiB.
    */
   limitAllocatorMemoryBytes?: number
   /**
    * The maximum size in bytes of the encoded image. Larger output is rejected with
    * `ERR_LIMIT_EXCEEDED`. The pool also enforces it when it reads the worker's response, so a
-   * misbehaving worker can't make it buffer more. Default: 128 MiB.
+   * misbehaving worker can't make it buffer more. 0 means no limit (not recommended).
+   * Default: 128 MiB.
    */
   limitOutputBytes?: number
   /**
@@ -60,8 +62,8 @@ export interface PoolOptions {
   /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
   concurrency?: number
   /**
-   * Milliseconds before an idle worker exits. 0 exits as soon as it's idle, and `Infinity` never
-   * does. Idle workers don't keep the process alive either way. Default: 10000.
+   * Milliseconds before an idle worker exits. 0 means no limit: idle workers never exit. Idle
+   * workers don't keep the process alive either way. Default: 10000.
    */
   idleTimeoutMs?: number
   /**
@@ -72,7 +74,7 @@ export interface PoolOptions {
    * could corrupt memory in a worker, leaking information across requests. A
    * limit of `1` ensures that memory is not shared across requests.
    *
-   * `Infinity` reuses workers until they're idle for `idleTimeoutMs`.
+   * 0 means no limit: workers are reused until they're idle for `idleTimeoutMs`.
    *
    * The latency overhead of `maxImagesPerWorker: 1` is roughly:
    * - Linux native, with the fork server (default): ~0.5ms
@@ -99,9 +101,9 @@ export interface PoolOptions {
    * image codecs (libwebp and mozjpeg). This should be larger than
    * `limitAllocatorMemoryBytes`.
    *
-   * `false` or `0` removes the limit (not recommended). Default: 768 MiB.
+   * 0 means no limit (not recommended). Default: 768 MiB.
    */
-  limitProcessMemoryBytes?: number | false
+  limitProcessMemoryBytes?: number
   /**
    * Fork native workers from a fork server (one per pool), instead of spawning each one, which
    * makes starting a worker faster. Forked workers share the fork server's address space layout
@@ -214,8 +216,6 @@ export class SafeImageOptimizationError extends Error {
   }
 }
 
-const DEFAULT_LIMIT_INPUT_PIXELS = 0x3fff * 0x3fff
-
 function invalid(name: string, expected: string, value: unknown): TypeError {
   return new TypeError(`Expected ${expected} for ${name} but received ${String(value)} of type ${typeof value}`)
 }
@@ -283,18 +283,13 @@ function createBackend(options: PoolOptions): Backend {
   const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1))
   const idleTimeoutMs = optional(options.idleTimeoutMs, (v) => checkMs('idleTimeoutMs', v)) ?? 10_000
   const memoryLimit =
-    options.limitProcessMemoryBytes === false
-      ? 0
-      : (optional(options.limitProcessMemoryBytes, (v) =>
-        checkInteger('limitProcessMemoryBytes', v, 0),
-      ) ?? DEFAULT_LIMIT_PROCESS_MEMORY)
+    optional(options.limitProcessMemoryBytes, (v) => checkInteger('limitProcessMemoryBytes', v, 0)) ??
+    DEFAULT_LIMIT_PROCESS_MEMORY
   const forkServer: unknown = options.forkServer ?? true
   if (typeof forkServer !== 'boolean') {
     throw invalid('forkServer', 'boolean', forkServer)
   }
-  const maxImagesPerWorker = optional(options.maxImagesPerWorker, (v) =>
-    v === Infinity ? v : checkInteger('maxImagesPerWorker', v, 1),
-  )
+  const maxImagesPerWorker = optional(options.maxImagesPerWorker, (v) => checkInteger('maxImagesPerWorker', v, 0))
   const backend = process.env[BACKEND_VARIABLE] || undefined
   if (backend !== undefined) {
     checkOneOf(BACKEND_VARIABLE, backend, BACKENDS)
@@ -421,13 +416,11 @@ export class Pipeline {
     this.#pool = pool
     this.#input = toUint8Array(input)
     // The rest are the worker's limits.
-    const { autoOrient, limitInputPixels, limitOutputBytes, ...limits } = copyOptions(options)
-    this.#limitOutputBytes = optional(limitOutputBytes, (v) => checkInteger('limitOutputBytes', v, 1))
+    const { autoOrient, limitOutputBytes, ...limits } = copyOptions(options)
+    this.#limitOutputBytes = optional(limitOutputBytes, (v) => checkInteger('limitOutputBytes', v, 0))
     const { allowedInputFormats } = limits
     this.#limits = {
       ...limits,
-      limitInputPixels:
-        typeof limitInputPixels === 'boolean' ? (limitInputPixels ? DEFAULT_LIMIT_INPUT_PIXELS : 0) : limitInputPixels,
       limitOutputBytes: this.#limitOutputBytes,
       allowedInputFormats: Array.isArray(allowedInputFormats) ? [...allowedInputFormats] : allowedInputFormats,
     }
@@ -439,8 +432,8 @@ export class Pipeline {
    * seconds). The time starts when a worker picks up the image, not while it waits for a free
    * worker. The worker is killed when the time runs out, so this works even if a decoder hangs.
    *
-   * 0 (the default, like sharp) or `Infinity` waits indefinitely, but you should set a timeout for
-   * untrusted input. Otherwise, an image that's slow to process can occupy a worker indefinitely.
+   * 0 means no limit, and is the default (like sharp), but you should set a timeout for untrusted
+   * input. Otherwise, an image that's slow to process can occupy a worker indefinitely.
    */
   timeoutMs(ms: number): this {
     checkMs('timeoutMs', ms)

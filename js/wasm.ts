@@ -15,11 +15,11 @@ import type { WasmRequest, WasmWorkerData, WasmWorkerMessage } from './wasm-work
 export interface WasmOptions {
   wasmPath: string
   maxWorkers: number
-  /** Over `MAX_TIMEOUT_MS` (like `Infinity`), idle workers never exit. */
+  /** With 0, or over `MAX_TIMEOUT_MS`, idle workers never exit. */
   idleTimeoutMs: number
-  /** Responses before a worker is terminated (`Infinity` for no limit). */
+  /** Responses before a worker is terminated, or 0 for no limit. */
   maxImagesPerWorker: number
-  /** The maximum size of each instance's memory, or 0 for the most possible. */
+  /** The maximum size of each instance's memory, or 0 for no limit (the most wasm32 can address). */
   memoryLimit: number
 }
 
@@ -185,7 +185,8 @@ export class WasmBackend implements Backend {
   }
 
   #release(slot: Slot) {
-    if (++slot.responses >= this.#options.maxImagesPerWorker) {
+    const { maxImagesPerWorker, idleTimeoutMs } = this.#options
+    if (maxImagesPerWorker !== 0 && ++slot.responses >= maxImagesPerWorker) {
       this.#discard(slot)
       return
     }
@@ -197,8 +198,8 @@ export class WasmBackend implements Backend {
     this.#idle.push(slot)
     // Idle workers don't keep the process alive.
     slot.worker.unref()
-    if (this.#options.idleTimeoutMs <= MAX_TIMEOUT_MS) {
-      slot.timer = setTimeout(() => this.#discard(slot), this.#options.idleTimeoutMs)
+    if (idleTimeoutMs !== 0 && idleTimeoutMs <= MAX_TIMEOUT_MS) {
+      slot.timer = setTimeout(() => this.#discard(slot), idleTimeoutMs)
       slot.timer.unref()
     }
   }

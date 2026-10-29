@@ -36,14 +36,14 @@ describe('pool', () => {
     for (const idleTimeoutMs of [-1, NaN, '10']) {
       assert.throws(() => new Pool({ idleTimeoutMs: idleTimeoutMs as never }), TypeError)
     }
-    for (const idleTimeoutMs of [0, 1.5, 3_000_000_000, Infinity]) {
+    for (const idleTimeoutMs of [0, 1.5, 3_000_000_000]) {
       new Pool({ idleTimeoutMs })
     }
     assert.throws(() => new Pool({ forkServer: 'yes' as never }), TypeError)
-    for (const maxImagesPerWorker of [0, -1, 1.5, NaN, '2']) {
+    for (const maxImagesPerWorker of [-1, 1.5, NaN, '2']) {
       assert.throws(() => new Pool({ maxImagesPerWorker: maxImagesPerWorker as never }), TypeError)
     }
-    for (const maxImagesPerWorker of [1, 64, Infinity]) {
+    for (const maxImagesPerWorker of [0, 1, 64]) {
       new Pool({ maxImagesPerWorker })
     }
     for (const ms of [-1, -0.5, NaN, undefined, '10']) {
@@ -69,8 +69,9 @@ describe('pool', () => {
 
   test('very long timeouts never expire', async () => {
     const input = await fromRaw(pattern(8, 8)).png().toBuffer()
-    // More than 2 ** 31 - 1 ms, which `setTimeout` would treat as 1ms, and more than a `Duration`.
-    for (const ms of [3_000_000_000, Number.MAX_VALUE, Infinity]) {
+    // 0 is no timeout. The others are more than 2 ** 31 - 1 ms, which `setTimeout` would treat as
+    // 1ms, and more than a `Duration`.
+    for (const ms of [0, 3_000_000_000, Number.MAX_VALUE]) {
       const { info } = await defaultPool().prepare(input).timeoutMs(ms).toBuffer({ resolveWithObject: true })
       assert.equal(info.width, 8)
     }
@@ -82,9 +83,10 @@ describe('pool', () => {
     const onWarning = (warning: Error) => warnings.push(warning)
     process.on('warning', onWarning)
     try {
-      // `setTimeout` would treat these as 1ms, with a `TimeoutOverflowWarning`.
-      for (const idleTimeoutMs of [3_000_000_000, Infinity]) {
-        await new Pool({ idleTimeoutMs }).prepare(input).toBuffer()
+      // `setTimeout` would treat this as 1ms, with a `TimeoutOverflowWarning`. 0 never expires.
+      // Workers are only idle if they're reused.
+      for (const idleTimeoutMs of [3_000_000_000, 0]) {
+        await new Pool({ idleTimeoutMs, maxImagesPerWorker: 0 }).prepare(input).toBuffer()
       }
       await new Promise((resolve) => setImmediate(resolve))
     } finally {
@@ -108,7 +110,7 @@ describe('pool', () => {
 
   test('workers can be reused', async () => {
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
-    for (const maxImagesPerWorker of [1, 2, Infinity]) {
+    for (const maxImagesPerWorker of [0, 1, 2]) {
       const pool = new Pool({ concurrency: 2, maxImagesPerWorker })
       const results = await Promise.all(
         Array.from({ length: 5 }, (_, i) => pool.prepare(input).resize(10 + i).toBuffer({ resolveWithObject: true })),
@@ -135,7 +137,7 @@ describe('pool', () => {
       const { Pool } = require('./dist/index.js')
       // A 1x1 PNG.
       const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==', 'base64')
-      new Pool({ idleTimeoutMs: 60000 }).prepare(png).toBuffer().then(() => console.log('done'))
+      new Pool({ idleTimeoutMs: 0, maxImagesPerWorker: 0 }).prepare(png).toBuffer().then(() => console.log('done'))
     `
     const start = performance.now()
     const child = spawnSync(process.execPath, ['-e', script], { cwd: fileURLToPath(new URL('..', import.meta.url)), timeout: 30_000 })
@@ -157,9 +159,10 @@ describe('pool', () => {
   })
 
   test('limitProcessMemoryBytes is validated', () => {
-    assert.throws(() => new Pool({ limitProcessMemoryBytes: -1 }), TypeError)
-    assert.throws(() => new Pool({ limitProcessMemoryBytes: true as never }), TypeError)
-    new Pool({ limitProcessMemoryBytes: false })
+    for (const limitProcessMemoryBytes of [-1, 1.5, NaN, true, false]) {
+      assert.throws(() => new Pool({ limitProcessMemoryBytes: limitProcessMemoryBytes as never }), TypeError)
+    }
+    new Pool({ limitProcessMemoryBytes: 0 })
   })
 })
 
@@ -182,7 +185,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
 
   test('workers are forked from a fork server', async () => {
     const before = new Set(servers().map(({ pid }) => pid))
-    const pool = new Pool({ concurrency: 2, maxImagesPerWorker: Infinity })
+    const pool = new Pool({ concurrency: 2, maxImagesPerWorker: 0 })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     await Promise.all([pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()])
     const all = processes()
@@ -195,7 +198,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
 
   test('the pool replaces a fork server that exits', async () => {
     const before = new Set(servers().map(({ pid }) => pid))
-    const pool = new Pool({ concurrency: 1, maxImagesPerWorker: Infinity })
+    const pool = new Pool({ concurrency: 1, maxImagesPerWorker: 0 })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     await pool.prepare(input).png().toBuffer()
     const [server] = servers().filter(({ pid }) => !before.has(pid))
@@ -218,7 +221,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
     const spawned = () =>
       processes().filter(({ ppid, args }) => ppid === process.pid && args.includes('safe-image-optimization-worker'))
     const before = new Set(spawned().map(({ pid }) => pid))
-    const pool = new Pool({ concurrency: 2, forkServer: false, maxImagesPerWorker: Infinity })
+    const pool = new Pool({ concurrency: 2, forkServer: false, maxImagesPerWorker: 0 })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     await Promise.all([pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()])
     const added = spawned().filter(({ pid }) => !before.has(pid))
@@ -287,7 +290,7 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     for (const [max, expected] of [
       [1, '1111'],
       [2, '1212'],
-      [Infinity, '1234'],
+      [0, '1234'],
     ] as const) {
       const pool = nativeBackend(counter, false, max)
       let responses = ''

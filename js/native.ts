@@ -16,11 +16,11 @@ import type { Backend, RunOptions, RunResult, WorkerError } from './protocol.js'
 export interface NativeOptions {
   workerPath: string
   maxProcesses: number
-  /** Over `MAX_TIMEOUT_MS` (like `Infinity`), idle workers never exit. */
+  /** With 0, or over `MAX_TIMEOUT_MS`, idle workers never exit. */
   idleTimeoutMs: number
-  /** Responses before a worker is killed (`Infinity` for no limit). */
+  /** Responses before a worker is killed, or 0 for no limit. */
   maxImagesPerWorker: number
-  /** Each worker's `RLIMIT_DATA` in bytes (Linux only), or 0 for none. */
+  /** Each worker's `RLIMIT_DATA` in bytes (Linux only), or 0 for no limit. */
   memoryLimit: number
   /** Fork workers from a fork server, instead of spawning each one (unix only). Default: `true`. */
   forkServer?: boolean
@@ -567,7 +567,8 @@ export class NativeBackend implements Backend {
   }
 
   #release(slot: Slot) {
-    if (++slot.responses >= this.#options.maxImagesPerWorker) {
+    const { maxImagesPerWorker, idleTimeoutMs } = this.#options
+    if (maxImagesPerWorker !== 0 && ++slot.responses >= maxImagesPerWorker) {
       this.#discard(slot)
       return
     }
@@ -579,8 +580,8 @@ export class NativeBackend implements Backend {
     this.#idle.push(slot)
     // Idle workers don't keep the process alive.
     slot.process.ref(false)
-    if (this.#options.idleTimeoutMs <= MAX_TIMEOUT_MS) {
-      slot.timer = setTimeout(() => this.#discard(slot), this.#options.idleTimeoutMs)
+    if (idleTimeoutMs !== 0 && idleTimeoutMs <= MAX_TIMEOUT_MS) {
+      slot.timer = setTimeout(() => this.#discard(slot), idleTimeoutMs)
       slot.timer.unref()
     }
   }

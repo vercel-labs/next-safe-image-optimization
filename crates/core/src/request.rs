@@ -82,7 +82,7 @@ struct GifOptions {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LimitOptions {
-    /// 0 disables the limit.
+    /// 0 removes each of these limits.
     limit_input_pixels: Option<f64>,
     limit_allocator_memory_bytes: Option<f64>,
     limit_output_bytes: Option<f64>,
@@ -144,18 +144,23 @@ fn int(name: &str, value: f64, min: f64, max: f64) -> Result<f64> {
     Ok(value)
 }
 
+/// 0 removes the limit.
+fn limit(name: &str, value: f64) -> Result<u64> {
+    let value = int(name, value, 0.0, f64::INFINITY)? as u64;
+    Ok(if value == 0 { u64::MAX } else { value })
+}
+
 pub fn parse_limits(options: Option<LimitOptions>) -> Result<Limits> {
     let mut limits = Limits::default();
     if let Some(options) = options {
         if let Some(pixels) = options.limit_input_pixels {
-            let pixels = int("limitInputPixels", pixels, 0.0, f64::INFINITY)? as u64;
-            limits.input_pixels = if pixels == 0 { u64::MAX } else { pixels };
+            limits.input_pixels = limit("limitInputPixels", pixels)?;
         }
         if let Some(memory) = options.limit_allocator_memory_bytes {
-            limits.memory = int("limitAllocatorMemoryBytes", memory, 1.0, f64::INFINITY)? as u64;
+            limits.memory = limit("limitAllocatorMemoryBytes", memory)?;
         }
         if let Some(bytes) = options.limit_output_bytes {
-            limits.output_bytes = int("limitOutputBytes", bytes, 1.0, f64::INFINITY)? as u64;
+            limits.output_bytes = limit("limitOutputBytes", bytes)?;
         }
         if let Some(formats) = options.allowed_input_formats {
             if formats.is_empty() {
@@ -331,11 +336,11 @@ mod tests {
                 "unknown field `failOn`",
             ),
             (
-                r#"{"metadata":{"limitAllocatorMemoryBytes":0}}"#,
+                r#"{"metadata":{"limitAllocatorMemoryBytes":-1}}"#,
                 "limitAllocatorMemoryBytes must be",
             ),
             (
-                r#"{"metadata":{"limitOutputBytes":0}}"#,
+                r#"{"metadata":{"limitOutputBytes":-1}}"#,
                 "limitOutputBytes must be",
             ),
             (

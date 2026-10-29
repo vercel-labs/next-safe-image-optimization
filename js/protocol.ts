@@ -58,10 +58,10 @@ const ERROR_CODES: readonly `${generated.ErrorCode}`[] = Object.values(generated
 
 /**
  * The JSON's length, the JSON, and the encoded image. The worker rejects larger images itself, so
- * anything larger means it's misbehaving.
+ * anything larger means it's misbehaving. `limitOutputBytes` of 0 is no limit.
  */
 export function maxResponseBytes(limitOutputBytes: number): number {
-  return 4 + generated.MAX_JSON_BYTES + limitOutputBytes
+  return limitOutputBytes === 0 ? Number.MAX_SAFE_INTEGER : 4 + generated.MAX_JSON_BYTES + limitOutputBytes
 }
 
 /**

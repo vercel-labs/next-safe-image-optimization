@@ -85,7 +85,10 @@ describe('argument validation', () => {
     const invalid: [PipelineOptions, string?][] = [
       [{ limitInputPixels: -1 }],
       [{ limitInputPixels: 1.5 }],
-      [{ limitAllocatorMemoryBytes: 0 }],
+      // 0 is the only way to remove a limit.
+      [{ limitInputPixels: false as never }],
+      [{ limitInputPixels: true as never }],
+      [{ limitAllocatorMemoryBytes: -1 }],
       [{ allowedInputFormats: [] }, 'allowedInputFormats must not be empty'],
       [{ allowedInputFormats: ['png', 'bmp' as never] }, 'unknown variant `bmp`'],
       [{ allowedInputFormats: 'png' as never }],

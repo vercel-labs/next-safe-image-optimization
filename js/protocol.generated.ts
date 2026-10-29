@@ -39,7 +39,7 @@ export enum InputFormat {
 }
 
 export interface LimitOptions {
-	/** 0 disables the limit. */
+	/** 0 removes each of these limits. */
 	limitInputPixels?: number;
 	limitAllocatorMemoryBytes?: number;
 	limitOutputBytes?: number;

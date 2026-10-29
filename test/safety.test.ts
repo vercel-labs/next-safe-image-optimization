@@ -49,14 +49,15 @@ describe('limits', () => {
     await assertRejectsWithCode(pool.prepare(input, { limitInputPixels: 9999 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
     await assertRejectsWithCode(pool.prepare(input, { limitInputPixels: 9999 }).metadata(), 'ERR_LIMIT_EXCEEDED')
     await pool.prepare(input, { limitInputPixels: 10000 }).toBuffer()
-    await pool.prepare(input, { limitInputPixels: false }).toBuffer()
     await pool.prepare(input, { limitInputPixels: 0 }).toBuffer()
+    await pool.prepare(input, { limitInputPixels: 0 }).metadata()
   })
 
   test('limitAllocatorMemoryBytes', async () => {
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
     await assertRejectsWithCode(pool.prepare(input, { limitAllocatorMemoryBytes: 20_000 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
     await pool.prepare(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).toBuffer()
+    await pool.prepare(input, { limitAllocatorMemoryBytes: 0 }).toBuffer()
   })
 
   test('limitOutputBytes', async () => {
@@ -64,8 +65,9 @@ describe('limits', () => {
     const { length } = await pool.prepare(input).png().toBuffer()
     await assertRejectsWithCode(pool.prepare(input, { limitOutputBytes: length - 1 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
     await pool.prepare(input, { limitOutputBytes: length }).png().toBuffer()
+    await pool.prepare(input, { limitOutputBytes: 0 }).png().toBuffer()
     // It's validated immediately, because the pool uses it too.
-    assert.throws(() => pool.prepare(input, { limitOutputBytes: 0 }), TypeError)
+    assert.throws(() => pool.prepare(input, { limitOutputBytes: -1 }), TypeError)
     assert.throws(() => pool.prepare(input, { limitOutputBytes: '1' as never }), TypeError)
   })
 

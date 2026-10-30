@@ -4,11 +4,6 @@
   "categories": {
     "correctness": "error"
   },
-  "rules": {
-    // Copies are usually deliberate: of a collection that the loop modifies, or of a `Buffer` (to
-    // `map` its bytes to something that isn't a byte).
-    "unicorn/no-useless-spread": "off"
-  },
   "env": {
     "builtin": true,
     "node": true

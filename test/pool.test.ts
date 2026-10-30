@@ -499,7 +499,8 @@ describe(
       const header = Buffer.alloc(12)
       header.writeBigUInt64LE(BigInt(4 + json.length + length))
       header.writeUInt32LE(json.length, 8)
-      const octal = [...Buffer.concat([header, json])].map(
+      const octal = Array.from(
+        Buffer.concat([header, json]),
         (byte) => `\\${byte.toString(8).padStart(3, '0')}`,
       )
       return `printf '${octal.join('')}'`

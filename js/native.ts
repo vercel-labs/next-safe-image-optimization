@@ -521,6 +521,7 @@ export class NativeBackend implements Backend {
   close(): Promise<void> {
     this.#closing ??= new Promise((resolve) => {
       this.#onClosed = resolve
+      // oxlint-disable-next-line unicorn/no-useless-spread -- `#discard` splices `#idle`
       for (const slot of [...this.#idle]) {
         this.#discard(slot)
       }
@@ -540,6 +541,7 @@ export class NativeBackend implements Backend {
       job.resolve({ error: POOL_CLOSED })
     }
     const closed = this.close()
+    // oxlint-disable-next-line unicorn/no-useless-spread -- `#discard` can add to `#slots`
     for (const slot of [...this.#slots]) {
       this.#discard(slot)
     }

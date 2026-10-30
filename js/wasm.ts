@@ -1,15 +1,15 @@
 // The wasm backend: a pool of worker threads, each running an instance of the wasm module
 // (`crates/wasm`). Like the native backend, each worker handles one request at a time, and is
-// discarded after a timeout or a crash (a trap or `proc_exit`), since its memory may be in an
-// inconsistent state.
+// discarded after a timeout, a crash (a trap or `proc_exit`), or a malformed response, since its
+// memory may be in an inconsistent state.
 
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
-import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY, POOL_CLOSED } from './protocol.js'
-import type { Backend, RunOptions, RunResult } from './protocol.js'
+import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY, POOL_CLOSED, decodeResponse, invalidResponse } from './protocol.js'
+import type { Backend, RequestKind, RunOptions, RunResult } from './protocol.js'
 import type { WasmRequest, WasmWorkerData, WasmWorkerMessage } from './wasm-worker.js'
 
 export interface WasmOptions {
@@ -33,6 +33,7 @@ const MAX_TIMEOUT_MS = 2 ** 31 - 1
 
 interface Job {
   request: WasmRequest
+  kind: RequestKind
   timeoutMs?: number
   /** Only the first call does anything. */
   resolve: (result: RunResult) => void
@@ -91,7 +92,7 @@ export class WasmBackend implements Backend {
     this.#options = options
   }
 
-  run(input: Uint8Array, options: string, { timeoutMs, maxResponseBytes, signal }: RunOptions): Promise<RunResult> {
+  run(input: Uint8Array, options: string, { kind, timeoutMs, maxResponseBytes, signal }: RunOptions): Promise<RunResult> {
     if (this.#closing !== undefined) {
       return Promise.resolve({ error: POOL_CLOSED })
     }
@@ -105,6 +106,7 @@ export class WasmBackend implements Backend {
       const onAbort = () => this.#abort(job)
       const job: Job = {
         request: { request, maxResponseBytes },
+        kind,
         timeoutMs,
         done: false,
         resolve: (result) => {
@@ -223,7 +225,15 @@ export class WasmBackend implements Backend {
       slot.job = undefined
       clearTimeout(slot.timer)
       if (message.response !== undefined) {
-        job.resolve({ response: message.response })
+        let response
+        try {
+          response = decodeResponse(message.response, job.kind)
+        } catch (error) {
+          job.resolve({ error: invalidResponse((error as Error).message) })
+          this.#discard(slot)
+          return
+        }
+        job.resolve({ response })
         this.#release(slot)
       } else if (message.exit === EXIT_OUT_OF_MEMORY) {
         job.resolve(failure('ERR_OUT_OF_MEMORY', 'out of memory'))

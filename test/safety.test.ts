@@ -332,14 +332,17 @@ describe('malformed responses are rejected', () => {
   test('valid responses', () => {
     const transform = decodeResponse(
       response('{"type":"transform","meta":{"format":"png","width":3,"height":2,"channels":4}}', Buffer.from('abc')),
+      'transform',
     )
     assert.deepEqual(transform, {
       kind: 'transform',
       data: Buffer.from('abc'),
       info: { format: 'png', width: 3, height: 2, channels: 4 },
     })
-    const error = decodeResponse(response('{"type":"error","meta":{"code":"ERR_DECODE_FAILED","message":"bad"}}'))
-    assert.deepEqual(error, { kind: 'error', code: 'ERR_DECODE_FAILED', message: 'bad' })
+    const error = response('{"type":"error","meta":{"code":"ERR_DECODE_FAILED","message":"bad"}}')
+    for (const kind of ['transform', 'metadata'] as const) {
+      assert.deepEqual(decodeResponse(error, kind), { kind: 'error', code: 'ERR_DECODE_FAILED', message: 'bad' })
+    }
   })
 
   test('invalid responses', () => {
@@ -351,7 +354,11 @@ describe('malformed responses are rejected', () => {
         type: 'metadata',
         meta: { format: 'png', width: 1, height: 1, hasAlpha: false, orientation: 1, hasProfile: false, ...fields },
       })
-    assert.equal(decodeResponse(response(metadata({}))).kind, 'metadata')
+    assert.equal(decodeResponse(response(metadata({})), 'metadata').kind, 'metadata')
+    // A response to the other kind of request.
+    assert.throws(() => decodeResponse(response(metadata({})), 'transform'), InvalidResponseError)
+    const transform = response('{"type":"transform","meta":{"format":"png","width":1,"height":1,"channels":3}}')
+    assert.throws(() => decodeResponse(transform, 'metadata'), InvalidResponseError)
     for (const invalid of [
       Buffer.alloc(3),
       Buffer.from([0xff, 0, 0, 0, 0x7b, 0x7d]),
@@ -377,7 +384,9 @@ describe('malformed responses are rejected', () => {
       // Invalid UTF-8, in an otherwise valid response.
       response(Buffer.from('{"type":"error","meta":{"code":"ERR_INTERNAL","message":"\xff"}}', 'latin1')),
     ]) {
-      assert.throws(() => decodeResponse(invalid), InvalidResponseError, invalid.toString())
+      for (const kind of ['transform', 'metadata'] as const) {
+        assert.throws(() => decodeResponse(invalid, kind), InvalidResponseError, invalid.toString())
+      }
     }
   })
 })

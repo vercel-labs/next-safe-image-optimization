@@ -10,8 +10,16 @@ import { constants } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { isMusl } from './musl.js'
-import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY, EXIT_SANDBOX_FAILED, EXIT_VERSION_MISMATCH, POOL_CLOSED } from './protocol.js'
-import type { Backend, RunOptions, RunResult, WorkerError } from './protocol.js'
+import {
+  EXIT_MEMORY_LIMIT,
+  EXIT_OUT_OF_MEMORY,
+  EXIT_SANDBOX_FAILED,
+  EXIT_VERSION_MISMATCH,
+  POOL_CLOSED,
+  decodeResponse,
+  invalidResponse,
+} from './protocol.js'
+import type { Backend, RequestKind, RunOptions, RunResult, WorkerError } from './protocol.js'
 
 export interface NativeOptions {
   workerPath: string
@@ -391,6 +399,7 @@ class ForkServer {
 interface Job {
   /** `[u64 LE length][request]`. */
   frame: Buffer
+  kind: RequestKind
   timeoutMs?: number
   maxResponseBytes: number
   /** Only the first call does anything. */
@@ -431,7 +440,7 @@ export class NativeBackend implements Backend {
     this.#options = options
   }
 
-  run(input: Uint8Array, options: string, { timeoutMs, maxResponseBytes, signal }: RunOptions): Promise<RunResult> {
+  run(input: Uint8Array, options: string, { kind, timeoutMs, maxResponseBytes, signal }: RunOptions): Promise<RunResult> {
     if (this.#closing !== undefined) {
       return Promise.resolve({ error: POOL_CLOSED })
     }
@@ -448,6 +457,7 @@ export class NativeBackend implements Backend {
       const onAbort = () => this.#abort(job)
       const job: Job = {
         frame,
+        kind,
         timeoutMs,
         maxResponseBytes,
         done: false,
@@ -651,7 +661,13 @@ export class NativeBackend implements Backend {
     if (offset + copied < chunk.length) {
       this.#invalid(slot, 'unexpected data after the response')
     } else if (slot.received === slot.response.length) {
-      const response = slot.response
+      let response
+      try {
+        response = decodeResponse(slot.response, job.kind)
+      } catch (error) {
+        this.#invalid(slot, (error as Error).message)
+        return
+      }
       clearTimeout(slot.timer)
       slot.job = undefined
       slot.response = undefined
@@ -660,10 +676,10 @@ export class NativeBackend implements Backend {
     }
   }
 
-  #invalid(slot: Slot, message: string) {
+  #invalid(slot: Slot, reason: string) {
     const { job } = slot
     this.#discard(slot)
-    job?.resolve({ error: failure('ERR_WORKER_CRASHED', `the worker sent an invalid response: ${message}`) })
+    job?.resolve({ error: invalidResponse(reason) })
   }
 
   /** The worker's output ended, or its pipes failed. */

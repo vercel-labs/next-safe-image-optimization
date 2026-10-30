@@ -1,8 +1,16 @@
 import { availableParallelism } from 'node:os'
 
 import { NativeBackend, findWorker } from './native.js'
-import { InvalidResponseError, decodeResponse, encodeOptions, invalidOptions, maxResponseBytes } from './protocol.js'
-import type { Backend, LimitOptions, RequestOptions, Response, TransformOptions, Unchecked } from './protocol.js'
+import { encodeOptions, invalidOptions, maxResponseBytes } from './protocol.js'
+import type {
+  Backend,
+  LimitOptions,
+  RequestKind,
+  RequestOptions,
+  Response,
+  TransformOptions,
+  Unchecked,
+} from './protocol.js'
 import type * as generated from './protocol.generated.js'
 import { WASM_PACKAGE, WasmBackend, findWasm } from './wasm.js'
 
@@ -384,18 +392,20 @@ export class Pool {
   }
 
   /** @internal */
-  async run(
+  async run<K extends RequestKind>(
     input: Uint8Array,
-    options: RequestOptions,
+    kind: K,
+    options: NonNullable<RequestOptions[K]>,
     limitOutputBytes: number | undefined,
     timeoutMs?: number,
     signal?: AbortSignal,
-  ): Promise<Response> {
+  ): Promise<Extract<Response, { kind: K }>> {
     signal?.throwIfAborted()
     if (this.#closed) {
       throw new SafeImageOptimizationError('ERR_POOL_CLOSED', 'the pool is closed')
     }
-    const result = await this.#backend.run(input, encodeOptions(options), {
+    const result = await this.#backend.run(input, encodeOptions({ [kind]: options }), {
+      kind,
       timeoutMs,
       maxResponseBytes: maxResponseBytes(limitOutputBytes ?? DEFAULT_LIMIT_OUTPUT_BYTES),
       signal,
@@ -406,22 +416,15 @@ export class Pool {
     if (result.error) {
       throw new SafeImageOptimizationError(result.error.code as ErrorCode, result.error.message)
     }
-    let response
-    try {
-      response = decodeResponse(result.response!)
-    } catch (error) {
-      if (error instanceof InvalidResponseError) {
-        throw new SafeImageOptimizationError('ERR_WORKER_CRASHED', `the worker sent an invalid response: ${error.message}`)
-      }
-      throw error
-    }
+    const response = result.response!
     if (response.kind === 'error') {
       if (response.code === 'ERR_INVALID_OPTIONS') {
         throw invalidOptions(response.message)
       }
       throw new SafeImageOptimizationError(response.code, response.message)
     }
-    return response
+    // The backend checked that it matches `kind`.
+    return response as Extract<Response, { kind: K }>
   }
 
   /** `close()`. */
@@ -607,11 +610,7 @@ export class Pipeline {
       resize: this.#resize,
       ...this.#output,
     }
-    const response = await this.#run({ transform }, signal)
-    if (response.kind !== 'transform') {
-      throw new SafeImageOptimizationError('ERR_WORKER_CRASHED', `the worker sent a ${response.kind} response to a transform`)
-    }
-    const { data, info } = response
+    const { data, info } = await this.#run('transform', transform, signal)
     return resolveWithObject ? { data, info } : data
   }
 
@@ -622,10 +621,7 @@ export class Pipeline {
    */
   async metadata(options: MetadataOptions = {}): Promise<Metadata> {
     const { signal } = copyOptions(options)
-    const metadata = await this.#run({ metadata: this.#limits }, signal)
-    if (metadata.kind !== 'metadata') {
-      throw new SafeImageOptimizationError('ERR_WORKER_CRASHED', `the worker sent a ${metadata.kind} response to metadata`)
-    }
+    const metadata = await this.#run('metadata', this.#limits, signal)
     const swap = metadata.orientation >= 5
     return {
       format: metadata.format,
@@ -641,11 +637,15 @@ export class Pipeline {
     }
   }
 
-  async #run(options: RequestOptions, signal: unknown): Promise<Response> {
+  async #run<K extends RequestKind>(
+    kind: K,
+    options: NonNullable<RequestOptions[K]>,
+    signal: unknown,
+  ): Promise<Extract<Response, { kind: K }>> {
     const disposed = this.#disposed.signal
     const checked = checkSignal(signal)
     const combined = checked === undefined ? disposed : AbortSignal.any([checked, disposed])
-    const promise = this.#pool.run(this.#input, options, this.#limitOutputBytes, this.#timeoutMs, combined)
+    const promise = this.#pool.run(this.#input, kind, options, this.#limitOutputBytes, this.#timeoutMs, combined)
     this.#pending.add(promise)
     try {
       return await promise

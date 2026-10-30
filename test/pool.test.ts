@@ -16,7 +16,7 @@ const backend = defaultPool().backend
 
 /** `Pool.run` is internal, but lets tests use timeouts shorter than a second. */
 interface InternalPool {
-  run(input: Uint8Array, options: object, limitOutputBytes: number | undefined, timeoutMs?: number): Promise<unknown>
+  run(input: Uint8Array, kind: string, options: object, limitOutputBytes: number | undefined, timeoutMs?: number): Promise<unknown>
 }
 
 /** Noise compresses badly, so this takes a while to encode. */
@@ -125,7 +125,7 @@ describe('pool', () => {
     const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
     const start = performance.now()
     await assertRejectsWithCode(
-      (pool as unknown as InternalPool).run(input, { transform: { format: 'png' } }, undefined, 1),
+      (pool as unknown as InternalPool).run(input, 'transform', { format: 'png' }, undefined, 1),
       'ERR_TIMEOUT',
     )
     assert.ok(performance.now() - start < 2000)
@@ -360,18 +360,29 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     return new NativeBackend({ workerPath, maxProcesses: 1, idleTimeoutMs: 1000, maxImagesPerWorker, memoryLimit: 0, forkServer })
   }
   function run(workerPath: string, timeoutMs?: number, forkServer = false, pool = nativeBackend(workerPath, forkServer)): Promise<RunResult> {
-    return pool.run(Buffer.alloc(16), '{}', { timeoutMs, maxResponseBytes: 1024 })
+    return pool.run(Buffer.alloc(16), '{}', { kind: 'transform', timeoutMs, maxResponseBytes: 1024 })
   }
   async function assertFails(result: Promise<RunResult>, code: string) {
     const { response, error } = await result
     assert.equal(response, undefined)
     assert.equal(error?.code, code, JSON.stringify(error))
   }
+  /** A command that writes a transform response, except its `length` bytes of data. */
+  function respond(length: number): string {
+    const json = Buffer.from('{"type":"transform","meta":{"format":"png","width":1,"height":1,"channels":3}}')
+    const header = Buffer.alloc(12)
+    header.writeBigUInt64LE(BigInt(4 + json.length + length))
+    header.writeUInt32LE(json.length, 8)
+    const octal = [...Buffer.concat([header, json])].map((byte) => `\\${byte.toString(8).padStart(3, '0')}`)
+    return `printf '${octal.join('')}'`
+  }
+  function data({ response, error }: RunResult): string {
+    assert.ok(response?.kind === 'transform', JSON.stringify(error))
+    return response.data.toString()
+  }
 
   test('responses are passed through', async () => {
-    const { response, error } = await run(worker(String.raw`printf '\003\0\0\0\0\0\0\0abc'; exec sleep 10`))
-    assert.equal(error, undefined)
-    assert.equal(response?.toString(), 'abc')
+    assert.equal(data(await run(worker(`${respond(3)}; printf abc; exec sleep 10`))), 'abc')
   })
 
   test('exit codes', async () => {
@@ -399,23 +410,43 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     await assertFails(fork('exec 3<&-; exec sleep 10'), 'ERR_WORKER_CRASHED')
   })
 
+  /** Responds to each request (30 bytes, from `run`) with how many it's handled. */
+  function counter(): string {
+    return worker(`n=0; while [ "$(head -c 30 | wc -c)" -eq 30 ]; do n=$((n + 1)); ${respond(1)}; printf %s "$n"; done`)
+  }
+
   test('workers are replaced after maxImagesPerWorker responses', async () => {
-    // Responds to each request (30 bytes, from `run`) with how many it's handled.
-    const counter = worker(String.raw`n=0; while [ "$(head -c 30 | wc -c)" -eq 30 ]; do n=$((n + 1)); printf '\001\0\0\0\0\0\0\0%s' "$n"; done`)
+    const path = counter()
     for (const [max, expected] of [
       [1, '1111'],
       [2, '1212'],
       [0, '1234'],
     ] as const) {
-      const pool = nativeBackend(counter, false, max)
+      const pool = nativeBackend(path, false, max)
       let responses = ''
       for (let i = 0; i < 4; i++) {
-        const { response, error } = await run(counter, undefined, false, pool)
-        assert.equal(error, undefined)
-        responses += response?.toString()
+        responses += data(await run(path, undefined, false, pool))
       }
       assert.equal(responses, expected, `maxImagesPerWorker: ${max}`)
     }
+  })
+
+  test('a worker that sends an invalid response is replaced', async () => {
+    // A transform response to a metadata request.
+    const path = counter()
+    const pool = nativeBackend(path, false, 0)
+    await assertFails(pool.run(Buffer.alloc(16), '{}', { kind: 'metadata', maxResponseBytes: 1024 }), 'ERR_WORKER_CRASHED')
+    assert.equal(data(await run(path, undefined, false, pool)), '1')
+
+    // Malformed JSON, only in the first response (from any worker).
+    const marker = join(dir, 'malformed-marker')
+    const malformed = worker(
+      `n=0; while [ "$(head -c 30 | wc -c)" -eq 30 ]; do n=$((n + 1)); ` +
+        String.raw`if [ -e ${marker} ]; then ${respond(1)}; printf %s "$n"; else touch ${marker}; printf '\005\0\0\0\0\0\0\0\001\0\0\0{'; fi; done`,
+    )
+    const malformedPool = nativeBackend(malformed, false, 0)
+    await assertFails(run(malformed, undefined, false, malformedPool), 'ERR_WORKER_CRASHED')
+    assert.equal(data(await run(malformed, undefined, false, malformedPool)), '1')
   })
 
   // `close()` only resolves once the worker has exited, which would take 10s if it wasn't killed.
@@ -423,7 +454,7 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
     const pool = nativeBackend(worker('exec sleep 10'))
     const controller = new AbortController()
     const start = performance.now()
-    const result = pool.run(Buffer.alloc(16), '{}', { maxResponseBytes: 1024, signal: controller.signal })
+    const result = pool.run(Buffer.alloc(16), '{}', { kind: 'transform', maxResponseBytes: 1024, signal: controller.signal })
     setTimeout(() => controller.abort(), 100)
     assert.deepEqual(await result, { aborted: true })
     await pool.close()
@@ -433,7 +464,7 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
   test('destroy() kills busy workers', async () => {
     const pool = nativeBackend(worker('exec sleep 10'))
     const start = performance.now()
-    const result = pool.run(Buffer.alloc(16), '{}', { maxResponseBytes: 1024 })
+    const result = pool.run(Buffer.alloc(16), '{}', { kind: 'transform', maxResponseBytes: 1024 })
     await new Promise((resolve) => setTimeout(resolve, 100))
     await pool.destroy()
     assert.equal((await result).error?.code, 'ERR_POOL_CLOSED')
@@ -456,9 +487,8 @@ describe('native worker failures', { skip: backend !== 'native' || process.platf
   test('the worker gets an empty environment', async () => {
     process.env.NSIO_TEST_SECRET = 'secret'
     try {
-      const script = String.raw`env | grep -q NSIO_TEST_SECRET && printf '\001\0\0\0\0\0\0\0y' || printf '\001\0\0\0\0\0\0\0n'; exec sleep 10`
-      const { response } = await run(worker(script))
-      assert.equal(response?.toString(), 'n')
+      const script = `env | grep -q NSIO_TEST_SECRET && v=y || v=n; ${respond(1)}; printf %s "$v"; exec sleep 10`
+      assert.equal(data(await run(worker(script))), 'n')
     } finally {
       delete process.env.NSIO_TEST_SECRET
     }

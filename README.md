@@ -1,95 +1,108 @@
 # @next/safe-image-optimization
 
-A safer image optimization library for Node.js, intended to replace [sharp](https://sharp.pixelplumbing.com/) in Next.js's image optimizer. The API is loosely based on sharp's, so it's easy to switch, but much smaller. It isn't a drop-in replacement: sharp compatibility is a rough guideline, not a rule, and the API differs where that makes it clearer (like `timeoutMs(ms)` instead of `timeout({ seconds })`).
+An image optimization library for Node.js, built for Next.js's image optimizer (`next/image`).
 
-sharp (libvips) decodes untrusted images with C libraries. This library decodes with memory-safe Rust decoders from the [image-rs](https://github.com/image-rs) ecosystem, configured with explicit memory limits, in sandboxed worker processes.
+## Usage
 
 ```js
 const { defaultPool } = require('@next/safe-image-optimization')
 
 const output = await defaultPool()
-  .prepare(input, { limitInputPixels: 268402689 })
-  .rotate() // auto-orient using EXIF
+  .prepare(input)
+  .allowInputFormats(['jpeg', 'png', 'webp', 'avif'])
+  .limitInputPixels(268402689)
+  .timeoutMs(10_000)
+  .autoOrient() // using EXIF metadata
   .resize(640, null, { withoutEnlargement: true })
   .webp({ quality: 75 })
-  .toBuffer()
+  .toBuffer({ signal: request.signal }) // abort if the client disconnects
 ```
 
-## Features
+To read an image's format and dimensions without decoding its pixels:
 
-- **Input:** JPEG, PNG, WebP, GIF, TIFF, AVIF, SVG. Only the first frame of animations is decoded. AVIF ICC profiles, orientation (`irot`/`imir`), and cropping (`clap`) are ignored, and grid (tiled) AVIFs and AVIF sequences are rejected.
-- `allowedInputFormats` restricts the input formats (detected from the contents, never a file extension or content type), and `allowAnimated: false` rejects animated images with `ERR_ANIMATED`. Both are checked before decoding, and also apply to `metadata()`.
-- **Output:** JPEG, PNG, WebP, GIF. Metadata is stripped, and ICC profiles are converted to sRGB (like sharp). See [docs/colors.md](docs/colors.md) for bit depth, ICC, CMYK, and HDR limitations.
-- **Operations:** auto-orient, rotate (multiples of 90°), resize (sharp's default `fit: 'cover'`, centered).
-- `metadata()` reads the header without decoding pixels.
-- `timeoutMs(ms)`, like sharp's `timeout({ seconds })`, which kills the worker if processing takes too long. There's no default timeout, but you should set one for untrusted input.
-- Errors are `SafeImageOptimizationError`s with a stable `code`.
-- TypeScript types are included.
-
-## Safety model
-
-| Layer | Status |
-| --- | --- |
-| Memory-safe decoders | `zune-jpeg`, `png`, `image-webp`, `gif`, and `tiff` (all via `image`), `avif-decode` (`avif-parse` and `rav1d`, without asm), and `resvg` (SVG, which only loads embedded `data:` URLs, never files). |
-| Memory limits | `limitInputPixels` (default 268402689, like sharp). For SVGs, it applies to the natural and rendered sizes, but **not to raster images embedded in the SVG**, which are only bounded by the memory limits and `timeoutMs()`. `limitAllocatorMemoryBytes` (default 512 MiB) bounds what each image may allocate: the worker's allocator tracks every Rust allocation, and the worker exits with `ERR_LIMIT_EXCEEDED` if they exceed it. The limit is also passed to decoders as their allocation budget, and the C encoders' (libwebp and mozjpeg) estimated memory is checked against it up front. The pool's `limitProcessMemoryBytes` (default 768 MiB) is a hard, OS-enforced limit per worker (`RLIMIT_DATA` on Linux, the memory's maximum size for wasm) that also covers the C encoders, which the allocator can't see. It has no effect on macOS (whose `RLIMIT_DATA` counts reserved address space, so it rejects any useful limit) or Windows yet. `limitOutputBytes` (default 128 MiB) bounds the encoded image, and so how much the pool will buffer from a worker. |
-| CPU limits | `timeoutMs()` bounds the wall time of each image, by killing its worker. There's no default, so set one for untrusted input: decoders aren't configured to bound their own work (a small file can be slow to decode). Blur cost is bounded regardless of sigma. |
-| Process isolation | Images are processed in worker processes, never in the Node process. A panic, abort, or allocation failure only ends the worker, and is reported as an error (`ERR_WORKER_CRASHED` or `ERR_OUT_OF_MEMORY`). This covers rav1d, which calls its DSP routines and picture allocator through `extern "C"` function pointers, where panics can't unwind. Workers get an empty environment, and on Linux (x86_64 and aarch64) a seccomp filter blocks every syscall besides reading and writing already-open file descriptors (their pipes and stderr), memory management, and exiting: no opening files or sockets, and no spawning processes. Workers are reused, one image at a time, so a compromised worker could affect later images. On Linux and macOS, workers are forked from a fork server (one per pool) to start faster, unless the pool's `forkServer` option is `false`, so they share its address space layout (ASLR) instead of each getting their own. An attacker who finds a memory-safety bug can learn the layout by crashing workers repeatedly, because each replacement has the same layout, so ASLR is weaker against brute force than with spawned workers. The fork server itself isn't sandboxed by seccomp: it never sees image data, and only takes commands from the Node process. Each forked worker talks to the Node process over one end of a socketpair, which the fork server passes to Node over Node's IPC channel, so there's no socket that other processes could connect to. The input is copied before processing, so JS can't mutate it mid-decode. |
-| Encoders | They only see pixels we produced. Lossy WebP uses libwebp (C), because `image-webp` only encodes lossless. JPEG uses `jpeg-encoder`, or mozjpeg (C) with `mozjpeg: true`. |
-| wasm | The `wasm32-wasip1` build runs in worker threads. Its only imports are a few stubbed-out WASI functions (no filesystem, environment, or JS access), and the build fails if it imports anything else. Each instance's memory has a configurable maximum. |
-
-See [AGENTS.md](AGENTS.md) for per-decoder details.
-
-## Differences from sharp
-
-- Only in-memory input (never file paths). Pipelines are created by a pool's `prepare()`, instead of a default export.
-- Unsupported options (like `fit`, `progressive`, or `sequentialRead`) are rejected with a `TypeError`, instead of being ignored. Most options are validated by the worker, so `toBuffer()` or `metadata()` rejects with it, instead of the method throwing.
-- `rotate(angle)` only supports multiples of 90. There is no `blur`, `flip`, `extract`, `composite`, etc.
-- `resize()` is always like sharp's default `fit: 'cover'` with `position: 'centre'`: there's no `fit`, `position`, or `background`. `kernel` supports `nearest`, `linear`, `cubic`, and `lanczos3` (the filters that `image` implements), and resampling isn't sharp's, so pixels differ slightly. Resizing is slower than sharp's, and its intermediate buffer (16 bytes per pixel, for the input width times the output height) counts against `limitAllocatorMemoryBytes`.
-- No HEIF input. No AVIF, HEIF, or animated output.
-- SVGs are rendered with resvg, not librsvg. Text isn't rendered (there are no fonts), `<image>` only loads `data:` URLs, and SVGZ isn't supported. That covers Next.js's OG images, whose text Satori has already converted to paths.
-- No YCbCr TIFF input, which includes most JPEG-compressed TIFFs.
-- PNG output is always lossless truecolor: there's no `quality` (palette quantization), and `adaptiveFiltering` defaults to `true`.
-- JPEG uses `jpeg-encoder` by default, not mozjpeg, so files are somewhat larger than sharp's. `mozjpeg: true` uses mozjpeg, like sharp, but built without its SIMD assembly, so it's slower than sharp's. `progressive`, `chromaSubsampling` (always 4:2:0), `optimiseCoding` (always on), and `quantisationTable` aren't supported. JPEGs may be progressive: they always are with `mozjpeg: true` (its defaults, like sharp's preset), and never are without it.
-- CMYK JPEGs are converted to RGB naively, ignoring their ICC profile.
-- `limitInputPixels` also applies to `metadata()`, and to the size an SVG is rendered at. It doesn't apply to raster images embedded in an SVG (neither does sharp's).
-
-## Development
-
-Requires Rust (version pinned in `rust-toolchain.toml`), Node.js 24, and pnpm 12 (`npm install --global pnpm`, which switches itself to the version in `package.json`).
-
-```sh
-pnpm install
-pnpm build          # or `pnpm build:release` for release
-pnpm test           # e2e tests (fixtures are generated with sharp, never committed)
-cargo test          # unit tests
-pnpm lint
-
-# After changing request options in crates/core (needs `cargo install typeshare-cli --version 1.13.4 --locked`)
-pnpm generate
-
-# wasm (needs https://github.com/WebAssembly/wasi-sdk to compile libwebp and mozjpeg)
-rustup target add wasm32-wasip1
-WASI_SDK_PATH=/path/to/wasi-sdk pnpm build:wasm
-# Use build:wasm:release for release builds.
-pnpm test:wasm
+```js
+const meta = await defaultPool().prepare(input).timeoutMs(5_000).metadata()
+// {
+//   format: 'jpeg',
+//   width: 1920,
+//   height: 1080,
+//   hasAlpha: false,
+//   orientation: 1,
+//   hasProfile: true,
+//   autoOrient: { width: 1920, height: 1080 },
+// }
 ```
 
-## Pools
+### Supported formats and operations
 
-Images are processed by a pool of workers, one image per worker at a time. Workers start on demand, exit when idle, and are replaced if they crash or time out. `defaultPool()` is a shared pool with up to `os.availableParallelism()` workers. To configure one:
+- **Input formats:** JPEG, PNG, WebP, GIF, TIFF, AVIF, and SVG (in-memory `Buffer`, typed array, or `ArrayBuffer` only). SVG must be allowed explicitly with `.allowInputFormats()`.
+- **Output formats:** JPEG (`.jpeg()`), PNG (`.png()`), WebP (`.webp()`), and GIF (`.gif()`). Output is always 8-bit sRGB with metadata stripped.
+- **Operations:**
+  - `.autoOrient()`: orient using EXIF metadata.
+  - `.rotate(angle)`: rotate by a multiple of 90° (after `.autoOrient()`, if it's also called).
+  - `.resize(width, height, options)`: resize while preserving aspect ratio (cropping from the center when both width and height are given), with `withoutEnlargement`, `withoutReduction`, and `kernel` options.
+- **Input restrictions and limits** (`0` removes a limit):
+  - `.allowInputFormats(formats)` restricts which formats are accepted (detected from the file contents).
+  - `.animated('reject')` rejects animated images with `ERR_ANIMATED` before decoding. With `.animated('first-frame')` (the default), only the first frame is decoded.
+  - `.limitInputPixels()`, `.limitAllocatorMemoryBytes()`, and `.limitOutputBytes()` bound image dimensions, memory use, and output size.
+  - `.timeoutMs(ms)` cancels processing if an image takes too long. There is no default timeout, so you should set one when handling untrusted images.
+- **Cancellation:** `.toBuffer({ signal })` and `.metadata({ signal })` accept an `AbortSignal`.
+- **Errors:** Processing errors throw a `SafeImageOptimizationError` with a stable `code` property (such as `ERR_UNSUPPORTED_FORMAT`, `ERR_LIMIT_EXCEEDED`, or `ERR_TIMEOUT`). Invalid options throw a `TypeError` with the code `ERR_INVALID_OPTIONS`.
+
+### Worker pools
+
+Images are processed in a pool of background workers, one image per worker at a time. Workers start on demand, and by default, each one is replaced after processing a single image (except on Windows; see `maxImagesPerWorker`). Workers are also replaced if they crash or time out. With `maxImagesPerWorker` above 1, they're reused, and exit after `idleTimeoutMs` without work.
+
+`defaultPool()` returns a shared pool sized to `os.availableParallelism()`. You can also create a pool with custom settings:
 
 ```js
 const { Pool } = require('@next/safe-image-optimization')
 
-const pool = new Pool({ concurrency: 4, idleTimeoutMs: 30_000 })
+const pool = new Pool({
+  concurrency: 4,
+  maxImagesPerWorker: 16,
+  idleTimeoutMs: 30_000,
+})
+
 const output = await pool.prepare(input).timeoutMs(10_000).webp().toBuffer()
 ```
 
-The native backend uses worker processes. Without a native worker binary for the platform, or with `backend: 'wasm'` (or `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm`), workers are threads running a wasm build. `limitProcessMemoryBytes` limits each worker's memory. On Linux and macOS, `forkServer: false` spawns each native worker, instead of forking it from a fork server (which is faster, but weakens ASLR, see the safety model).
+Idle workers don't keep the process alive, so pools don't need to be closed. To stop a pool's workers, `await pool.close()` finishes the images already submitted first, and `await pool.destroy()` stops them immediately. `await using pool = new Pool()` closes the pool at the end of the scope.
 
-## Future work
+## Purpose
 
-- wasm2c-sandboxed decoders for formats without a trustworthy Rust implementation (HEIF).
-- Sandboxing on macOS and Windows, and killing workers via a Job Object when the parent dies on Windows.
-- AVIF output, PNG palette quantization, and ICC-aware CMYK conversion.
-- Animated output: with `allowAnimated: true` (the default), transforming every frame of an animated image when the output format supports animation (e.g. GIF or WebP), instead of only the first frame.
+[sharp](https://sharp.pixelplumbing.com/) (built on libvips) is a fast, general-purpose image processing library with a broad set of features. `@next/safe-image-optimization` has a similar chainable API so it is familiar to use, but it is built around different goals:
+
+- **Focused scope:** It implements only the small set of operations needed for Next.js's [image optimizer](https://nextjs.org/docs/app/getting-started/images) and [ImageResponse](https://nextjs.org/docs/app/api-reference/functions/image-response).
+- **Designed for untrusted input:** Web servers often optimize images uploaded by users or fetched from remote URLs. This library decodes images using memory-safe Rust libraries inside separate, sandboxed worker processes (or WebAssembly worker threads) with per-image memory and time limits. If an image triggers a bug, exceeds its memory budget, or times out, only that worker stops—the main Node.js process continues running unaffected.
+
+Because of these goals, `@next/safe-image-optimization` has a much smaller feature set than sharp and trades some performance for isolation.
+
+While this library is designed to protect against untrusted input, it may still have vulnerabilities. You should only fetch remote images from trusted sources or your own object storage. Use Next.js's [`images.remotePatterns` configuration](https://nextjs.org/docs/app/getting-started/images#remote-images) to restrict allowed image sources.
+
+### Documentation
+
+- **[Safety model](docs/safety.md)** — decoders, worker isolation, sandboxing, and resource limits
+- **[Differences from sharp](docs/sharp.md)** — API, operation, and format differences
+- **[Color handling](docs/colors.md)** — sRGB conversion, ICC profiles, bit depth, CMYK, and HDR
+- **[Platform support](docs/platforms.md)** — supported operating systems, CPU architectures, and comparison with sharp
+- **[WebAssembly backend](docs/wasm.md)** — using and building the WebAssembly worker backend
+- **[Future work](docs/future-work.md)** — planned improvements
+
+## Development
+
+Requires Rust (version pinned in `rust-toolchain.toml`), Node.js 24, and pnpm (`npm install --global pnpm`).
+
+```sh
+pnpm install
+pnpm build          # or `pnpm build:release` for release builds
+pnpm test           # end-to-end tests
+cargo test          # Rust unit tests
+pnpm lint           # clippy, rustfmt, and TypeScript typechecking
+
+# Regenerate TypeScript protocol types after changing request options in crates/core
+# (requires `cargo install typeshare-cli --version 1.13.4 --locked`)
+pnpm generate
+```
+
+See [docs/wasm.md](docs/wasm.md) for instructions on building and testing the WebAssembly backend.

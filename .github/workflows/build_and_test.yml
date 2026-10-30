@@ -1,10 +1,12 @@
-name: CI
+name: Build and test
 
 on:
   push:
     branches:
       - main
   pull_request:
+  # From release.yml, which packs the binaries that this builds and tests.
+  workflow_call:
 
 permissions: {}
 
@@ -76,6 +78,9 @@ jobs:
             flags: -x
           - host: ubuntu-26.04
             target: aarch64-unknown-linux-musl
+            flags: -x
+          - host: ubuntu-26.04
+            target: riscv64gc-unknown-linux-gnu
             flags: -x
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -275,6 +280,81 @@ jobs:
           set -euo pipefail
           docker run --rm -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" \
             "$IMAGE" node --test test/*.test.js
+
+  # Under QEMU's user mode emulation, which doesn't support seccomp or `RLIMIT_DATA` (see the test
+  # step). Official Node.js binaries and images don't include riscv64, so this uses an unofficial
+  # build in a Debian image.
+  test-riscv64:
+    name: Test riscv64gc-unknown-linux-gnu - node@${{ matrix.node.version }}
+    needs: build
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          # Recent unofficial builds only have riscv64 binaries with pointer compression.
+          - version: '26.13.0'
+            sha256: 863c67421d5d5850b6ac8f038bce9a306eca23aade5c6bf3fb0b9b7feb6bb179
+    env:
+      # The multi-arch index's digest.
+      IMAGE: debian:trixie-20261027-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@12.11.2
+      # Install sharp's riscv64 binaries (used to generate test images) for the container.
+      - run: pnpm install --frozen-lockfile --cpu x64 --cpu riscv64
+      - run: pnpm build:js
+      - run: pnpm build:test
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: worker-riscv64gc-unknown-linux-gnu
+          path: .
+      # Artifacts don't keep file permissions.
+      - run: chmod +x safe-image-optimization-worker.*
+      # Registers QEMU with binfmt_misc, with the flag that lets it run riscv64 binaries in containers.
+      - name: Install QEMU
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-binfmt
+      - name: Download Node.js
+        env:
+          NODE_VERSION: ${{ matrix.node.version }}
+          NODE_SHA256: ${{ matrix.node.sha256 }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/node-riscv64"
+          mkdir -p "$dir"
+          curl --retry 3 -fsSL -o "$RUNNER_TEMP/node-riscv64.tar.xz" \
+            "https://unofficial-builds.nodejs.org/download/release/v$NODE_VERSION/node-v$NODE_VERSION-linux-riscv64-pointer-compression.tar.xz"
+          echo "$NODE_SHA256  $RUNNER_TEMP/node-riscv64.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/node-riscv64.tar.xz" -C "$dir" --strip-components=1
+      # - NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES: QEMU's user mode
+      #   emulation doesn't support seccomp, so workers would fail to install their filters and exit
+      #   (`ERR_WORKER_SPAWN`). This runs them unfiltered instead. Nothing here tests the filters.
+      # - NSIO_TEST_QEMU: QEMU ignores `RLIMIT_DATA` (it would also limit QEMU's own allocations),
+      #   so this skips the test that `limitProcessMemoryBytes` is enforced.
+      # The image doesn't have `ps` (for the fork server tests) or libatomic (for Node.js).
+      - name: Test in QEMU
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/riscv64 \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" \
+            -v "$RUNNER_TEMP/node-riscv64:/opt/node:ro" \
+            -e NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES=1 \
+            -e NSIO_TEST_QEMU=1 \
+            "$IMAGE" sh -euc '
+              apt-get update
+              apt-get install -y --no-install-recommends procps libatomic1
+              /opt/node/bin/node --test test/*.test.js
+            '
 
   test-wasm:
     name: Test wasm32-wasip1 - node@${{ matrix.node }}

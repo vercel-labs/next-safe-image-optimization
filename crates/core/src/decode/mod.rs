@@ -25,7 +25,7 @@ use typeshare_annotation::typeshare;
 use crate::decode::avif::AvifDecoder;
 use crate::decode::svg::Svg;
 use crate::error::{Error, Result};
-use crate::limits::Limits;
+use crate::limits::{Animated, Limits};
 
 #[typeshare]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -41,14 +41,18 @@ pub enum InputFormat {
 }
 
 impl InputFormat {
-    pub const ALL: [InputFormat; 7] = [
+    /// Every format except SVG, which has some additional security concerns:
+    /// - SVG is a complicated format with more room for vulnerabilities, and SVG support may be
+    ///   unexpected by some callers.
+    /// - The pixel limit doesn't apply to SVG embedded raster images, though the allocator memory
+    ///   limit should be a sufficient defense in practice.
+    pub const DEFAULT_ALLOWED: [InputFormat; 6] = [
         InputFormat::Jpeg,
         InputFormat::Png,
         InputFormat::Webp,
         InputFormat::Gif,
         InputFormat::Tiff,
         InputFormat::Avif,
-        InputFormat::Svg,
     ];
 
     pub fn name(self) -> &'static str {
@@ -172,7 +176,7 @@ fn raster_decoder<'a>(
     limits: &Limits,
 ) -> Result<Box<dyn ImageDecoder + 'a>> {
     let reject_animated = |is_animated: &mut dyn FnMut() -> Result<bool>| {
-        if !limits.animated && is_animated()? {
+        if limits.animated == Animated::Reject && is_animated()? {
             return Err(Error::Animated(format!(
                 "input is an animated {}",
                 format.name().to_uppercase()

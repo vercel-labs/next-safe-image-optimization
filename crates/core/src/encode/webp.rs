@@ -44,12 +44,22 @@ impl Drop for Picture {
     }
 }
 
-struct MemoryWriter(sys::WebPMemoryWriter);
-
-impl Drop for MemoryWriter {
-    fn drop(&mut self) {
-        unsafe { sys::WebPMemoryWriterClear(&mut self.0) }
+/// A `WebPWriterFunction` that appends to the `Vec<u8>` in `custom_ptr`, so the output is written
+/// straight into the buffer we return (instead of libwebp's `WebPMemoryWriter`, which we'd copy).
+unsafe extern "C" fn write_to_vec(
+    data: *const u8,
+    data_size: usize,
+    picture: *const sys::WebPPicture,
+) -> c_int {
+    if data_size > 0 {
+        // SAFETY: `encode` points `custom_ptr` at a `Vec<u8>` that outlives `WebPEncode`, and
+        // libwebp passes `data_size` readable bytes.
+        unsafe {
+            let out = &mut *((*picture).custom_ptr as *mut Vec<u8>);
+            out.extend_from_slice(std::slice::from_raw_parts(data, data_size));
+        }
     }
+    1
 }
 
 pub fn encode(img: DynamicImage, spec: &WebpSpec) -> Result<(Vec<u8>, u8)> {
@@ -124,25 +134,15 @@ pub fn encode(img: DynamicImage, spec: &WebpSpec) -> Result<(Vec<u8>, u8)> {
     }
     drop(img);
 
-    // SAFETY: zeroed, then initialized by `WebPMemoryWriterInit`.
-    let mut writer = MemoryWriter(unsafe {
-        let mut writer = MaybeUninit::<sys::WebPMemoryWriter>::zeroed();
-        sys::WebPMemoryWriterInit(writer.as_mut_ptr());
-        writer.assume_init()
-    });
-    picture.0.writer = Some(sys::WebPMemoryWrite);
-    picture.0.custom_ptr = &mut writer.0 as *mut sys::WebPMemoryWriter as *mut c_void;
+    // Like `WebPMemoryWrite`: start at 8 KiB
+    let mut data = Vec::with_capacity(8192);
+    picture.0.writer = Some(write_to_vec);
+    picture.0.custom_ptr = &mut data as *mut Vec<u8> as *mut c_void;
 
-    // SAFETY: `config` was validated, `picture` was initialized and imported, and `writer` outlives
+    // SAFETY: `config` was validated, `picture` was initialized and imported, and `data` outlives
     // this call.
     if unsafe { sys::WebPEncode(&config, &mut picture.0) } == 0 {
         return Err(fail(&format!("{:?}", picture.0.error_code)));
     }
-    let data = if writer.0.size == 0 {
-        Vec::new()
-    } else {
-        // SAFETY: `mem` points to `size` bytes written by `WebPMemoryWrite`.
-        unsafe { std::slice::from_raw_parts(writer.0.mem, writer.0.size) }.to_vec()
-    };
     Ok((data, if has_alpha { 4 } else { 3 }))
 }

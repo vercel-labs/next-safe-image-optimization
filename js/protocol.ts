@@ -1,6 +1,6 @@
 // The worker protocol (see `crates/core/src/protocol.rs`). Requests are built by the backends, from
 // `input` and `encodeOptions()`. Responses come from a worker, so they're untrusted, and parsed
-// defensively.
+// defensively by the backend (`decodeResponse()`), which kills a worker that sends a malformed one.
 //
 // The request options and protocol constants are generated from the Rust code
 // (`protocol.generated.ts`, by `pnpm generate`).
@@ -29,11 +29,17 @@ export interface RequestOptions {
   metadata?: Unchecked<LimitOptions>
 }
 
+export type RequestKind = keyof RequestOptions
+
 export interface RunOptions {
+  /** The request's kind, which a successful response must match. */
+  kind: RequestKind
   /** Wall time, starting when a worker picks up the request. Omit to wait indefinitely. */
   timeoutMs?: number
   /** A larger response is treated as a crash. */
   maxResponseBytes: number
+  /** Removes the request from the queue, or kills the worker processing it. */
+  signal?: AbortSignal
 }
 
 export interface WorkerError {
@@ -41,15 +47,32 @@ export interface WorkerError {
   message: string
 }
 
-/** Exactly one of `response` (untrusted, without the length prefix) or `error` is set. */
+/**
+ * Exactly one of `response`, `error`, or `aborted` is set. The backend validates the response with
+ * `decodeResponse`, and kills the worker if it's malformed.
+ */
 export interface RunResult {
-  response?: Uint8Array
+  response?: Response
   error?: WorkerError
+  /** `signal` aborted the request. */
+  aborted?: true
 }
 
 export interface Backend {
   readonly name: 'native' | 'wasm'
+  /** After `close()` or `destroy()`, resolves with `ERR_POOL_CLOSED`. */
   run(input: Uint8Array, options: string, runOptions: RunOptions): Promise<RunResult>
+  /** Finishes queued and running requests, then stops every worker. Resolves once they've exited. */
+  close(): Promise<void>
+  /** Fails queued and running requests with `ERR_POOL_CLOSED`, then like `close()`. */
+  destroy(): Promise<void>
+}
+
+export const POOL_CLOSED: WorkerError = { code: 'ERR_POOL_CLOSED', message: 'the pool is closed' }
+
+/** The `TypeError` for invalid options, with a `code` like Node's own validation errors. */
+export function invalidOptions(message: string): TypeError & { code: 'ERR_INVALID_OPTIONS' } {
+  return Object.assign(new TypeError(message), { code: 'ERR_INVALID_OPTIONS' as const })
 }
 
 const FORMATS: readonly InputFormat[] = Object.values(generated.InputFormat)
@@ -58,10 +81,10 @@ const ERROR_CODES: readonly `${generated.ErrorCode}`[] = Object.values(generated
 
 /**
  * The JSON's length, the JSON, and the encoded image. The worker rejects larger images itself, so
- * anything larger means it's misbehaving.
+ * anything larger means it's misbehaving. `limitOutputBytes` of 0 is no limit.
  */
 export function maxResponseBytes(limitOutputBytes: number): number {
-  return 4 + generated.MAX_JSON_BYTES + limitOutputBytes
+  return limitOutputBytes === 0 ? Number.MAX_SAFE_INTEGER : 4 + generated.MAX_JSON_BYTES + limitOutputBytes
 }
 
 /**
@@ -71,10 +94,10 @@ export function maxResponseBytes(limitOutputBytes: number): number {
 export function encodeOptions(options: RequestOptions): string {
   return JSON.stringify(options, (key, value: unknown) => {
     if (typeof value === 'number' && !Number.isFinite(value)) {
-      throw new TypeError(`Expected a finite number for ${key} but received ${value}`)
+      throw invalidOptions(`Expected a finite number for ${key} but received ${value}`)
     }
     if (typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol') {
-      throw new TypeError(`Expected a JSON value for ${key} but received a ${typeof value}`)
+      throw invalidOptions(`Expected a JSON value for ${key} but received a ${typeof value}`)
     }
     return value
   })
@@ -120,10 +143,11 @@ function oneOf<T extends string>(value: unknown, name: string, allowed: readonly
 const U32_MAX = 0xffffffff
 
 /**
- * Splits the response into its JSON (a `generated.Response`) and data. Throws an
- * `InvalidResponseError` if it's malformed.
+ * Splits the response (without the native worker's length prefix) into its JSON (a
+ * `generated.Response`) and data. Throws an `InvalidResponseError` if it's malformed, or if it's
+ * neither an error nor a response to a `kind` request.
  */
-export function decodeResponse(response: Uint8Array): Response {
+export function decodeResponse(response: Uint8Array, kind: RequestKind): Response {
   if (response.length < 4) {
     throw new InvalidResponseError(`truncated response (${response.length} bytes)`)
   }
@@ -141,13 +165,16 @@ export function decodeResponse(response: Uint8Array): Response {
   } catch {
     throw new InvalidResponseError('invalid JSON')
   }
-  const { type: kind, meta: untrusted } = object(json, 'the response')
+  const { type, meta: untrusted } = object(json, 'the response')
+  if (type !== kind && type !== 'error') {
+    throw new InvalidResponseError(`invalid response type for a ${kind} request`)
+  }
   const meta = object(untrusted, 'meta')
   // Only transforms send data.
-  if (kind !== 'transform' && jsonEnd !== response.length) {
+  if (type !== 'transform' && jsonEnd !== response.length) {
     throw new InvalidResponseError('unexpected data after the JSON')
   }
-  switch (kind) {
+  switch (type) {
     case 'transform': {
       const data = Buffer.from(response.buffer, response.byteOffset + jsonEnd, response.length - jsonEnd)
       const info: OutputInfo = {
@@ -156,11 +183,11 @@ export function decodeResponse(response: Uint8Array): Response {
         height: integer(meta.height, 'height', 0, U32_MAX),
         channels: integer(meta.channels, 'channels', 1, 4),
       }
-      return { kind, data, info }
+      return { kind: type, data, info }
     }
     case 'metadata':
       return {
-        kind,
+        kind: type,
         format: oneOf(meta.format, 'format', FORMATS),
         width: integer(meta.width, 'width', 0, U32_MAX),
         height: integer(meta.height, 'height', 0, U32_MAX),
@@ -172,8 +199,13 @@ export function decodeResponse(response: Uint8Array): Response {
       if (typeof meta.message !== 'string') {
         throw new InvalidResponseError('invalid message')
       }
-      return { kind, code: oneOf(meta.code, 'code', ERROR_CODES), message: meta.message }
+      return { kind: type, code: oneOf(meta.code, 'code', ERROR_CODES), message: meta.message }
     default:
       throw new InvalidResponseError('invalid response type')
   }
+}
+
+/** For a malformed response. The backend kills the worker that sent it. */
+export function invalidResponse(reason: string): WorkerError {
+  return { code: 'ERR_WORKER_CRASHED', message: `the worker sent an invalid response: ${reason}` }
 }

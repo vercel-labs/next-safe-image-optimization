@@ -23,6 +23,6 @@ libc = { version = "0.2.190", default-features = false }
 serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
 
-[target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
+[target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64")))'.dependencies]
 # Without `json`: the filter is built in Rust.
 seccompiler = { version = "0.5.0", default-features = false }

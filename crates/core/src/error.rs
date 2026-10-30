@@ -8,7 +8,7 @@ use typeshare_annotation::typeshare;
 #[derive(Debug)]
 pub enum Error {
     UnsupportedFormat(String),
-    /// An animated image, with `allowAnimated: false`.
+    /// An animated image, with `animated('reject')`.
     Animated(String),
     LimitExceeded(String),
     Decode(String),
@@ -35,10 +35,10 @@ pub enum ErrorCode {
     EncodeFailed,
     #[serde(rename = "ERR_INTERNAL")]
     Internal,
-    /// The input is animated, with `allowAnimated: false`.
+    /// The input is animated, with `animated('reject')`.
     #[serde(rename = "ERR_ANIMATED")]
     Animated,
-    /// Thrown as a `TypeError`, not a `SafeImageOptimizationError`.
+    /// Thrown as a `TypeError` with this `code`, not a `SafeImageOptimizationError`.
     #[serde(rename = "ERR_INVALID_OPTIONS")]
     InvalidOptions,
 }

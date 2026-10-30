@@ -37,7 +37,7 @@ describe('resize matches sharp', () => {
 
   test('blur placeholder (like next-image-loader)', async () => {
     const input = await fromRaw(pattern(400, 300)).jpeg().toBuffer()
-    const ours = await pool.prepare(input).rotate().resize(8, 6).jpeg({ quality: 70 }).toBuffer({ resolveWithObject: true })
+    const ours = await pool.prepare(input).autoOrient().resize(8, 6).jpeg({ quality: 70 }).toBuffer({ resolveWithObject: true })
     const theirs = await sharp(input).rotate().resize(8, 6).jpeg({ quality: 70 }).toBuffer({ resolveWithObject: true })
     assert.deepEqual([ours.info.width, ours.info.height], [theirs.info.width, theirs.info.height])
     await assertSimilar(ours.data, theirs.data, 25)
@@ -76,7 +76,7 @@ describe('resize matches sharp', () => {
   test('rejects outputs over the memory limit', async () => {
     const input = await photo()
     await assert.rejects(
-      pool.prepare(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).resize(1000, 1000).toBuffer(),
+      pool.prepare(input).limitAllocatorMemoryBytes(1024 * 1024).resize(1000, 1000).toBuffer(),
       (error: { code?: string }) => error.code === 'ERR_LIMIT_EXCEEDED',
     )
   })
@@ -89,7 +89,7 @@ describe('orientation matches sharp', () => {
       const meta = await pool.prepare(input).metadata()
       assert.equal(meta.orientation, orientation)
 
-      const ours = await pool.prepare(input).rotate().png().toBuffer({ resolveWithObject: true })
+      const ours = await pool.prepare(input).autoOrient().png().toBuffer({ resolveWithObject: true })
       const theirs = await sharp(input).rotate().png().toBuffer({ resolveWithObject: true })
       assert.deepEqual([ours.info.width, ours.info.height], [theirs.info.width, theirs.info.height])
       assert.deepEqual([meta.autoOrient.width, meta.autoOrient.height], [theirs.info.width, theirs.info.height])
@@ -98,7 +98,7 @@ describe('orientation matches sharp', () => {
 
     test(`auto-orients and resizes EXIF orientation ${orientation}`, async () => {
       const input = await fromRaw(pattern(120, 80)).withMetadata({ orientation }).jpeg({ quality: 95 }).toBuffer()
-      const ours = await pool.prepare(input).rotate().resize(50, 30).png().toBuffer()
+      const ours = await pool.prepare(input).autoOrient().resize(50, 30).png().toBuffer()
       const theirs = await sharp(input).rotate().resize(50, 30).png().toBuffer()
       await assertSimilar(ours, theirs, 8)
     })
@@ -121,15 +121,17 @@ describe('orientation matches sharp', () => {
 
   test('auto-orient then rotate', async () => {
     const input = await fromRaw(pattern(120, 80)).withMetadata({ orientation: 6 }).jpeg({ quality: 95 }).toBuffer()
-    const ours = await pool.prepare(input).rotate().rotate(90).png().toBuffer()
+    const ours = await pool.prepare(input).autoOrient().rotate(90).png().toBuffer()
     const theirs = await sharp(await sharp(input).rotate().toBuffer()).rotate(90).png().toBuffer()
     await assertSimilar(ours, theirs, 3)
   })
 
-  test('autoOrient constructor option', async () => {
+  test('rotate() ignores the EXIF orientation without autoOrient()', async () => {
     const input = await fromRaw(pattern(120, 80)).withMetadata({ orientation: 6 }).jpeg().toBuffer()
-    const { info } = await pool.prepare(input, { autoOrient: true }).png().toBuffer({ resolveWithObject: true })
-    assert.deepEqual([info.width, info.height], [80, 120])
+    const rotated = await pool.prepare(input).rotate(90).png().toBuffer({ resolveWithObject: true })
+    assert.deepEqual([rotated.info.width, rotated.info.height], [80, 120])
+    const both = await pool.prepare(input).autoOrient().rotate(90).png().toBuffer({ resolveWithObject: true })
+    assert.deepEqual([both.info.width, both.info.height], [120, 80])
   })
 })
 

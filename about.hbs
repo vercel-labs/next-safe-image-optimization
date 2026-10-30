@@ -1,0 +1,14 @@
+{{! The crates in the third-party notices (see about.toml), after scripts/third-party-notices.mjs's intro. }}
+{{#each licenses}}
+{{#unless (or (eq id "0BSD") (eq id "CC0-1.0") (eq id "Unlicense") (eq id "Zlib"))}}
+
+================================================================================
+{{#each used_by}}
+{{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+License: {{id}}
+--------------------------------------------------------------------------------
+
+{{{text}}}
+{{/unless}}
+{{/each}}

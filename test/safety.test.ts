@@ -3,7 +3,7 @@ import { describe, test } from 'node:test'
 import { deflateSync } from 'node:zlib'
 
 import { SafeImageOptimizationError, defaultPool } from '../dist/index.js'
-import { MAX_JSON_BYTES } from '../dist/protocol.generated.js'
+import { InputFormat, MAX_JSON_BYTES } from '../dist/protocol.generated.js'
 import { InvalidResponseError, decodeResponse } from '../dist/protocol.js'
 import { assertRejectsWithCode, crc32, fromRaw, pattern, sharp } from './helpers.ts'
 
@@ -46,33 +46,35 @@ function random(seed: number) {
 describe('limits', () => {
   test('limitInputPixels', async () => {
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
-    await assertRejectsWithCode(pool.prepare(input, { limitInputPixels: 9999 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
-    await assertRejectsWithCode(pool.prepare(input, { limitInputPixels: 9999 }).metadata(), 'ERR_LIMIT_EXCEEDED')
-    await pool.prepare(input, { limitInputPixels: 10000 }).toBuffer()
-    await pool.prepare(input, { limitInputPixels: false }).toBuffer()
-    await pool.prepare(input, { limitInputPixels: 0 }).toBuffer()
+    await assertRejectsWithCode(pool.prepare(input).limitInputPixels(9999).toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await assertRejectsWithCode(pool.prepare(input).limitInputPixels(9999).metadata(), 'ERR_LIMIT_EXCEEDED')
+    await pool.prepare(input).limitInputPixels(10000).toBuffer()
+    await pool.prepare(input).limitInputPixels(0).toBuffer()
+    await pool.prepare(input).limitInputPixels(0).metadata()
   })
 
   test('limitAllocatorMemoryBytes', async () => {
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
-    await assertRejectsWithCode(pool.prepare(input, { limitAllocatorMemoryBytes: 20_000 }).toBuffer(), 'ERR_LIMIT_EXCEEDED')
-    await pool.prepare(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).toBuffer()
+    await assertRejectsWithCode(pool.prepare(input).limitAllocatorMemoryBytes(20_000).toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await pool.prepare(input).limitAllocatorMemoryBytes(1024 * 1024).toBuffer()
+    await pool.prepare(input).limitAllocatorMemoryBytes(0).toBuffer()
   })
 
   test('limitOutputBytes', async () => {
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
     const { length } = await pool.prepare(input).png().toBuffer()
-    await assertRejectsWithCode(pool.prepare(input, { limitOutputBytes: length - 1 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
-    await pool.prepare(input, { limitOutputBytes: length }).png().toBuffer()
+    await assertRejectsWithCode(pool.prepare(input).limitOutputBytes(length - 1).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await pool.prepare(input).limitOutputBytes(length).png().toBuffer()
+    await pool.prepare(input).limitOutputBytes(0).png().toBuffer()
     // It's validated immediately, because the pool uses it too.
-    assert.throws(() => pool.prepare(input, { limitOutputBytes: 0 }), TypeError)
-    assert.throws(() => pool.prepare(input, { limitOutputBytes: '1' as never }), TypeError)
+    assert.throws(() => pool.prepare(input).limitOutputBytes(-1), TypeError)
+    assert.throws(() => pool.prepare(input).limitOutputBytes('1' as never), TypeError)
   })
 
   test('limitAllocatorMemoryBytes counts actual allocations, not just estimates', async () => {
     // The decoded image (30 KB) fits, but not with the decoder's and encoder's buffers.
     const input = await fromRaw(pattern(100, 100)).png().toBuffer()
-    await assert.rejects(pool.prepare(input, { limitAllocatorMemoryBytes: 60_000 }).toBuffer(), (error: unknown) => {
+    await assert.rejects(pool.prepare(input).limitAllocatorMemoryBytes(60_000).toBuffer(), (error: unknown) => {
       assert.ok(error instanceof SafeImageOptimizationError)
       assert.equal(error.code, 'ERR_LIMIT_EXCEEDED')
       assert.match(error.message, /allocated more than limitAllocatorMemoryBytes/)
@@ -113,7 +115,7 @@ describe('limits', () => {
     ])
     assert.deepEqual(await pool.prepare(input).metadata().then((m) => [m.width, m.height]), [width, 2])
     await assert.rejects(
-      pool.prepare(input, { limitAllocatorMemoryBytes: 96 * 1024 * 1024 }).resize(3_000_000).png().toBuffer(),
+      pool.prepare(input).limitAllocatorMemoryBytes(96 * 1024 * 1024).resize(3_000_000).png().toBuffer(),
       // Checked before resizing, not by the allocator.
       (error: Error & { code?: string }) => error.code === 'ERR_LIMIT_EXCEEDED' && /byte buffer/.test(error.message),
     )
@@ -122,15 +124,15 @@ describe('limits', () => {
   test('encoder memory counts against the memory limit', async () => {
     const input = await fromRaw(pattern(256, 256)).png().toBuffer()
     // Lossless WebP and mozjpeg need much more memory than PNG and jpeg-encoder for the same image.
-    await pool.prepare(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).png().toBuffer()
-    await pool.prepare(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).jpeg().toBuffer()
+    await pool.prepare(input).limitAllocatorMemoryBytes(1024 * 1024).png().toBuffer()
+    await pool.prepare(input).limitAllocatorMemoryBytes(1024 * 1024).jpeg().toBuffer()
     await assertRejectsWithCode(
-      pool.prepare(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).webp({ lossless: true }).toBuffer(),
+      pool.prepare(input).limitAllocatorMemoryBytes(1024 * 1024).webp({ lossless: true }).toBuffer(),
       'ERR_LIMIT_EXCEEDED',
     )
     // mozjpeg needs ~16 bytes per pixel, exactly 1 MiB here.
     await assertRejectsWithCode(
-      pool.prepare(input, { limitAllocatorMemoryBytes: 1000 * 1000 }).jpeg({ mozjpeg: true }).toBuffer(),
+      pool.prepare(input).limitAllocatorMemoryBytes(1000 * 1000).jpeg({ mozjpeg: true }).toBuffer(),
       'ERR_LIMIT_EXCEEDED',
     )
   })
@@ -201,16 +203,16 @@ describe('limits', () => {
 
   test('AVIF limitInputPixels is checked before decoding', async () => {
     const input = await fromRaw(pattern(100, 100)).avif().toBuffer()
-    await assertRejectsWithCode(pool.prepare(input, { limitInputPixels: 9999 }).metadata(), 'ERR_LIMIT_EXCEEDED')
-    await assertRejectsWithCode(pool.prepare(input, { limitInputPixels: 9999 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
-    await pool.prepare(input, { limitInputPixels: 10000 }).png().toBuffer()
+    await assertRejectsWithCode(pool.prepare(input).limitInputPixels(9999).metadata(), 'ERR_LIMIT_EXCEEDED')
+    await assertRejectsWithCode(pool.prepare(input).limitInputPixels(9999).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await pool.prepare(input).limitInputPixels(10000).png().toBuffer()
   })
 
   test('AVIF decoder memory counts against the memory limit', async () => {
     // 4:4:4 frames are 3 bytes per pixel, counted twice for film grain, plus the RGB output.
     const input = await fromRaw(pattern(256, 256)).avif().toBuffer()
-    await assertRejectsWithCode(pool.prepare(input, { limitAllocatorMemoryBytes: 400_000 }).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
-    await pool.prepare(input, { limitAllocatorMemoryBytes: 1024 * 1024 }).png().toBuffer()
+    await assertRejectsWithCode(pool.prepare(input).limitAllocatorMemoryBytes(400_000).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await pool.prepare(input).limitAllocatorMemoryBytes(1024 * 1024).png().toBuffer()
   })
 
   test('YCbCr TIFFs are rejected', async () => {
@@ -308,7 +310,8 @@ describe('malformed input never crashes or panics', () => {
       }
       for (const input of inputs) {
         try {
-          await pool.prepare(input).resize(32).png().toBuffer()
+          // Including SVG, which isn't allowed by default.
+          await pool.prepare(input).allowInputFormats(Object.values(InputFormat)).resize(32).png().toBuffer()
         } catch (error) {
           assert.ok(error instanceof SafeImageOptimizationError, String(error))
           assert.ok(allowed.has(error.code), `${error.code}: ${error.message}`)
@@ -329,14 +332,17 @@ describe('malformed responses are rejected', () => {
   test('valid responses', () => {
     const transform = decodeResponse(
       response('{"type":"transform","meta":{"format":"png","width":3,"height":2,"channels":4}}', Buffer.from('abc')),
+      'transform',
     )
     assert.deepEqual(transform, {
       kind: 'transform',
       data: Buffer.from('abc'),
       info: { format: 'png', width: 3, height: 2, channels: 4 },
     })
-    const error = decodeResponse(response('{"type":"error","meta":{"code":"ERR_DECODE_FAILED","message":"bad"}}'))
-    assert.deepEqual(error, { kind: 'error', code: 'ERR_DECODE_FAILED', message: 'bad' })
+    const error = response('{"type":"error","meta":{"code":"ERR_DECODE_FAILED","message":"bad"}}')
+    for (const kind of ['transform', 'metadata'] as const) {
+      assert.deepEqual(decodeResponse(error, kind), { kind: 'error', code: 'ERR_DECODE_FAILED', message: 'bad' })
+    }
   })
 
   test('invalid responses', () => {
@@ -348,7 +354,11 @@ describe('malformed responses are rejected', () => {
         type: 'metadata',
         meta: { format: 'png', width: 1, height: 1, hasAlpha: false, orientation: 1, hasProfile: false, ...fields },
       })
-    assert.equal(decodeResponse(response(metadata({}))).kind, 'metadata')
+    assert.equal(decodeResponse(response(metadata({})), 'metadata').kind, 'metadata')
+    // A response to the other kind of request.
+    assert.throws(() => decodeResponse(response(metadata({})), 'transform'), InvalidResponseError)
+    const transform = response('{"type":"transform","meta":{"format":"png","width":1,"height":1,"channels":3}}')
+    assert.throws(() => decodeResponse(transform, 'metadata'), InvalidResponseError)
     for (const invalid of [
       Buffer.alloc(3),
       Buffer.from([0xff, 0, 0, 0, 0x7b, 0x7d]),
@@ -374,7 +384,9 @@ describe('malformed responses are rejected', () => {
       // Invalid UTF-8, in an otherwise valid response.
       response(Buffer.from('{"type":"error","meta":{"code":"ERR_INTERNAL","message":"\xff"}}', 'latin1')),
     ]) {
-      assert.throws(() => decodeResponse(invalid), InvalidResponseError, invalid.toString())
+      for (const kind of ['transform', 'metadata'] as const) {
+        assert.throws(() => decodeResponse(invalid, kind), InvalidResponseError, invalid.toString())
+      }
     }
   })
 })

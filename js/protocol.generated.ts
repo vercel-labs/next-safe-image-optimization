@@ -8,9 +8,9 @@ export enum ErrorCode {
 	DecodeFailed = "ERR_DECODE_FAILED",
 	EncodeFailed = "ERR_ENCODE_FAILED",
 	Internal = "ERR_INTERNAL",
-	/** The input is animated, with `allowAnimated: false`. */
+	/** The input is animated, with `animated('reject')`. */
 	Animated = "ERR_ANIMATED",
-	/** Thrown as a `TypeError`, not a `SafeImageOptimizationError`. */
+	/** Thrown as a `TypeError` with this `code`, not a `SafeImageOptimizationError`. */
 	InvalidOptions = "ERR_INVALID_OPTIONS",
 }
 
@@ -38,13 +38,28 @@ export enum InputFormat {
 	Svg = "svg",
 }
 
+/**
+ * What to do with animated input. A future mode may keep every frame when the output format
+ * supports animation (e.g. GIF or WebP), which would decode with `image`'s
+ * `AnimationDecoder::into_frames`.
+ */
+export enum Animated {
+	/** Decode only the first frame. */
+	FirstFrame = "first-frame",
+	/**
+	 * Reject animated input with `ERR_ANIMATED`, before decoding any pixels (see
+	 * `decode::raster_decoder`).
+	 */
+	Reject = "reject",
+}
+
 export interface LimitOptions {
-	/** 0 disables the limit. */
+	/** 0 removes each of these limits. */
 	limitInputPixels?: number;
 	limitAllocatorMemoryBytes?: number;
 	limitOutputBytes?: number;
 	allowedInputFormats?: `${InputFormat}`[];
-	allowAnimated?: boolean;
+	animated?: `${Animated}`;
 }
 
 export interface MetadataResponse {

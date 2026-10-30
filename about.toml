@@ -1,0 +1,99 @@
+# cargo-about's config, for the third-party notices in the worker and wasm packages
+# (scripts/third-party-notices.mjs, with about.hbs). Every package gets the same list of crates: the
+# union of every target's, including proc macros (which cargo-about doesn't tell apart).
+
+# In priority order, for crates that offer a choice. Licenses that don't require a notice in
+# binaries come first, and about.hbs leaves them out. Then the ones that are simplest to comply with
+# (MIT over Apache-2.0, which also requires its NOTICE file).
+accepted = [
+  "0BSD",
+  "CC0-1.0",
+  "Zlib",
+  "MIT",
+  "ISC",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "IJG", # jpeg-encoder, mozjpeg, mozjpeg-sys
+  "Apache-2.0",
+  "MPL-2.0", # avif-parse (a fork of Mozilla's MP4 parser)
+]
+# The same as scripts/platforms.mjs, and wasm.
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "riscv64gc-unknown-linux-gnu",
+  "wasm32-wasip1",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# The workspace's own crates (`publish = false`).
+private = { ignore = true }
+
+# A proc macro's dependency, so it isn't in the binaries.
+[unicode-ident]
+accepted = ["Unicode-3.0"]
+
+# Clarifications pin the license files to use. Otherwise, cargo-about also collects the license
+# headers of individual source files, as separate notices. A clarification stops applying when its
+# file's checksum (of the part from `start`) changes, which cargo-about only warns about, so
+# scripts/third-party-notices.mjs fails on warnings.
+
+# The bindings are MIT, but the crate has no license file. It includes libwebp, which is what the
+# notice is for.
+[libwebp-sys.clarify]
+license = "BSD-3-Clause"
+[[libwebp-sys.clarify.files]]
+path = "vendor/COPYING"
+checksum = "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+
+# LICENSE has the IJG license's introduction, but not its terms (cargo-about uses SPDX's text), and
+# libjpeg-turbo's BSD-3-Clause license.
+[mozjpeg-sys.clarify]
+license = "IJG AND Zlib AND BSD-3-Clause"
+[[mozjpeg-sys.clarify.files]]
+path = "LICENSE"
+license = "BSD-3-Clause"
+checksum = "9aac39d55ba213edf5d5a981a1d526b547664b7fdfd7947f2e9bf3ca89e1926b"
+start = "Copyright (C)2009-2023 D. R. Commander."
+
+[rav1d.clarify]
+license = "BSD-2-Clause"
+[[rav1d.clarify.files]]
+path = "COPYING"
+checksum = "6477f5c0674c89dc9251708a442343449bcb9c14b969b09286eb61d0640b284a"
+
+[moxcms.clarify]
+license = "BSD-3-Clause OR Apache-2.0"
+[[moxcms.clarify.files]]
+path = "LICENSE.md"
+license = "BSD-3-Clause"
+checksum = "2aa92cada6431e75615e3fe6cb1a9082c98f777d48ae1c087c0da0e37f7b8bff"
+
+[pxfm.clarify]
+license = "BSD-3-Clause OR Apache-2.0"
+[[pxfm.clarify.files]]
+path = "LICENSE.md"
+license = "BSD-3-Clause"
+checksum = "2aa92cada6431e75615e3fe6cb1a9082c98f777d48ae1c087c0da0e37f7b8bff"
+
+[yuv.clarify]
+license = "BSD-3-Clause OR Apache-2.0"
+[[yuv.clarify.files]]
+path = "LICENSE.md"
+license = "BSD-3-Clause"
+checksum = "2aa92cada6431e75615e3fe6cb1a9082c98f777d48ae1c087c0da0e37f7b8bff"
+
+# cargo-about doesn't recognize its (indented) license file, so it would use SPDX's MIT text, without
+# the copyright line.
+[windows-link.clarify]
+license = "MIT OR Apache-2.0"
+[[windows-link.clarify.files]]
+path = "license-mit"
+license = "MIT"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"

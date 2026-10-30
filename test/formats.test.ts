@@ -125,6 +125,8 @@ describe('avif', () => {
 })
 
 describe('svg', () => {
+  const svg = (input: Buffer) => pool.prepare(input).allowInputFormats(['svg'])
+
   /** Like Satori's output for OG images: text is already converted to paths. */
   async function ogImage(): Promise<Buffer> {
     const photo = await fromRaw(pattern(40, 30)).jpeg({ quality: 95 }).toBuffer()
@@ -150,7 +152,7 @@ describe('svg', () => {
 
   test('metadata', async () => {
     const input = await ogImage()
-    const meta = await pool.prepare(input).metadata()
+    const meta = await svg(input).metadata()
     const theirs = await sharp(input).metadata()
     assert.deepEqual([meta.format, meta.width, meta.height, meta.hasAlpha], ['svg', 120, 63, true])
     assert.deepEqual([theirs.format, theirs.width, theirs.height, theirs.hasAlpha], ['svg', 120, 63, true])
@@ -158,7 +160,7 @@ describe('svg', () => {
 
   test('renders like sharp, with png as the default output', async () => {
     const input = await ogImage()
-    const { data, info } = await pool.prepare(input).toBuffer({ resolveWithObject: true })
+    const { data, info } = await svg(input).toBuffer({ resolveWithObject: true })
     assert.equal(info.format, 'png')
     assert.deepEqual([info.width, info.height, info.channels], [120, 63, 4])
     await assertSimilar(data, await sharp(input).png().toBuffer(), 3, 4)
@@ -173,7 +175,7 @@ describe('svg', () => {
       [7, null],
       [300, 120],
     ] as const) {
-      const ours = await pool.prepare(input).resize(width, height).png().toBuffer()
+      const ours = await svg(input).resize(width, height).png().toBuffer()
       const theirs = await sharp(input).resize(width, height).png().toBuffer()
       // Edges would be blurry if we rasterized at 10x10 and then upscaled.
       await assertSimilar(ours, theirs, 1, 4)
@@ -189,7 +191,7 @@ describe('svg', () => {
         const input = Buffer.from(
           `<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><image width="4" height="4" href="${href}"/></svg>`,
         )
-        assert.ok(await isBlank(await pool.prepare(input).png().toBuffer()), href)
+        assert.ok(await isBlank(await svg(input).png().toBuffer()), href)
       }
     } finally {
       await rm(dir, { recursive: true })
@@ -200,18 +202,18 @@ describe('svg', () => {
     const input = Buffer.from(
       '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><text y="15" font-size="16">Hi</text></svg>',
     )
-    assert.ok(await isBlank(await pool.prepare(input).png().toBuffer()))
+    assert.ok(await isBlank(await svg(input).png().toBuffer()))
   })
 
   test('svgz is not supported', async () => {
     const input = gzipSync(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>'))
-    await assertRejectsWithCode(pool.prepare(input).png().toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
+    await assertRejectsWithCode(svg(input).png().toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
   })
 
   test('limitInputPixels applies to the rendered size', async () => {
     const input = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>')
-    await pool.prepare(input, { limitInputPixels: 400 }).resize(20).png().toBuffer()
-    await assertRejectsWithCode(pool.prepare(input, { limitInputPixels: 400 }).resize(30).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await svg(input).limitInputPixels(400).resize(20).png().toBuffer()
+    await assertRejectsWithCode(svg(input).limitInputPixels(400).resize(30).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
   })
 })
 
@@ -306,19 +308,19 @@ describe('animated input', () => {
     await assertSimilar(await pool.prepare(input).png().toBuffer(), input, 0)
   })
 
-  test('allowAnimated: false rejects animations', async () => {
+  test("animated('reject') rejects animations", async () => {
     // sharp can't write AVIF sequences either. The brand is checked before parsing anything else.
     const avis = await fromRaw(pattern(32, 32)).avif().toBuffer()
     avis.write('avis', 8, 'latin1')
     for (const input of [await animated('gif'), await animated('webp'), await apng(), avis]) {
-      await assertRejectsWithCode(pool.prepare(input, { allowAnimated: false }).png().toBuffer(), 'ERR_ANIMATED')
-      await assertRejectsWithCode(pool.prepare(input, { allowAnimated: false }).metadata(), 'ERR_ANIMATED')
+      await assertRejectsWithCode(pool.prepare(input).animated('reject').png().toBuffer(), 'ERR_ANIMATED')
+      await assertRejectsWithCode(pool.prepare(input).animated('reject').metadata(), 'ERR_ANIMATED')
     }
   })
 
-  test('allowAnimated: false accepts still images', async () => {
+  test("animated('reject') accepts still images", async () => {
     for (const name of ['png', 'gif', 'lossy webp', 'lossy webp with alpha', 'avif', 'baseline jpeg', 'tiff']) {
-      await pool.prepare(await inputs[name](), { allowAnimated: false }).png().toBuffer()
+      await pool.prepare(await inputs[name]()).animated('reject').png().toBuffer()
     }
   })
 })

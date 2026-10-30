@@ -10,7 +10,7 @@ name = "nsio-cargo"
 
 [workspace.package]
 # Must match package.json's: `js/native.ts` passes that, and the worker checks it.
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 license = "MIT"
 publish = false

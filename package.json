@@ -1,6 +1,6 @@
 {
   "name": "@next/safe-image-optimization",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "A safer image optimization library for Node.js, built on memory-safe Rust decoders",
   "license": "MIT",
   "repository": {

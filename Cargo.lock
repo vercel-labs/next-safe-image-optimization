@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "nsio-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "avif-decode",
  "avif-parse",
@@ -503,14 +503,14 @@ dependencies = [
 
 [[package]]
 name = "nsio-wasm"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "nsio-core",
 ]
 
 [[package]]
 name = "nsio-worker"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "libc",
  "nsio-core",

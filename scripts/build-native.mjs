@@ -11,6 +11,7 @@
 import { spawnSync } from 'node:child_process'
 import { copyFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { platform } from './platforms.mjs'
 
 const root = join(import.meta.dirname, '..')
 /** The oldest glibc that official Node.js binaries support. */
@@ -21,18 +22,6 @@ function run(command, args) {
   if (result.status !== 0) {
     process.exit(result.status ?? 1)
   }
-}
-
-/** Like `x86_64-unknown-linux-gnu` → `linux-x64-gnu`. */
-function platform(triple) {
-  const [arch, , os, abi] = triple.split('-')
-  const nodeArch = { x86_64: 'x64', aarch64: 'arm64', riscv64gc: 'riscv64' }[arch]
-  const nodeOs = { darwin: 'darwin', windows: 'win32', linux: 'linux' }[os]
-  if (nodeArch === undefined || nodeOs === undefined) {
-    console.error(`unsupported target: ${triple}`)
-    process.exit(1)
-  }
-  return abi === undefined ? `${nodeOs}-${nodeArch}` : `${nodeOs}-${nodeArch}-${abi}`
 }
 
 const args = process.argv.slice(2)
@@ -59,6 +48,10 @@ if (target === undefined) {
 const cargoTarget = cross && target.endsWith('-gnu') ? `${target}.${GLIBC_VERSION}` : target
 run('cargo', [cross ? 'zigbuild' : 'build', '-p', 'nsio-worker', '--release', '--locked', '--target', cargoTarget, ...extra])
 const name = platform(target)
+if (name === undefined) {
+  console.error(`unsupported target: ${target}`)
+  process.exit(1)
+}
 const exe = name.startsWith('win32') ? '.exe' : ''
 const worker = join(root, 'target', target, 'release', `safe-image-optimization-worker${exe}`)
 copyFileSync(worker, join(root, `safe-image-optimization-worker.${name}${exe}`))

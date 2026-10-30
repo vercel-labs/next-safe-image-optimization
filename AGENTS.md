@@ -36,7 +36,7 @@ A Cargo workspace:
 - Workers are untrusted. The JS wrapper validates every response, and kills a worker that sends a malformed one, or output it wasn't asked for. Each worker handles one request at a time, and is replaced after `maxImagesPerWorker` responses (default 1, or 64 for native workers on Windows, where spawning is slow), so a compromised worker can't see later images.
 - Workers are built with `panic = "abort"` (the `dev` and `release` profiles; tests ignore it), so there's no `catch_unwind`. A panic, abort, or out-of-memory exit only ends the worker.
 - After changing a `#[typeshare]` item, run `pnpm generate` (needs `cargo install typeshare-cli --version 1.13.4 --locked`). The framing and the `Request` enum (externally tagged, which typeshare can't export) aren't generated, so keep `crates/core/src/protocol.rs` and `js/protocol.ts` in sync by hand, and the fork server's messages in `crates/worker/src/fork_server.rs` and `js/native.ts`.
-- The worker's version (`Cargo.toml`) must match `package.json`'s, which `js/native.ts` passes it. A worker test checks this.
+- The worker's version (`Cargo.toml`) must match `package.json`'s, which `js/native.ts` passes it. A worker test checks this. `pnpm set-version` sets both (see "Publishing").
 - Tests generate fixtures with sharp. Never commit images. Compare against sharp for parity (dimensions exactly, pixels approximately).
 - Before changing CI, read `.github/AGENTS.md` (pinned SHAs, `permissions: {}`, installing pnpm, etc).
 
@@ -73,6 +73,7 @@ libwebp and mozjpeg (C) are the only encoders the allocator can't see, so `encod
 pnpm build && pnpm test              # native
 cargo test && pnpm lint              # unit tests, fmt, clippy, tsc
 pnpm generate                        # js/protocol.generated.ts
+pnpm set-version 1.2.3               # in a PR, then run the Release workflow
 WASI_SDK_PATH=... pnpm build:wasm && pnpm test:wasm
 ```
 
@@ -81,5 +82,12 @@ WASI_SDK_PATH=... pnpm build:wasm && pnpm test:wasm
 - **wasm:** wasi-sdk only compiles libwebp and mozjpeg. Rust links with its own bundled wasi-libc. Rust 1.100+ links wasi-libc's reactor startup (an `_initialize` export) and older versions don't, so `js/wasm-worker.ts` calls `_initialize` only if it exists.
 - **Linux CI:** builds use cargo-zigbuild (`-x`). `scripts/build-native.mjs` adds a `.2.28` suffix to gnu targets, which sets the glibc version (matching Node), instead of zig's default. On Linux, `js/native.ts` prefers the gnu worker, unless Node itself uses musl, and falls back to the musl one (it's static, so it runs anywhere).
 - **riscv64 CI** (glibc only, like sharp) runs the tests under QEMU's user mode emulation, in a Debian container with an unofficial Node.js build (official ones don't include riscv64). QEMU doesn't support seccomp, so workers ignore failing to install their filters (see "seccomp"), and silently ignores `RLIMIT_DATA` (it would limit QEMU's own allocations), so `NSIO_TEST_QEMU=1` skips the `limitProcessMemoryBytes` test.
-- **CI artifacts** don't keep file permissions, so test jobs `chmod +x` the worker.
-- **Publishing** isn't set up yet. The worker belongs in a package per platform, named `@next/safe-image-optimization-<platform>` (`js/native.ts` looks there), as optional dependencies of the main package. The wasm module belongs in `@next/safe-image-optimization-wasm32` (`js/wasm.ts` looks there), which users install themselves.
+- **CI artifacts** don't keep file permissions, so test jobs `chmod +x` the worker, and `scripts/pack-npm.mjs` sets its mode in the packages.
+
+## Publishing
+
+Every package has the same version: `pnpm set-version <version>` (`scripts/set-version.mjs`) sets it in `package.json`, `Cargo.toml`, and `Cargo.lock`, in a PR. Then the `Release` workflow (`.github/workflows/release.yml`, run by hand from `main`) runs `build_and_test.yml` (as a reusable workflow), packs its artifacts, publishes them, and creates the GitHub release and `v<version>` tag. Its `dry-run` input only packs and tests the packages (from any branch).
+
+- **Packages:** `scripts/pack-npm.mjs` packs `@next/safe-image-optimization` (`dist/`), `@next/safe-image-optimization-<platform>` (the worker for each target in `scripts/platforms.mjs`, which must match `build_and_test.yml`'s, with `os`, `cpu`, and `libc` fields), and `@next/safe-image-optimization-wasm32` into `npm/*.tgz`. The platform packages are the main package's `optionalDependencies`, which only exist in its packed `package.json`: in the repo's, `pnpm install --frozen-lockfile` would need them to be published already. `scripts/test-npm-packages.mjs` installs the tarballs, and processes an image with the native and wasm backends (`scripts/installed-package-test.cjs`).
+- **Third-party notices:** the binaries' packages include `THIRD-PARTY-NOTICES.txt`: the crates' license texts from [cargo-about](https://github.com/EmbarkStudios/cargo-about) (`about.toml`, `about.hbs`), the same for every package (every target's crates, including proc macros), plus Rust's standard library and the libc that some targets link statically (`scripts/licenses/`). `accepted` picks the simplest of a crate's alternatives (MIT over Apache-2.0), and the template leaves out licenses that don't require a notice in binaries (Zlib, CC0-1.0, Unlicense, 0BSD). cargo-about fails for licenses that aren't accepted. Crates whose source files have license headers (or whose license file isn't their whole license) need a `clarify` entry, pinned by checksum, or each header becomes a notice. A stale checksum is only a cargo-about warning, so `scripts/third-party-notices.mjs` fails on warnings. To install cargo-about locally: `cargo install cargo-about --version 0.9.3 --locked`.
+- **npm:** `scripts/publish-npm.mjs` publishes the tarballs with `pnpm publish`, the main package last, and skips versions that are already published, so a failed release can be rerun. The dist-tag is `latest`, or a prerelease's identifier (like `canary`). Only the workflow's `publish` job can publish, with npm's trusted publishing (OIDC, configured for each package on npmjs.com: this repository, `release.yml`, and the `npm` environment), so there's no npm token, and the packages have provenance.

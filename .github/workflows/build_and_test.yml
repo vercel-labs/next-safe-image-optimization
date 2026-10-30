@@ -1,10 +1,12 @@
-name: CI
+name: Build and test
 
 on:
   push:
     branches:
       - main
   pull_request:
+  # From release.yml, which packs the binaries that this builds and tests.
+  workflow_call:
 
 permissions: {}
 

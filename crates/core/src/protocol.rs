@@ -1,5 +1,5 @@
-//! The worker protocol, shared by the native worker process and the wasm module. `js/protocol.ts`
-//! is the other side.
+//! The worker protocol, shared by the native worker process and the wasm module.
+//! `packages/nsio/protocol.ts` is the other side.
 //!
 //! A request is `[input][options JSON][u32 LE length of the JSON]`. The options are at the end so
 //! that the input can be decoded in place. Requests come from our JS wrapper (trusted), but
@@ -11,7 +11,7 @@
 //! out without copying it.
 //!
 //! Items marked `#[typeshare]` (here, and the request options in `request.rs`) are exported to
-//! `js/protocol.generated.ts` by `pnpm generate`.
+//! `packages/nsio/protocol.generated.ts` by `pnpm generate`.
 
 use serde::Serialize;
 use typeshare_annotation::typeshare;

@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 // Packs every npm package into `npm/*.tgz`, for scripts/publish-npm.mjs:
 //
-// - `@next/safe-image-optimization`: `dist/` (`pnpm build:js`), with the platform packages as
-//   `optionalDependencies`. They aren't in package.json, so installing this repo doesn't need them
-//   to be published.
+// - `@next/safe-image-optimization`: its `dist/` (`pnpm build`), with the platform packages as
+//   `optionalDependencies`. They aren't in its package.json, so installing this repo doesn't need
+//   them to be published.
 // - `@next/safe-image-optimization-<platform>`: the worker binary that CI built for the platform
 //   (`safe-image-optimization-worker.<platform>`, from scripts/build-native.mjs), with `os`, `cpu`,
 //   and `libc` fields, so package managers only install the one that matches.
 // - `@next/safe-image-optimization-wasm32`: `safe-image-optimization.wasm` (scripts/build-wasm.mjs).
 //
-// Every package gets package.json's version, and the binaries' packages include third-party notices
-// (scripts/third-party-notices.mjs). The binaries must all be in the package root first.
+// Every package gets the main package's version, and the binaries' packages include third-party
+// notices (scripts/third-party-notices.mjs). The binaries must all be in packages/nsio first.
 //
 // Usage: node scripts/pack-npm.mjs (with cargo-about installed)
 
@@ -32,7 +32,8 @@ import { platform, TARGETS } from './platforms.mjs'
 import { thirdPartyNotices } from './third-party-notices.mjs'
 
 const root = join(import.meta.dirname, '..')
-const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+const packageDir = join(root, 'packages', 'nsio')
+const pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'))
 const NOTICES = 'THIRD-PARTY-NOTICES.txt'
 const main = `[\`${pkg.name}\`](https://www.npmjs.com/package/${pkg.name})`
 
@@ -73,7 +74,7 @@ const packages = TARGETS.map((target) => {
     },
     files: {
       [binary]: {
-        from: join(root, binary),
+        from: join(packageDir, binary),
         executable: true,
         hint: `Build it with scripts/build-native.mjs --target ${target}.`,
       },
@@ -95,7 +96,7 @@ packages.push({
   },
   files: {
     'safe-image-optimization.wasm': {
-      from: join(root, 'safe-image-optimization.wasm'),
+      from: join(packageDir, 'safe-image-optimization.wasm'),
       hint: 'Build it with `pnpm build:wasm:release`.',
     },
     'README.md':
@@ -106,16 +107,11 @@ packages.push({
 })
 
 // Without the fields that are only for developing this repo.
-const {
-  scripts: _scripts,
-  devDependencies: _devDependencies,
-  packageManager: _packageManager,
-  ...manifest
-} = pkg
+const { scripts: _scripts, devDependencies: _devDependencies, ...manifest } = pkg
 packages.push({
   manifest: { ...manifest, optionalDependencies },
   files: {
-    dist: { from: join(root, 'dist'), hint: 'Build it with `pnpm build:js`.' },
+    dist: { from: join(packageDir, 'dist'), hint: 'Build it with `pnpm build`.' },
     'README.md': { from: join(root, 'README.md') },
     'license.md': license,
   },

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // `pnpm build` uses the built-in `build` (cached, with the worker as its output). This is the
+    // same with `--release`, which can't be passed with `-- --release` when the JS package's `build`
+    // runs alongside it. A task with a `command` doesn't get the built-in hashing (only the crate's
+    // own files), so these are the files the worker is built from.
+    "build:release": {
+      "command": ["cargo", "build", "--package=nsio-worker", "--locked", "--release"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/crates/core/Cargo.toml",
+        "$TURBO_ROOT$/crates/core/src/**",
+        "$TURBO_ROOT$/vendor/avif-decode/Cargo.toml",
+        "$TURBO_ROOT$/vendor/avif-decode/src/**",
+        "$TURBO_ROOT$/Cargo.toml",
+        "$TURBO_ROOT$/Cargo.lock",
+        "$TURBO_ROOT$/rust-toolchain.toml",
+        "$TURBO_ROOT$/.cargo/config.toml"
+      ],
+      "outputs": [
+        "$TURBO_ROOT$/target/release/safe-image-optimization-worker",
+        "$TURBO_ROOT$/target/release/safe-image-optimization-worker.exe"
+      ]
+    }
+  }
+}

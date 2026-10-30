@@ -7,7 +7,7 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
 import type { Socket } from 'node:net'
 import { constants } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 import { isMusl } from './musl.js'
 import {
@@ -71,16 +71,17 @@ export interface WorkerBinary {
 }
 
 /**
- * The worker is in `target/debug` or `target/release` when built locally (whichever is newer), in
- * the package root when CI built it (`scripts/build-native.mjs`), or else in the platform's package.
- * Returns `undefined` if there isn't one for this platform.
+ * The worker is in the repo's `target/debug` or `target/release` when built locally (whichever is
+ * newer), in the package root when CI built it (`scripts/build-native.mjs`), or else in the
+ * platform's package. Returns `undefined` if there isn't one for this platform.
  */
 export function findWorker(): WorkerBinary | undefined {
   const exe = process.platform === 'win32' ? '.exe' : ''
-  const built = ['debug', 'release']
-    .map((profile) =>
-      join(__dirname, '..', 'target', profile, `safe-image-optimization-worker${exe}`),
-    )
+  // The repo, from `packages/nsio/dist`. For an installed package, that's `node_modules`, where a
+  // dependency named `target` could add a binary.
+  const repo = join(__dirname, '..', '..', '..')
+  const built = (basename(repo) === 'node_modules' ? [] : ['debug', 'release'])
+    .map((profile) => join(repo, 'target', profile, `safe-image-optimization-worker${exe}`))
     .filter((path) => existsSync(path))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
   if (built.length > 0) {

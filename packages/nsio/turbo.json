@@ -1,0 +1,44 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Doesn't depend on the worker's build (the worker is only spawned), so they run alongside each
+    // other.
+    "build": {
+      "outputs": ["dist/**"]
+    },
+    // Compiles the tests in place (for Node.js 20, which can't strip types), against dist/*.d.ts.
+    "build:test": {
+      "dependsOn": ["build"],
+      "outputs": ["test/*.js"]
+    },
+    "typecheck": {
+      "dependsOn": ["build"]
+    },
+    // There are no `lint` or `quality` scripts, so these only run their dependencies. That includes
+    // oxlint and oxfmt (`//#lint:js` and `//#format:js`), which check the whole repo, because the
+    // root can't have these tasks: its scripts run `turbo run lint` and `turbo run quality`, which
+    // would run themselves.
+    "lint": {
+      "dependsOn": ["//#lint:js"]
+    },
+    "quality": {
+      "dependsOn": ["lint", "typecheck", "//#format:js"]
+    },
+    // The same for `quality:fix` (oxfmt runs after oxlint's fixes).
+    "quality:fix": {
+      "dependsOn": ["//#format:js:fix"]
+    },
+    // The end-to-end tests. They don't build the worker or the wasm module, because they test
+    // whichever was built (the newest worker, debug or release, see `findWorker`), which is also why
+    // they aren't cached.
+    "test": {
+      "dependsOn": ["build"],
+      "cache": false
+    },
+    "test:wasm": {
+      "dependsOn": ["build"],
+      "cache": false
+    }
+  }
+}

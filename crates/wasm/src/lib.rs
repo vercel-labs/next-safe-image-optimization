@@ -1,6 +1,6 @@
-//! The wasm module (`wasm32-wasip1`), driven by `js/wasm-worker.ts`. It imports its memory, so that
-//! JS can choose its maximum size, and the only other imports are a few WASI functions that JS
-//! stubs out.
+//! The wasm module (`wasm32-wasip1`), driven by `packages/nsio/wasm-worker.ts`. It imports its
+//! memory, so that JS can choose its maximum size, and the only other imports are a few WASI
+//! functions that JS stubs out.
 //!
 //! To process a request, JS calls `nsio_alloc(len)`, writes the request (see
 //! `nsio_core::protocol`) to the returned pointer, and calls `nsio_handle(ptr, len)`. That

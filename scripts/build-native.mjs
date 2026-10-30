@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// CI's release build of the worker binary (`crates/worker`) for a target, which it copies to the
-// package root as `safe-image-optimization-worker.<platform>`, where `js/native.ts` also looks for
-// it. The platform is Node's (like `linux-x64-gnu`, or `darwin-arm64`). Local builds don't need this:
-// `pnpm build` builds the worker in `target/debug`, where `js/native.ts` looks first.
+// CI's release build of the worker binary (`crates/worker`) for a target, which it copies to the JS
+// package as `packages/nsio/safe-image-optimization-worker.<platform>`, where `native.ts` also
+// looks for it. The platform is Node's (like `linux-x64-gnu`, or `darwin-arm64`). Local builds
+// don't need this: `pnpm build` builds the worker in `target/debug`, where `native.ts` looks first.
 //
 // Usage: node scripts/build-native.mjs --target <triple> [-x] [extra cargo args]
 //
@@ -78,4 +78,4 @@ if (name === undefined) {
 }
 const exe = name.startsWith('win32') ? '.exe' : ''
 const worker = join(root, 'target', target, 'release', `safe-image-optimization-worker${exe}`)
-copyFileSync(worker, join(root, `safe-image-optimization-worker.${name}${exe}`))
+copyFileSync(worker, join(root, 'packages', 'nsio', `safe-image-optimization-worker.${name}${exe}`))

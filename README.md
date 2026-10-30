@@ -96,9 +96,10 @@ Requires Rust (version pinned in `rust-toolchain.toml`), Node.js 24, and pnpm (`
 ```sh
 pnpm install
 pnpm build          # or `pnpm build:release` for release builds
-pnpm test           # end-to-end tests
-cargo test          # Rust unit tests
-pnpm lint           # clippy, rustfmt, and TypeScript typechecking
+pnpm test           # Rust unit tests and end-to-end tests
+pnpm lint           # clippy and oxlint
+pnpm quality        # clippy, rustfmt, oxlint, oxfmt, and TypeScript typechecking
+pnpm quality:fix   # clippy's and oxlint's fixes, rustfmt, and oxfmt
 
 # Regenerate TypeScript protocol types after changing request options in crates/core
 # (requires `cargo install typeshare-cli --version 1.13.4 --locked`)

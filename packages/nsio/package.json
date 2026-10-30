@@ -1,0 +1,35 @@
+{
+  "name": "@next/safe-image-optimization",
+  "version": "0.0.1",
+  "description": "A safer image optimization library for Node.js, built on memory-safe Rust decoders",
+  "homepage": "https://github.com/vercel-labs/next-safe-image-optimization#readme",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vercel-labs/next-safe-image-optimization.git"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:test": "tsc -p test/tsconfig.json",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "test:wasm": "NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm node --run test",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "sharp": "^0.35.5",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">= 20.9.0"
+  }
+}

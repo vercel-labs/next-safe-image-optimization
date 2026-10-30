@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Builds the wasm module (`crates/wasm`) for `wasm32-wasip1`, checks its imports against an
-// allowlist, and copies it to the package root as `safe-image-optimization.wasm`.
+// allowlist, and copies it to the JS package as `packages/nsio/safe-image-optimization.wasm`.
 //
 // wasi-sdk is only needed to compile libwebp and mozjpeg (C). Rust links with its own wasi-libc.
 //
@@ -46,9 +46,9 @@ if (cargo.status !== 0) {
   process.exit(cargo.status ?? 1)
 }
 
-// What the module may import, by import module. These are exactly what `js/wasm-worker.ts`
-// provides: the WASI filesystem functions always fail (there are no preopened directories), and
-// nothing calls into JS.
+// What the module may import, by import module. These are exactly what
+// `packages/nsio/wasm-worker.ts` provides: the WASI filesystem functions always fail (there are no
+// preopened directories), and nothing calls into JS.
 const allowedImports = new Map([
   ['env', new Set(['memory'])],
   [
@@ -84,4 +84,4 @@ if (disallowed.length > 0) {
 }
 console.log('Checked the imports of the wasm module')
 
-copyFileSync(file, join(root, 'safe-image-optimization.wasm'))
+copyFileSync(file, join(root, 'packages', 'nsio', 'safe-image-optimization.wasm'))

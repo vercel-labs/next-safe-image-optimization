@@ -1,5 +1,5 @@
-//! The worker process. The JS wrapper (`js/native.ts`) spawns it with the arguments `<version>
-//! <parent pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for stdin and
+//! The worker process. The JS wrapper (`packages/nsio/native.ts`) spawns it with the arguments
+//! `<version> <parent pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for stdin and
 //! stdout. On unix, it instead spawns it once as a fork server (`--fork-server`), which forks
 //! workers with the same setup, except that stdin and stdout are a Unix socket (see
 //! `fork_server.rs`). The only environment variable it may get is
@@ -188,10 +188,10 @@ fn take_stdout() -> io::Stdout {
 
 #[cfg(test)]
 mod tests {
-    /// `js/native.ts` passes `package.json`'s version, which has to match.
+    /// `packages/nsio/native.ts` passes its `package.json`'s version, which has to match.
     #[test]
     fn version_matches_package_json() {
-        let package = include_str!("../../../package.json");
+        let package = include_str!("../../../packages/nsio/package.json");
         let version = format!(r#""version": "{}""#, env!("CARGO_PKG_VERSION"));
         assert!(
             package.contains(&version),

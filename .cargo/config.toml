@@ -10,8 +10,8 @@ rustflags = ["-C", "target-feature=+crt-static"]
 # Node has supported SIMD since v16.4. `fast_image_resize` has simd128 kernels.
 #
 # The module imports its memory, so that JS can choose the maximum size. The initial size is 32 MiB
-# (512 pages * 64 KiB/page), and must match `INITIAL_PAGES` in `js/wasm.ts`. The stack size (8 MiB)
-# matches native main threads.
+# (512 pages * 64 KiB/page), and must match `INITIAL_PAGES` in `packages/nsio/wasm.ts`. The stack
+# size (8 MiB) matches native main threads.
 [target.wasm32-wasip1]
 rustflags = [
   "-C", "target-feature=+simd128",

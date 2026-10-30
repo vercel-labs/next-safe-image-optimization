@@ -1,7 +1,7 @@
 name: Release
 
-# Publishes every npm package at package.json's version (set with `pnpm set-version`, in a PR), then
-# creates the version's GitHub release and tag. The binaries are the ones that build_and_test.yml
+# Publishes every npm package at packages/nsio's version (set with
+# `pnpm set-version`, in a PR), then creates the version's GitHub release and tag. The binaries are the ones that build_and_test.yml
 # builds and tests in this run. With `dry-run`, it only packs and tests the packages (uploaded as `npm-packages`).
 #
 # npm trusts this workflow (by its file name) and the `npm` environment to publish the packages, so
@@ -43,7 +43,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version=$(node -p 'require("./package.json").version')
+          version=$(node -p 'require("./packages/nsio/package.json").version')
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "$DRY_RUN" = "true" ]; then
             exit 0
@@ -108,10 +108,11 @@ jobs:
         with:
           pattern: '{worker-*,wasm32-wasip1}'
           merge-multiple: true
-          path: .
+          path: packages/nsio
       - run: npm install --global pnpm@12.11.2
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build:js
+      - run: pnpm build
+        working-directory: packages/nsio
       - wait: [rust, cargo-about, binaries]
       - run: node scripts/pack-npm.mjs
       - run: node scripts/test-npm-packages.mjs

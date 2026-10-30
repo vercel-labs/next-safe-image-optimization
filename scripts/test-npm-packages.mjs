@@ -21,8 +21,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readTarballs } from './npm-tarballs.mjs'
 
-const root = join(import.meta.dirname, '..')
-const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+const packageDir = join(import.meta.dirname, '..', 'packages', 'nsio')
+const pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'))
 const tarballs = new Map(
   readTarballs().map(({ path, manifest }) => [manifest.name, `file:${path}`]),
 )

@@ -2,23 +2,20 @@
   "name": "@next/safe-image-optimization",
   "version": "0.0.1",
   "description": "A safer image optimization library for Node.js, built on memory-safe Rust decoders",
+  "homepage": "https://github.com/vercel-labs/next-safe-image-optimization#readme",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vercel-labs/next-safe-image-optimization.git"
   },
-  "homepage": "https://github.com/vercel-labs/next-safe-image-optimization#readme",
-  "publishConfig": {
-    "access": "public"
-  },
-  "type": "commonjs",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "files": [
     "dist"
   ],
-  "engines": {
-    "node": ">= 20.9.0"
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "turbo run nsio-worker#build build:js",
@@ -32,13 +29,22 @@
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
     "test:wasm": "NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm node --run test",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit",
-    "lint": "turbo run lint format:check typecheck"
+    "format": "turbo run format format:js",
+    "format:js": "oxfmt",
+    "format:js:check": "oxfmt --check",
+    "lint:js": "oxlint",
+    "lint": "turbo run lint lint:js format:check format:js:check typecheck"
   },
-  "packageManager": "pnpm@12.11.2",
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "oxfmt": "^0.75.0",
+    "oxlint": "^1.90.0",
     "sharp": "^0.35.5",
     "turbo": "^2.11.10",
     "typescript": "^7.0.2"
-  }
+  },
+  "engines": {
+    "node": ">= 20.9.0"
+  },
+  "packageManager": "pnpm@12.11.2"
 }

@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    // For leaving fields out of a copy (`const { scripts, ...manifest } = pkg`).
+    "no-unused-vars": ["error", { "ignoreRestSiblings": true }],
+    // Copies are usually deliberate: of a collection that the loop modifies, or of a `Buffer` (to
+    // `map` its bytes to something that isn't a byte).
+    "unicorn/no-useless-spread": "off"
+  },
+  "env": {
+    "builtin": true,
+    "node": true
+  }
+}

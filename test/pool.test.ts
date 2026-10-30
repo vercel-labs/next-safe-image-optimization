@@ -16,7 +16,13 @@ const backend = defaultPool().backend
 
 /** `Pool.run` is internal, but lets tests use timeouts shorter than a second. */
 interface InternalPool {
-  run(input: Uint8Array, kind: string, options: object, limitOutputBytes: number | undefined, timeoutMs?: number): Promise<unknown>
+  run(
+    input: Uint8Array,
+    kind: string,
+    options: object,
+    limitOutputBytes: number | undefined,
+    timeoutMs?: number,
+  ): Promise<unknown>
 }
 
 /** Noise compresses badly, so this takes a while to encode. */
@@ -48,7 +54,13 @@ describe('pool', () => {
       new Pool({ maxImagesPerWorker })
     }
     for (const ms of [-1, -0.5, NaN, undefined, '10']) {
-      assert.throws(() => defaultPool().prepare(Buffer.alloc(1)).timeoutMs(ms as never), TypeError)
+      assert.throws(
+        () =>
+          defaultPool()
+            .prepare(Buffer.alloc(1))
+            .timeoutMs(ms as never),
+        TypeError,
+      )
     }
   })
 
@@ -73,7 +85,10 @@ describe('pool', () => {
     // 0 is no timeout. The others are more than 2 ** 31 - 1 ms, which `setTimeout` would treat as
     // 1ms, and more than a `Duration`.
     for (const ms of [0, 3_000_000_000, Number.MAX_VALUE]) {
-      const { info } = await defaultPool().prepare(input).timeoutMs(ms).toBuffer({ resolveWithObject: true })
+      const { info } = await defaultPool()
+        .prepare(input)
+        .timeoutMs(ms)
+        .toBuffer({ resolveWithObject: true })
       assert.equal(info.width, 8)
     }
   })
@@ -104,7 +119,12 @@ describe('pool', () => {
     assert.equal(pool.backend, backend)
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     const results = await Promise.all(
-      Array.from({ length: 4 }, (_, i) => pool.prepare(input).resize(10 + i).toBuffer({ resolveWithObject: true })),
+      Array.from({ length: 4 }, (_, i) =>
+        pool
+          .prepare(input)
+          .resize(10 + i)
+          .toBuffer({ resolveWithObject: true }),
+      ),
     )
     results.forEach(({ info }, i) => assert.equal(info.width, 10 + i))
   })
@@ -114,7 +134,12 @@ describe('pool', () => {
     for (const maxImagesPerWorker of [0, 1, 2]) {
       const pool = new Pool({ concurrency: 2, maxImagesPerWorker })
       const results = await Promise.all(
-        Array.from({ length: 5 }, (_, i) => pool.prepare(input).resize(10 + i).toBuffer({ resolveWithObject: true })),
+        Array.from({ length: 5 }, (_, i) =>
+          pool
+            .prepare(input)
+            .resize(10 + i)
+            .toBuffer({ resolveWithObject: true }),
+        ),
       )
       results.forEach(({ info }, i) => assert.equal(info.width, 10 + i))
     }
@@ -129,7 +154,11 @@ describe('pool', () => {
       'ERR_TIMEOUT',
     )
     assert.ok(performance.now() - start < 2000)
-    const { info } = await pool.prepare(input).timeoutMs(60_000).resize(8).toBuffer({ resolveWithObject: true })
+    const { info } = await pool
+      .prepare(input)
+      .timeoutMs(60_000)
+      .resize(8)
+      .toBuffer({ resolveWithObject: true })
     assert.equal(info.width, 8)
   })
 
@@ -141,7 +170,10 @@ describe('pool', () => {
       new Pool({ idleTimeoutMs: 0, maxImagesPerWorker: 0 }).prepare(png).toBuffer().then(() => console.log('done'))
     `
     const start = performance.now()
-    const child = spawnSync(process.execPath, ['-e', script], { cwd: fileURLToPath(new URL('..', import.meta.url)), timeout: 30_000 })
+    const child = spawnSync(process.execPath, ['-e', script], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      timeout: 30_000,
+    })
     assert.equal(child.stdout.toString().trim(), 'done', child.stderr.toString())
     assert.equal(child.status, 0)
     assert.ok(performance.now() - start < 20_000)
@@ -149,19 +181,34 @@ describe('pool', () => {
 
   // The OS enforces it on Linux, and wasm enforces it everywhere. QEMU's user mode emulation (CI's
   // riscv64 tests) ignores `RLIMIT_DATA`, which would also limit QEMU's own allocations.
-  const enforcesProcessMemory = backend === 'wasm' || (process.platform === 'linux' && process.env.NSIO_TEST_QEMU !== '1')
-  test('limitProcessMemoryBytes is enforced, and the worker is replaced', { skip: !enforcesProcessMemory }, async () => {
-    const pool = new Pool({ concurrency: 1, limitProcessMemoryBytes: 48 * 1024 * 1024 })
-    // 75 MB of pixels. `limitAllocatorMemoryBytes` allows it, so the allocator doesn't stop it first.
-    const large = await fromRaw(pattern(5000, 5000)).png().toBuffer()
-    await assertRejectsWithCode(pool.prepare(large).limitAllocatorMemoryBytes(2 ** 30).png().toBuffer(), 'ERR_OUT_OF_MEMORY')
-    const small = await fromRaw(pattern(30, 30)).png().toBuffer()
-    await pool.prepare(small).png().toBuffer()
-  })
+  const enforcesProcessMemory =
+    backend === 'wasm' || (process.platform === 'linux' && process.env.NSIO_TEST_QEMU !== '1')
+  test(
+    'limitProcessMemoryBytes is enforced, and the worker is replaced',
+    { skip: !enforcesProcessMemory },
+    async () => {
+      const pool = new Pool({ concurrency: 1, limitProcessMemoryBytes: 48 * 1024 * 1024 })
+      // 75 MB of pixels. `limitAllocatorMemoryBytes` allows it, so the allocator doesn't stop it first.
+      const large = await fromRaw(pattern(5000, 5000)).png().toBuffer()
+      await assertRejectsWithCode(
+        pool
+          .prepare(large)
+          .limitAllocatorMemoryBytes(2 ** 30)
+          .png()
+          .toBuffer(),
+        'ERR_OUT_OF_MEMORY',
+      )
+      const small = await fromRaw(pattern(30, 30)).png().toBuffer()
+      await pool.prepare(small).png().toBuffer()
+    },
+  )
 
   test('limitProcessMemoryBytes is validated', () => {
     for (const limitProcessMemoryBytes of [-1, 1.5, NaN, true, false]) {
-      assert.throws(() => new Pool({ limitProcessMemoryBytes: limitProcessMemoryBytes as never }), TypeError)
+      assert.throws(
+        () => new Pool({ limitProcessMemoryBytes: limitProcessMemoryBytes as never }),
+        TypeError,
+      )
     }
     new Pool({ limitProcessMemoryBytes: 0 })
   })
@@ -174,7 +221,10 @@ describe('shutdown', () => {
     const pool = new Pool({ concurrency: 1 })
     const input = await small()
     // The second one is queued.
-    const submitted = [pool.prepare(input).resize(10).toBuffer(), pool.prepare(input).resize(11).toBuffer()]
+    const submitted = [
+      pool.prepare(input).resize(10).toBuffer(),
+      pool.prepare(input).resize(11).toBuffer(),
+    ]
     const closed = pool.close()
     assert.equal(pool.close(), closed)
     await assertRejectsWithCode(pool.prepare(input).toBuffer(), 'ERR_POOL_CLOSED')
@@ -184,9 +234,10 @@ describe('shutdown', () => {
   test('destroy() rejects submitted images', async () => {
     const pool = new Pool({ concurrency: 1 })
     const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
-    const submitted = [pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()].map((promise) =>
-      assertRejectsWithCode(promise, 'ERR_POOL_CLOSED'),
-    )
+    const submitted = [
+      pool.prepare(input).png().toBuffer(),
+      pool.prepare(input).png().toBuffer(),
+    ].map((promise) => assertRejectsWithCode(promise, 'ERR_POOL_CLOSED'))
     await Promise.all([pool.destroy(), ...submitted])
     await assertRejectsWithCode(pool.prepare(input).toBuffer(), 'ERR_POOL_CLOSED')
   })
@@ -220,21 +271,45 @@ describe('abort', () => {
   test('an aborted signal rejects with its reason', async () => {
     const reason = new Error('stop')
     const input = await small()
-    await assert.rejects(defaultPool().prepare(input).toBuffer({ signal: AbortSignal.abort(reason) }), (error) => error === reason)
-    await assert.rejects(defaultPool().prepare(input).metadata({ signal: AbortSignal.abort(reason) }), (error) => error === reason)
+    await assert.rejects(
+      defaultPool()
+        .prepare(input)
+        .toBuffer({ signal: AbortSignal.abort(reason) }),
+      (error) => error === reason,
+    )
+    await assert.rejects(
+      defaultPool()
+        .prepare(input)
+        .metadata({ signal: AbortSignal.abort(reason) }),
+      (error) => error === reason,
+    )
   })
 
   test('signal is validated', async () => {
-    await assert.rejects(defaultPool().prepare(await small()).toBuffer({ signal: 'abort' as never }), { code: 'ERR_INVALID_OPTIONS' })
+    await assert.rejects(
+      defaultPool()
+        .prepare(await small())
+        .toBuffer({ signal: 'abort' as never }),
+      { code: 'ERR_INVALID_OPTIONS' },
+    )
   })
 
   test('aborting kills the worker processing the image, and the pool replaces it', async () => {
     const pool = new Pool({ concurrency: 1 })
     const controller = new AbortController()
-    const aborted = assert.rejects(pool.prepare(await slow()).png().toBuffer({ signal: controller.signal }), { name: 'AbortError' })
+    const aborted = assert.rejects(
+      pool
+        .prepare(await slow())
+        .png()
+        .toBuffer({ signal: controller.signal }),
+      { name: 'AbortError' },
+    )
     setTimeout(() => controller.abort(), 20)
     await aborted
-    await pool.prepare(await small()).png().toBuffer()
+    await pool
+      .prepare(await small())
+      .png()
+      .toBuffer()
   })
 
   test('aborting removes a queued image', async () => {
@@ -242,13 +317,20 @@ describe('abort', () => {
     const input = await small()
     const controller = new AbortController()
     const first = pool.prepare(input).png().toBuffer()
-    const second = assert.rejects(pool.prepare(input).png().toBuffer({ signal: controller.signal }), { name: 'AbortError' })
+    const second = assert.rejects(
+      pool.prepare(input).png().toBuffer({ signal: controller.signal }),
+      {
+        name: 'AbortError',
+      },
+    )
     controller.abort()
     await Promise.all([first, second])
   })
 
   test('disposing a pipeline aborts its images', async () => {
-    const pipeline = defaultPool().prepare(await slow()).png()
+    const pipeline = defaultPool()
+      .prepare(await slow())
+      .png()
     const aborted = assert.rejects(pipeline.toBuffer(), { name: 'AbortError' })
     await pipeline[Symbol.asyncDispose]()
     await aborted
@@ -256,19 +338,26 @@ describe('abort', () => {
   })
 })
 
-test('ERR_BACKEND_UNAVAILABLE', { skip: findWasm() !== undefined && 'the wasm module is installed' }, (t) => {
-  const name = 'NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND'
-  const previous = process.env[name]
-  t.after(() => {
-    if (previous === undefined) {
-      delete process.env[name]
-    } else {
-      process.env[name] = previous
-    }
-  })
-  process.env[name] = 'wasm'
-  assert.throws(() => new Pool(), { name: 'SafeImageOptimizationError', code: 'ERR_BACKEND_UNAVAILABLE' })
-})
+test(
+  'ERR_BACKEND_UNAVAILABLE',
+  { skip: findWasm() !== undefined && 'the wasm module is installed' },
+  (t) => {
+    const name = 'NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND'
+    const previous = process.env[name]
+    t.after(() => {
+      if (previous === undefined) {
+        delete process.env[name]
+      } else {
+        process.env[name] = previous
+      }
+    })
+    process.env[name] = 'wasm'
+    assert.throws(() => new Pool(), {
+      name: 'SafeImageOptimizationError',
+      code: 'ERR_BACKEND_UNAVAILABLE',
+    })
+  },
+)
 
 // Workers are forked from a fork server, except on Windows. These tests inspect idle workers, so
 // they reuse them.
@@ -284,7 +373,9 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
       })
   }
   function servers() {
-    return processes().filter(({ ppid, args }) => ppid === process.pid && args.includes('--fork-server'))
+    return processes().filter(
+      ({ ppid, args }) => ppid === process.pid && args.includes('--fork-server'),
+    )
   }
 
   test('workers are forked from a fork server', async () => {
@@ -297,7 +388,14 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
     assert.equal(added.length, 1)
     assert.ok(all.some(({ ppid }) => ppid === added[0]!.pid))
     // Nothing else is spawned directly.
-    assert.ok(!all.some(({ ppid, args }) => ppid === process.pid && args.includes('safe-image-optimization-worker') && !args.includes('--fork-server')))
+    assert.ok(
+      !all.some(
+        ({ ppid, args }) =>
+          ppid === process.pid &&
+          args.includes('safe-image-optimization-worker') &&
+          !args.includes('--fork-server'),
+      ),
+    )
   })
 
   test('the pool replaces a fork server that exits', async () => {
@@ -311,7 +409,8 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
     }
     process.kill(server!.pid, 'SIGKILL')
     // The idle worker is gone too, which the pool may not have noticed yet.
-    await pool.prepare(input)
+    await pool
+      .prepare(input)
       .png()
       .toBuffer()
       .catch((error: { code?: string }) => assert.equal(error.code, 'ERR_WORKER_CRASHED'))
@@ -334,7 +433,9 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
   // Last, because the first test checks that nothing is spawned directly.
   test('forkServer: false spawns each worker', async () => {
     const spawned = () =>
-      processes().filter(({ ppid, args }) => ppid === process.pid && args.includes('safe-image-optimization-worker'))
+      processes().filter(
+        ({ ppid, args }) => ppid === process.pid && args.includes('safe-image-optimization-worker'),
+      )
     const before = new Set(spawned().map(({ pid }) => pid))
     const pool = new Pool({ concurrency: 2, forkServer: false, maxImagesPerWorker: 0 })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
@@ -347,150 +448,190 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
 
 // The native backend's handling of misbehaving workers, with shell scripts standing in for the
 // worker binary (or the fork server, which they fail to start).
-describe('native worker failures', { skip: backend !== 'native' || process.platform === 'win32' }, () => {
-  const dir = mkdtempSync(join(tmpdir(), 'nsio-test-'))
-  let count = 0
-  function worker(script: string): string {
-    const path = join(dir, `worker-${count++}.sh`)
-    writeFileSync(path, `#!/bin/sh\n${script}\n`)
-    chmodSync(path, 0o755)
-    return path
-  }
-  function nativeBackend(workerPath: string, forkServer = false, maxImagesPerWorker = 1): NativeBackend {
-    return new NativeBackend({ workerPath, maxProcesses: 1, idleTimeoutMs: 1000, maxImagesPerWorker, memoryLimit: 0, forkServer })
-  }
-  function run(workerPath: string, timeoutMs?: number, forkServer = false, pool = nativeBackend(workerPath, forkServer)): Promise<RunResult> {
-    return pool.run(Buffer.alloc(16), '{}', { kind: 'transform', timeoutMs, maxResponseBytes: 1024 })
-  }
-  async function assertFails(result: Promise<RunResult>, code: string) {
-    const { response, error } = await result
-    assert.equal(response, undefined)
-    assert.equal(error?.code, code, JSON.stringify(error))
-  }
-  /** A command that writes a transform response, except its `length` bytes of data. */
-  function respond(length: number): string {
-    const json = Buffer.from('{"type":"transform","meta":{"format":"png","width":1,"height":1,"channels":3}}')
-    const header = Buffer.alloc(12)
-    header.writeBigUInt64LE(BigInt(4 + json.length + length))
-    header.writeUInt32LE(json.length, 8)
-    const octal = [...Buffer.concat([header, json])].map((byte) => `\\${byte.toString(8).padStart(3, '0')}`)
-    return `printf '${octal.join('')}'`
-  }
-  function data({ response, error }: RunResult): string {
-    assert.ok(response?.kind === 'transform', JSON.stringify(error))
-    return response.data.toString()
-  }
+describe(
+  'native worker failures',
+  { skip: backend !== 'native' || process.platform === 'win32' },
+  () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nsio-test-'))
+    let count = 0
+    function worker(script: string): string {
+      const path = join(dir, `worker-${count++}.sh`)
+      writeFileSync(path, `#!/bin/sh\n${script}\n`)
+      chmodSync(path, 0o755)
+      return path
+    }
+    function nativeBackend(
+      workerPath: string,
+      forkServer = false,
+      maxImagesPerWorker = 1,
+    ): NativeBackend {
+      return new NativeBackend({
+        workerPath,
+        maxProcesses: 1,
+        idleTimeoutMs: 1000,
+        maxImagesPerWorker,
+        memoryLimit: 0,
+        forkServer,
+      })
+    }
+    function run(
+      workerPath: string,
+      timeoutMs?: number,
+      forkServer = false,
+      pool = nativeBackend(workerPath, forkServer),
+    ): Promise<RunResult> {
+      return pool.run(Buffer.alloc(16), '{}', {
+        kind: 'transform',
+        timeoutMs,
+        maxResponseBytes: 1024,
+      })
+    }
+    async function assertFails(result: Promise<RunResult>, code: string) {
+      const { response, error } = await result
+      assert.equal(response, undefined)
+      assert.equal(error?.code, code, JSON.stringify(error))
+    }
+    /** A command that writes a transform response, except its `length` bytes of data. */
+    function respond(length: number): string {
+      const json = Buffer.from(
+        '{"type":"transform","meta":{"format":"png","width":1,"height":1,"channels":3}}',
+      )
+      const header = Buffer.alloc(12)
+      header.writeBigUInt64LE(BigInt(4 + json.length + length))
+      header.writeUInt32LE(json.length, 8)
+      const octal = [...Buffer.concat([header, json])].map(
+        (byte) => `\\${byte.toString(8).padStart(3, '0')}`,
+      )
+      return `printf '${octal.join('')}'`
+    }
+    function data({ response, error }: RunResult): string {
+      assert.ok(response?.kind === 'transform', JSON.stringify(error))
+      return response.data.toString()
+    }
 
-  test('responses are passed through', async () => {
-    assert.equal(data(await run(worker(`${respond(3)}; printf abc; exec sleep 10`))), 'abc')
-  })
+    test('responses are passed through', async () => {
+      assert.equal(data(await run(worker(`${respond(3)}; printf abc; exec sleep 10`))), 'abc')
+    })
 
-  test('exit codes', async () => {
-    await assertFails(run(worker('exit 86')), 'ERR_OUT_OF_MEMORY')
-    await assertFails(run(worker('exit 87')), 'ERR_WORKER_SPAWN')
-    await assertFails(run(worker('exit 88')), 'ERR_WORKER_SPAWN')
-    await assertFails(run(worker('exit 1')), 'ERR_WORKER_CRASHED')
-    await assertFails(run(worker('kill -9 $$')), 'ERR_WORKER_CRASHED')
-  })
+    test('exit codes', async () => {
+      await assertFails(run(worker('exit 86')), 'ERR_OUT_OF_MEMORY')
+      await assertFails(run(worker('exit 87')), 'ERR_WORKER_SPAWN')
+      await assertFails(run(worker('exit 88')), 'ERR_WORKER_SPAWN')
+      await assertFails(run(worker('exit 1')), 'ERR_WORKER_CRASHED')
+      await assertFails(run(worker('kill -9 $$')), 'ERR_WORKER_CRASHED')
+    })
 
-  test('a missing worker binary', async () => {
-    await assertFails(run(join(dir, 'missing')), 'ERR_WORKER_SPAWN')
-    await assertFails(run(join(dir, 'missing'), undefined, true), 'ERR_WORKER_SPAWN')
-  })
+    test('a missing worker binary', async () => {
+      await assertFails(run(join(dir, 'missing')), 'ERR_WORKER_SPAWN')
+      await assertFails(run(join(dir, 'missing'), undefined, true), 'ERR_WORKER_SPAWN')
+    })
 
-  test('a fork server that fails to start', async () => {
-    const fork = (script: string) => run(worker(script), undefined, true)
-    await assertFails(fork('exit 86'), 'ERR_OUT_OF_MEMORY')
-    await assertFails(fork('exit 87'), 'ERR_WORKER_SPAWN')
-    await assertFails(fork('exit 88'), 'ERR_WORKER_SPAWN')
-    await assertFails(fork('exit 0'), 'ERR_WORKER_CRASHED')
-    await assertFails(fork('kill -9 $$'), 'ERR_WORKER_CRASHED')
-    // Close the IPC channel but keep running. Redirecting on `exec sleep` leaves a duplicate
-    // of fd 3 open in macOS's shell, so close it in a separate command.
-    await assertFails(fork('exec 3<&-; exec sleep 10'), 'ERR_WORKER_CRASHED')
-  })
+    test('a fork server that fails to start', async () => {
+      const fork = (script: string) => run(worker(script), undefined, true)
+      await assertFails(fork('exit 86'), 'ERR_OUT_OF_MEMORY')
+      await assertFails(fork('exit 87'), 'ERR_WORKER_SPAWN')
+      await assertFails(fork('exit 88'), 'ERR_WORKER_SPAWN')
+      await assertFails(fork('exit 0'), 'ERR_WORKER_CRASHED')
+      await assertFails(fork('kill -9 $$'), 'ERR_WORKER_CRASHED')
+      // Close the IPC channel but keep running. Redirecting on `exec sleep` leaves a duplicate
+      // of fd 3 open in macOS's shell, so close it in a separate command.
+      await assertFails(fork('exec 3<&-; exec sleep 10'), 'ERR_WORKER_CRASHED')
+    })
 
-  /** Responds to each request (30 bytes, from `run`) with how many it's handled. */
-  function counter(): string {
-    return worker(`n=0; while [ "$(head -c 30 | wc -c)" -eq 30 ]; do n=$((n + 1)); ${respond(1)}; printf %s "$n"; done`)
-  }
+    /** Responds to each request (30 bytes, from `run`) with how many it's handled. */
+    function counter(): string {
+      return worker(
+        `n=0; while [ "$(head -c 30 | wc -c)" -eq 30 ]; do n=$((n + 1)); ${respond(1)}; printf %s "$n"; done`,
+      )
+    }
 
-  test('workers are replaced after maxImagesPerWorker responses', async () => {
-    const path = counter()
-    for (const [max, expected] of [
-      [1, '1111'],
-      [2, '1212'],
-      [0, '1234'],
-    ] as const) {
-      const pool = nativeBackend(path, false, max)
-      let responses = ''
-      for (let i = 0; i < 4; i++) {
-        responses += data(await run(path, undefined, false, pool))
+    test('workers are replaced after maxImagesPerWorker responses', async () => {
+      const path = counter()
+      for (const [max, expected] of [
+        [1, '1111'],
+        [2, '1212'],
+        [0, '1234'],
+      ] as const) {
+        const pool = nativeBackend(path, false, max)
+        let responses = ''
+        for (let i = 0; i < 4; i++) {
+          responses += data(await run(path, undefined, false, pool))
+        }
+        assert.equal(responses, expected, `maxImagesPerWorker: ${max}`)
       }
-      assert.equal(responses, expected, `maxImagesPerWorker: ${max}`)
-    }
-  })
+    })
 
-  test('a worker that sends an invalid response is replaced', async () => {
-    // A transform response to a metadata request.
-    const path = counter()
-    const pool = nativeBackend(path, false, 0)
-    await assertFails(pool.run(Buffer.alloc(16), '{}', { kind: 'metadata', maxResponseBytes: 1024 }), 'ERR_WORKER_CRASHED')
-    assert.equal(data(await run(path, undefined, false, pool)), '1')
+    test('a worker that sends an invalid response is replaced', async () => {
+      // A transform response to a metadata request.
+      const path = counter()
+      const pool = nativeBackend(path, false, 0)
+      await assertFails(
+        pool.run(Buffer.alloc(16), '{}', { kind: 'metadata', maxResponseBytes: 1024 }),
+        'ERR_WORKER_CRASHED',
+      )
+      assert.equal(data(await run(path, undefined, false, pool)), '1')
 
-    // Malformed JSON, only in the first response (from any worker).
-    const marker = join(dir, 'malformed-marker')
-    const malformed = worker(
-      `n=0; while [ "$(head -c 30 | wc -c)" -eq 30 ]; do n=$((n + 1)); ` +
-        String.raw`if [ -e ${marker} ]; then ${respond(1)}; printf %s "$n"; else touch ${marker}; printf '\005\0\0\0\0\0\0\0\001\0\0\0{'; fi; done`,
-    )
-    const malformedPool = nativeBackend(malformed, false, 0)
-    await assertFails(run(malformed, undefined, false, malformedPool), 'ERR_WORKER_CRASHED')
-    assert.equal(data(await run(malformed, undefined, false, malformedPool)), '1')
-  })
+      // Malformed JSON, only in the first response (from any worker).
+      const marker = join(dir, 'malformed-marker')
+      const malformed = worker(
+        `n=0; while [ "$(head -c 30 | wc -c)" -eq 30 ]; do n=$((n + 1)); ` +
+          String.raw`if [ -e ${marker} ]; then ${respond(1)}; printf %s "$n"; else touch ${marker}; printf '\005\0\0\0\0\0\0\0\001\0\0\0{'; fi; done`,
+      )
+      const malformedPool = nativeBackend(malformed, false, 0)
+      await assertFails(run(malformed, undefined, false, malformedPool), 'ERR_WORKER_CRASHED')
+      assert.equal(data(await run(malformed, undefined, false, malformedPool)), '1')
+    })
 
-  // `close()` only resolves once the worker has exited, which would take 10s if it wasn't killed.
-  test('aborting kills the worker', async () => {
-    const pool = nativeBackend(worker('exec sleep 10'))
-    const controller = new AbortController()
-    const start = performance.now()
-    const result = pool.run(Buffer.alloc(16), '{}', { kind: 'transform', maxResponseBytes: 1024, signal: controller.signal })
-    setTimeout(() => controller.abort(), 100)
-    assert.deepEqual(await result, { aborted: true })
-    await pool.close()
-    assert.ok(performance.now() - start < 5000)
-  })
+    // `close()` only resolves once the worker has exited, which would take 10s if it wasn't killed.
+    test('aborting kills the worker', async () => {
+      const pool = nativeBackend(worker('exec sleep 10'))
+      const controller = new AbortController()
+      const start = performance.now()
+      const result = pool.run(Buffer.alloc(16), '{}', {
+        kind: 'transform',
+        maxResponseBytes: 1024,
+        signal: controller.signal,
+      })
+      setTimeout(() => controller.abort(), 100)
+      assert.deepEqual(await result, { aborted: true })
+      await pool.close()
+      assert.ok(performance.now() - start < 5000)
+    })
 
-  test('destroy() kills busy workers', async () => {
-    const pool = nativeBackend(worker('exec sleep 10'))
-    const start = performance.now()
-    const result = pool.run(Buffer.alloc(16), '{}', { kind: 'transform', maxResponseBytes: 1024 })
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    await pool.destroy()
-    assert.equal((await result).error?.code, 'ERR_POOL_CLOSED')
-    assert.ok(performance.now() - start < 5000)
-  })
+    test('destroy() kills busy workers', async () => {
+      const pool = nativeBackend(worker('exec sleep 10'))
+      const start = performance.now()
+      const result = pool.run(Buffer.alloc(16), '{}', { kind: 'transform', maxResponseBytes: 1024 })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      await pool.destroy()
+      assert.equal((await result).error?.code, 'ERR_POOL_CLOSED')
+      assert.ok(performance.now() - start < 5000)
+    })
 
-  test('a worker that never responds is killed', async () => {
-    const start = performance.now()
-    await assertFails(run(worker('exec sleep 10'), 100), 'ERR_TIMEOUT')
-    assert.ok(performance.now() - start < 5000)
-  })
+    test('a worker that never responds is killed', async () => {
+      const start = performance.now()
+      await assertFails(run(worker('exec sleep 10'), 100), 'ERR_TIMEOUT')
+      assert.ok(performance.now() - start < 5000)
+    })
 
-  test('oversized and truncated responses', async () => {
-    const huge = String.raw`printf '\377\377\377\377\377\377\377\377'; exec sleep 10`
-    await assertFails(run(worker(huge)), 'ERR_WORKER_CRASHED')
-    await assertFails(run(worker(String.raw`printf '\003\0\0\0\0\0\0\0a'`)), 'ERR_WORKER_CRASHED')
-    await assertFails(run(worker(String.raw`printf '\001\0\0\0\0\0\0\0ab'; exec sleep 10`)), 'ERR_WORKER_CRASHED')
-  })
+    test('oversized and truncated responses', async () => {
+      const huge = String.raw`printf '\377\377\377\377\377\377\377\377'; exec sleep 10`
+      await assertFails(run(worker(huge)), 'ERR_WORKER_CRASHED')
+      await assertFails(run(worker(String.raw`printf '\003\0\0\0\0\0\0\0a'`)), 'ERR_WORKER_CRASHED')
+      await assertFails(
+        run(worker(String.raw`printf '\001\0\0\0\0\0\0\0ab'; exec sleep 10`)),
+        'ERR_WORKER_CRASHED',
+      )
+    })
 
-  test('the worker gets an empty environment', async () => {
-    process.env.NSIO_TEST_SECRET = 'secret'
-    try {
-      const script = `env | grep -q NSIO_TEST_SECRET && v=y || v=n; ${respond(1)}; printf %s "$v"; exec sleep 10`
-      assert.equal(data(await run(worker(script))), 'n')
-    } finally {
-      delete process.env.NSIO_TEST_SECRET
-    }
-  })
-})
+    test('the worker gets an empty environment', async () => {
+      process.env.NSIO_TEST_SECRET = 'secret'
+      try {
+        const script = `env | grep -q NSIO_TEST_SECRET && v=y || v=n; ${respond(1)}; printf %s "$v"; exec sleep 10`
+        assert.equal(data(await run(worker(script))), 'n')
+      } finally {
+        delete process.env.NSIO_TEST_SECRET
+      }
+    })
+  },
+)

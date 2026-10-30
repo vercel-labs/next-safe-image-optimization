@@ -96,7 +96,9 @@ const wasi = {
   random_get(ptr: number, len: number): number {
     // `getRandomValues` fills at most 64 KiB at a time.
     for (let offset = 0; offset < len; offset += 65536) {
-      crypto.getRandomValues(new Uint8Array(memory.buffer, ptr + offset, Math.min(65536, len - offset)))
+      crypto.getRandomValues(
+        new Uint8Array(memory.buffer, ptr + offset, Math.min(65536, len - offset)),
+      )
     }
     return ERRNO_SUCCESS
   },
@@ -118,7 +120,10 @@ const wasi = {
   },
 }
 
-const instance = new WebAssembly.Instance(wasmModule, { env: { memory }, wasi_snapshot_preview1: wasi })
+const instance = new WebAssembly.Instance(wasmModule, {
+  env: { memory },
+  wasi_snapshot_preview1: wasi,
+})
 const wasm = instance.exports as unknown as Exports
 // The module is a WASI reactor, so this runs its constructors. Rust before 1.100 doesn't link
 // wasi-libc's reactor startup code, and has the linker call constructors from each export instead.
@@ -133,7 +138,9 @@ function handle({ request, maxResponseBytes }: WasmRequest): Uint8Array {
     throw new Error('invalid response')
   }
   if (headLen - 8 + dataLen > maxResponseBytes) {
-    throw new Error(`the response is ${headLen - 8 + dataLen} bytes, which exceeds the limit of ${maxResponseBytes} bytes`)
+    throw new Error(
+      `the response is ${headLen - 8 + dataLen} bytes, which exceeds the limit of ${maxResponseBytes} bytes`,
+    )
   }
   // These throw if the module returned out-of-bounds pointers. The head starts with a length
   // prefix, which only the native worker needs.

@@ -63,14 +63,22 @@ export function meanAbsDiff(a: RawImage, b: RawImage): number {
 }
 
 /** Asserts that two encoded images look similar, after decoding both with sharp. */
-export async function assertSimilar(actual: Buffer, expected: Buffer, tolerance: number, channels: 3 | 4 = 3) {
+export async function assertSimilar(
+  actual: Buffer,
+  expected: Buffer,
+  tolerance: number,
+  channels: 3 | 4 = 3,
+) {
   const diff = meanAbsDiff(await toRaw(actual, channels), await toRaw(expected, channels))
   assert.ok(diff <= tolerance, `mean absolute difference ${diff.toFixed(2)} exceeds ${tolerance}`)
 }
 
 export async function assertRejectsWithCode(promise: Promise<unknown>, code: ErrorCode) {
   await assert.rejects(promise, (error: unknown) => {
-    assert.ok(error instanceof SafeImageOptimizationError, `expected a SafeImageOptimizationError, got ${String(error)}`)
+    assert.ok(
+      error instanceof SafeImageOptimizationError,
+      `expected a SafeImageOptimizationError, got ${String(error)}`,
+    )
     assert.equal(error.code, code, error.message)
     return true
   })

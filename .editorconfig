@@ -7,9 +7,13 @@ end_of_line = lf
 charset = utf-8
 trim_trailing_whitespace = true
 insert_final_newline = true
+# rustfmt's and oxfmt's default.
+max_line_length = 100
 
 [*.rs]
 indent_size = 4
 
 [*.md]
 trim_trailing_whitespace = false
+# Paragraphs are one line each, and oxfmt doesn't wrap them.
+max_line_length = off

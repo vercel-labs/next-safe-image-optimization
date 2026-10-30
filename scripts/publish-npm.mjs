@@ -35,7 +35,10 @@ if (main === undefined) {
 }
 const binaries = TARGETS.map((target) => {
   const name = platform(target)
-  return [`${pkg.name}-${name}`, `safe-image-optimization-worker.${name}${name.startsWith('win32-') ? '.exe' : ''}`]
+  return [
+    `${pkg.name}-${name}`,
+    `safe-image-optimization-worker.${name}${name.startsWith('win32-') ? '.exe' : ''}`,
+  ]
 })
 binaries.push([`${pkg.name}-wasm32`, 'safe-image-optimization.wasm'])
 for (const [name, binary] of binaries) {
@@ -56,7 +59,9 @@ for (const dependency of Object.keys(main.manifest.optionalDependencies ?? {})) 
 
 const prerelease = pkg.version.match(/^[^-+]*-([0-9A-Za-z-]+)/)?.[1]
 const distTag = prerelease === undefined ? 'latest' : /^\d+$/.test(prerelease) ? 'next' : prerelease
-const tag = args.includes('--tag') ? [] : ['--tag', distTag]
+const tag = args.some((arg) => arg === '--tag' || arg.startsWith('--tag='))
+  ? []
+  : [`--tag=${distTag}`]
 const dryRun = args.includes('--dry-run')
 /** Seconds to wait before each retry of a failed publish. */
 const RETRY_DELAYS = [10, 30]
@@ -68,7 +73,9 @@ async function published(name, version) {
     return false
   }
   if (!response.ok) {
-    throw new Error(`checking for ${name}@${version} failed: ${response.status} ${response.statusText}`)
+    throw new Error(
+      `checking for ${name}@${version} failed: ${response.status} ${response.statusText}`,
+    )
   }
   return true
 }
@@ -88,10 +95,19 @@ async function publish(tarball) {
   const label = `${tarball.name}@${pkg.version}`
   for (let attempt = 0; ; attempt++) {
     try {
-      execFileSync('pnpm', ['publish', tarball.path, '--access', 'public', '--no-git-checks', '--ignore-scripts', ...tag, ...args], {
-        cwd: dir,
-        stdio: 'inherit',
-      })
+      execFileSync(
+        'pnpm',
+        [
+          'publish',
+          tarball.path,
+          '--access=public',
+          '--no-git-checks',
+          '--ignore-scripts',
+          ...tag,
+          ...args,
+        ],
+        { cwd: dir, stdio: 'inherit' },
+      )
       return
     } catch (error) {
       // It may have been published anyway: if the connection dropped after the upload, or if an

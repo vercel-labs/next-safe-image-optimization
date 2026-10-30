@@ -14,14 +14,20 @@ const RULE = '='.repeat(80)
 function crateNotices() {
   // So that cargo-about doesn't fetch anything itself (like license files from crates' repositories).
   execFileSync('cargo', ['fetch', '--locked'], { cwd: root, stdio: 'inherit' })
-  const about = spawnSync('cargo', ['about', 'generate', '--workspace', '--frozen', '--fail', 'about.hbs'], {
-    cwd: root,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  })
+  const about = spawnSync(
+    'cargo',
+    ['about', 'generate', '--workspace', '--frozen', '--fail', 'about.hbs'],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    },
+  )
   process.stderr.write(about.stderr ?? '')
   if (about.error !== undefined || about.status !== 0) {
-    console.error(`cargo about failed${about.error ? `: ${about.error.message}` : ''}. Is cargo-about installed?`)
+    console.error(
+      `cargo about failed${about.error ? `: ${about.error.message}` : ''}. Is cargo-about installed?`,
+    )
     process.exit(1)
   }
   // Like a clarification that no longer applies (see about.toml).
@@ -34,16 +40,34 @@ function crateNotices() {
 
 /** Licenses of components that aren't crates, from `scripts/licenses/`. */
 function componentNotices(target) {
-  const components = [{ title: 'Rust standard library (https://github.com/rust-lang/rust)', license: 'MIT', file: 'rust.txt' }]
+  const components = [
+    {
+      title: 'Rust standard library (https://github.com/rust-lang/rust)',
+      license: 'MIT',
+      file: 'rust.txt',
+    },
+  ]
   if (target.endsWith('-musl')) {
-    components.push({ title: 'musl libc (https://musl.libc.org)', license: 'MIT', file: 'musl.txt' })
+    components.push({
+      title: 'musl libc (https://musl.libc.org)',
+      license: 'MIT',
+      file: 'musl.txt',
+    })
   }
   if (target.startsWith('wasm32-')) {
     // wasi-libc's own code is Apache-2.0 WITH LLVM-exception, which doesn't require a notice in
     // binaries. These are the parts it's derived from that do.
     const repository = '(https://github.com/WebAssembly/wasi-libc)'
-    components.push({ title: `musl libc, in wasi-libc ${repository}`, license: 'MIT', file: 'musl.txt' })
-    components.push({ title: `cloudlibc, in wasi-libc ${repository}`, license: 'BSD-2-Clause', file: 'cloudlibc.txt' })
+    components.push({
+      title: `musl libc, in wasi-libc ${repository}`,
+      license: 'MIT',
+      file: 'musl.txt',
+    })
+    components.push({
+      title: `cloudlibc, in wasi-libc ${repository}`,
+      license: 'BSD-2-Clause',
+      file: 'cloudlibc.txt',
+    })
   }
   return components
     .map(({ title, license, file }) => {

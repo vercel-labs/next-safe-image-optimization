@@ -18,7 +18,11 @@ const root = join(import.meta.dirname, '..')
 const GLIBC_VERSION = '2.28'
 
 function run(command, args, env) {
-  const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', env: { ...process.env, ...env } })
+  const result = spawnSync(command, args, {
+    cwd: root,
+    stdio: 'inherit',
+    env: { ...process.env, ...env },
+  })
   if (result.status !== 0) {
     process.exit(result.status ?? 1)
   }
@@ -55,7 +59,18 @@ if (target.startsWith('riscv')) {
     env.CARGO_ZIGBUILD_ZIG_PATH = join(root, 'scripts', 'zig-without-march.sh')
   }
 }
-run('cargo', [cross ? 'zigbuild' : 'build', '-p', 'nsio-worker', '--release', '--locked', '--target', cargoTarget, ...extra], env)
+run(
+  'cargo',
+  [
+    cross ? 'zigbuild' : 'build',
+    '--package=nsio-worker',
+    '--release',
+    '--locked',
+    `--target=${cargoTarget}`,
+    ...extra,
+  ],
+  env,
+)
 const name = platform(target)
 if (name === undefined) {
   console.error(`unsupported target: ${target}`)

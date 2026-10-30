@@ -8,12 +8,12 @@ Because the library communicates with standalone worker binaries (or WebAssembly
 
 Native worker binaries are built for the following operating systems and CPU architectures:
 
-| Operating System | CPU Architectures | Notes |
-| --- | --- | --- |
-| Linux (glibc 2.28+) | `x64`, `arm64`, `riscv64` | Uses `gnu` worker binaries, falling back to `musl` if unavailable |
-| Linux (musl) | `x64`, `arm64` | Statically linked |
-| macOS (10.13+) | `arm64` (Apple Silicon), `x64` (Intel) | |
-| Windows | `x64`, `arm64` | MSVC builds |
+| Operating System    | CPU Architectures                      | Notes                                                             |
+| ------------------- | -------------------------------------- | ----------------------------------------------------------------- |
+| Linux (glibc 2.28+) | `x64`, `arm64`, `riscv64`              | Uses `gnu` worker binaries, falling back to `musl` if unavailable |
+| Linux (musl)        | `x64`, `arm64`                         | Statically linked                                                 |
+| macOS (10.13+)      | `arm64` (Apple Silicon), `x64` (Intel) |                                                                   |
+| Windows             | `x64`, `arm64`                         | MSVC builds                                                       |
 
 On any other platform or architecture where Node.js runs, the pool automatically falls back to the [WebAssembly backend](wasm.md) if `@next/safe-image-optimization-wasm32` is installed (unless `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=native` is set).
 
@@ -21,12 +21,12 @@ On any other platform or architecture where Node.js runs, the pool automatically
 
 Per-image limits (`limitInputPixels`, `limitAllocatorMemoryBytes`, `limitOutputBytes`, and `timeoutMs`) and worker process isolation work on every platform. Some additional OS-level features vary by platform:
 
-| Platform | System call sandbox (`seccomp`) | Hard worker memory limit (`limitProcessMemoryBytes`) | Fast worker startup (`forkServer`) |
-| --- | --- | --- | --- |
-| Linux (`x64`, `arm64`, `riscv64`) | Yes | Yes (`RLIMIT_DATA`) | Yes |
-| macOS (`arm64`, `x64`) | No | No | Yes |
-| Windows (`x64`, `arm64`) | No | No | No (spawns each worker) |
-| WebAssembly (all OSes) | WebAssembly sandbox | Yes (WebAssembly memory maximum) | N/A (worker threads) |
+| Platform                          | System call sandbox (`seccomp`) | Hard worker memory limit (`limitProcessMemoryBytes`) | Fast worker startup (`forkServer`) |
+| --------------------------------- | ------------------------------- | ---------------------------------------------------- | ---------------------------------- |
+| Linux (`x64`, `arm64`, `riscv64`) | Yes                             | Yes (`RLIMIT_DATA`)                                  | Yes                                |
+| macOS (`arm64`, `x64`)            | No                              | No                                                   | Yes                                |
+| Windows (`x64`, `arm64`)          | No                              | No                                                   | No (spawns each worker)            |
+| WebAssembly (all OSes)            | WebAssembly sandbox             | Yes (WebAssembly memory maximum)                     | N/A (worker threads)               |
 
 See [Safety model](safety.md) for details on how these features work.
 

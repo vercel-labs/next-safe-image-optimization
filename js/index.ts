@@ -223,7 +223,9 @@ export class SafeImageOptimizationError extends Error {
 }
 
 function invalid(name: string, expected: string, value: unknown): TypeError {
-  return invalidOptions(`Expected ${expected} for ${name} but received ${String(value)} of type ${typeof value}`)
+  return invalidOptions(
+    `Expected ${expected} for ${name} but received ${String(value)} of type ${typeof value}`,
+  )
 }
 
 function checkInteger(name: string, value: unknown, min: number): number {
@@ -294,27 +296,38 @@ const BACKEND_VARIABLE = 'NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND'
 
 function createBackend(options: PoolOptions): Backend {
   const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1))
-  const idleTimeoutMs = optional(options.idleTimeoutMs, (v) => checkMs('idleTimeoutMs', v)) ?? 10_000
+  const idleTimeoutMs =
+    optional(options.idleTimeoutMs, (v) => checkMs('idleTimeoutMs', v)) ?? 10_000
   const memoryLimit =
-    optional(options.limitProcessMemoryBytes, (v) => checkInteger('limitProcessMemoryBytes', v, 0)) ??
-    DEFAULT_LIMIT_PROCESS_MEMORY
+    optional(options.limitProcessMemoryBytes, (v) =>
+      checkInteger('limitProcessMemoryBytes', v, 0),
+    ) ?? DEFAULT_LIMIT_PROCESS_MEMORY
   const forkServer: unknown = options.forkServer ?? true
   if (typeof forkServer !== 'boolean') {
     throw invalid('forkServer', 'boolean', forkServer)
   }
-  const maxImagesPerWorker = optional(options.maxImagesPerWorker, (v) => checkInteger('maxImagesPerWorker', v, 0))
+  const maxImagesPerWorker = optional(options.maxImagesPerWorker, (v) =>
+    checkInteger('maxImagesPerWorker', v, 0),
+  )
   const backend = process.env[BACKEND_VARIABLE] || undefined
   if (backend !== undefined) {
     checkOneOf(BACKEND_VARIABLE, backend, BACKENDS)
   }
   const maxWorkers = concurrency ?? availableParallelism()
-  const unavailable = (message: string) => new SafeImageOptimizationError('ERR_BACKEND_UNAVAILABLE', message)
+  const unavailable = (message: string) =>
+    new SafeImageOptimizationError('ERR_BACKEND_UNAVAILABLE', message)
   const wasm = (context: string) => {
     const wasmPath = findWasm()
     if (wasmPath === undefined) {
       throw unavailable(`${context}Install ${WASM_PACKAGE} to use the wasm backend.`)
     }
-    return new WasmBackend({ wasmPath, maxWorkers, idleTimeoutMs, maxImagesPerWorker: maxImagesPerWorker ?? 1, memoryLimit })
+    return new WasmBackend({
+      wasmPath,
+      maxWorkers,
+      idleTimeoutMs,
+      maxImagesPerWorker: maxImagesPerWorker ?? 1,
+      memoryLimit,
+    })
   }
   if (backend === 'wasm') {
     return wasm('')
@@ -558,7 +571,9 @@ export class Pipeline {
    */
   rotate(angle: number): this {
     if (angle === undefined) {
-      throw invalidOptions('rotate() requires an angle. To rotate using the EXIF orientation, use autoOrient().')
+      throw invalidOptions(
+        'rotate() requires an angle. To rotate using the EXIF orientation, use autoOrient().',
+      )
     }
     this.#rotate = angle
     return this
@@ -566,7 +581,11 @@ export class Pipeline {
 
   resize(width?: number | null, height?: number | null, options?: ResizeOptions): this
   resize(options: ResizeOptions): this
-  resize(widthOrOptions?: number | null | ResizeOptions, height?: number | null, options?: ResizeOptions): this {
+  resize(
+    widthOrOptions?: number | null | ResizeOptions,
+    height?: number | null,
+    options?: ResizeOptions,
+  ): this {
     if (widthOrOptions !== null && typeof widthOrOptions === 'object') {
       this.#resize = copyOptions(widthOrOptions)
     } else {
@@ -600,8 +619,12 @@ export class Pipeline {
 
   /** Processes the image. Without an explicit output format, uses the input format. */
   toBuffer(options?: ToBufferOptions & { resolveWithObject?: false }): Promise<Buffer>
-  toBuffer(options: ToBufferOptions & { resolveWithObject: true }): Promise<{ data: Buffer; info: OutputInfo }>
-  async toBuffer(options: ToBufferOptions = {}): Promise<Buffer | { data: Buffer; info: OutputInfo }> {
+  toBuffer(
+    options: ToBufferOptions & { resolveWithObject: true },
+  ): Promise<{ data: Buffer; info: OutputInfo }>
+  async toBuffer(
+    options: ToBufferOptions = {},
+  ): Promise<Buffer | { data: Buffer; info: OutputInfo }> {
     const { resolveWithObject, signal } = copyOptions(options)
     const transform: Unchecked<TransformOptions> = {
       limits: this.#limits,
@@ -645,7 +668,14 @@ export class Pipeline {
     const disposed = this.#disposed.signal
     const checked = checkSignal(signal)
     const combined = checked === undefined ? disposed : AbortSignal.any([checked, disposed])
-    const promise = this.#pool.run(this.#input, kind, options, this.#limitOutputBytes, this.#timeoutMs, combined)
+    const promise = this.#pool.run(
+      this.#input,
+      kind,
+      options,
+      this.#limitOutputBytes,
+      this.#timeoutMs,
+      combined,
+    )
     this.#pending.add(promise)
     try {
       return await promise

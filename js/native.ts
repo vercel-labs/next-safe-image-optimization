@@ -78,7 +78,9 @@ export interface WorkerBinary {
 export function findWorker(): WorkerBinary | undefined {
   const exe = process.platform === 'win32' ? '.exe' : ''
   const built = ['debug', 'release']
-    .map((profile) => join(__dirname, '..', 'target', profile, `safe-image-optimization-worker${exe}`))
+    .map((profile) =>
+      join(__dirname, '..', 'target', profile, `safe-image-optimization-worker${exe}`),
+    )
     .filter((path) => existsSync(path))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
   if (built.length > 0) {
@@ -92,7 +94,10 @@ export function findWorker(): WorkerBinary | undefined {
     }
     let path
     try {
-      path = join(dirname(require.resolve(`@next/safe-image-optimization-${platform}/package.json`)), name)
+      path = join(
+        dirname(require.resolve(`@next/safe-image-optimization-${platform}/package.json`)),
+        name,
+      )
     } catch {
       continue
     }
@@ -118,13 +123,19 @@ function exitFailure(code: number | null, signal: string | null): WorkerError {
     case EXIT_OUT_OF_MEMORY:
       return failure('ERR_OUT_OF_MEMORY', 'out of memory')
     case EXIT_MEMORY_LIMIT:
-      return failure('ERR_LIMIT_EXCEEDED', 'Limit exceeded: processing allocated more than limitAllocatorMemoryBytes')
+      return failure(
+        'ERR_LIMIT_EXCEEDED',
+        'Limit exceeded: processing allocated more than limitAllocatorMemoryBytes',
+      )
     case EXIT_VERSION_MISMATCH:
       return failure('ERR_WORKER_SPAWN', "the worker binary doesn't match the package's version")
     case EXIT_SANDBOX_FAILED:
       return failure('ERR_WORKER_SPAWN', 'the worker failed to set up its sandbox')
     default:
-      return failure('ERR_WORKER_CRASHED', `the worker crashed (${code === null ? `signal ${signal}` : `exit code ${code}`})`)
+      return failure(
+        'ERR_WORKER_CRASHED',
+        `the worker crashed (${code === null ? `signal ${signal}` : `exit code ${code}`})`,
+      )
   }
 }
 
@@ -142,17 +153,27 @@ interface Started {
  */
 function start(options: NativeOptions, forkServer: boolean): Promise<Started | WorkerError> {
   const memoryLimit = BigInt(options.memoryLimit) > U64_MAX ? U64_MAX : BigInt(options.memoryLimit)
-  const args = [VERSION, String(process.pid), String(memoryLimit), ...(forkServer ? ['--fork-server'] : [])]
+  const args = [
+    VERSION,
+    String(process.pid),
+    String(memoryLimit),
+    ...(forkServer ? ['--fork-server'] : []),
+  ]
   const stderr = options.inheritStderr ? 'inherit' : 'ignore'
   let child: ChildProcess
   try {
     child = spawn(options.workerPath, args, {
-      env: process.platform === 'linux' && process.env[IGNORE_SECCOMP_FAILURES] === '1' ? { [IGNORE_SECCOMP_FAILURES]: '1' } : {},
+      env:
+        process.platform === 'linux' && process.env[IGNORE_SECCOMP_FAILURES] === '1'
+          ? { [IGNORE_SECCOMP_FAILURES]: '1' }
+          : {},
       stdio: forkServer ? ['ignore', 'ignore', stderr, 'ipc'] : ['pipe', 'pipe', stderr],
       windowsHide: true,
     })
   } catch (error) {
-    return Promise.resolve(failure('ERR_WORKER_SPAWN', `failed to spawn ${options.workerPath}: ${String(error)}`))
+    return Promise.resolve(
+      failure('ERR_WORKER_SPAWN', `failed to spawn ${options.workerPath}: ${String(error)}`),
+    )
   }
   child.stdin?.on('error', ignore)
   child.stdout?.on('error', ignore)
@@ -163,7 +184,9 @@ function start(options: NativeOptions, forkServer: boolean): Promise<Started | W
     child.once('spawn', () => resolve({ child, exited }))
     // Also emitted if killing it fails (but not if it already exited).
     child.on('error', (error) => {
-      resolve(failure('ERR_WORKER_SPAWN', `failed to spawn ${options.workerPath}: ${error.message}`))
+      resolve(
+        failure('ERR_WORKER_SPAWN', `failed to spawn ${options.workerPath}: ${error.message}`),
+      )
     })
   })
 }
@@ -314,7 +337,10 @@ class ForkServer {
     const id = this.#nextId++
     const exited = new Promise<WorkerError>((resolve) => this.#workers.set(id, { resolve }))
     const spawn = await new Promise<Spawn | undefined>((resolve) => {
-      const timer = setTimeout(() => this.#abandon(`the fork server didn't reply in ${SERVER_TIMEOUT_MS}ms`), SERVER_TIMEOUT_MS)
+      const timer = setTimeout(
+        () => this.#abandon(`the fork server didn't reply in ${SERVER_TIMEOUT_MS}ms`),
+        SERVER_TIMEOUT_MS,
+      )
       this.#spawns.set(id, (spawn) => {
         clearTimeout(timer)
         this.#spawns.delete(id)
@@ -327,7 +353,10 @@ class ForkServer {
       if (spawn === undefined) {
         return { failure: this.#failure, serverExited: true }
       }
-      return { failure: failure('ERR_WORKER_SPAWN', `the fork server ${spawn.error}`), serverExited: false }
+      return {
+        failure: failure('ERR_WORKER_SPAWN', `the fork server ${spawn.error}`),
+        serverExited: false,
+      }
     }
     spawn.socket.unref()
     spawn.socket.on('error', ignore)
@@ -343,7 +372,10 @@ class ForkServer {
     this.#send({ type: 'kill', id })
     // If the server doesn't reap it, the server is stuck, so kill the server too. On Linux, that
     // also kills its workers (`PR_SET_PDEATHSIG`).
-    worker.timer = setTimeout(() => this.#abandon(`the fork server didn't reap a worker in ${SERVER_TIMEOUT_MS}ms`), SERVER_TIMEOUT_MS)
+    worker.timer = setTimeout(
+      () => this.#abandon(`the fork server didn't reap a worker in ${SERVER_TIMEOUT_MS}ms`),
+      SERVER_TIMEOUT_MS,
+    )
   }
 
   #send(message: Message) {
@@ -359,7 +391,9 @@ class ForkServer {
       const worker = this.#workers.get(reply.id)
       this.#workers.delete(reply.id)
       clearTimeout(worker?.timer)
-      worker?.resolve(exitFailure(reply.code, reply.signal === null ? null : signalName(reply.signal)))
+      worker?.resolve(
+        exitFailure(reply.code, reply.signal === null ? null : signalName(reply.signal)),
+      )
       return
     }
     const resolve = this.#spawns.get(reply.id)
@@ -383,7 +417,8 @@ class ForkServer {
 
   #onExit(exit: WorkerError) {
     this.#exited = true
-    this.#failure = this.#abandoned === undefined ? exit : failure('ERR_WORKER_SPAWN', this.#abandoned)
+    this.#failure =
+      this.#abandoned === undefined ? exit : failure('ERR_WORKER_SPAWN', this.#abandoned)
     for (const resolve of this.#spawns.values()) {
       resolve(undefined)
     }
@@ -440,7 +475,11 @@ export class NativeBackend implements Backend {
     this.#options = options
   }
 
-  run(input: Uint8Array, options: string, { kind, timeoutMs, maxResponseBytes, signal }: RunOptions): Promise<RunResult> {
+  run(
+    input: Uint8Array,
+    options: string,
+    { kind, timeoutMs, maxResponseBytes, signal }: RunOptions,
+  ): Promise<RunResult> {
     if (this.#closing !== undefined) {
       return Promise.resolve({ error: POOL_CLOSED })
     }
@@ -589,7 +628,8 @@ export class NativeBackend implements Backend {
       const fresh = this.#forkServer === undefined
       const pending = (this.#forkServer ??= ForkServer.start(this.#options))
       const server = await pending
-      const result: ForkResult = server instanceof ForkServer ? await server.fork() : { failure: server, serverExited: true }
+      const result: ForkResult =
+        server instanceof ForkServer ? await server.fork() : { failure: server, serverExited: true }
       if ('worker' in result) {
         return result.worker
       }
@@ -624,7 +664,9 @@ export class NativeBackend implements Backend {
     if (job.timeoutMs !== undefined && job.timeoutMs <= MAX_TIMEOUT_MS) {
       slot.timer = setTimeout(() => {
         this.#discard(slot)
-        job.resolve({ error: failure('ERR_TIMEOUT', `processing took longer than ${job.timeoutMs}ms`) })
+        job.resolve({
+          error: failure('ERR_TIMEOUT', `processing took longer than ${job.timeoutMs}ms`),
+        })
       }, job.timeoutMs)
     }
     slot.process.input.write(job.frame)

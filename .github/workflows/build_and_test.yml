@@ -50,7 +50,7 @@ jobs:
         run: cargo install typeshare-cli --version 1.13.4 --locked
       # Turbo runs these concurrently, but clippy and `cargo test` share target/debug, so cargo's
       # build directory lock serializes them. `--continue` reports every failure.
-      - run: pnpm exec turbo run format:check lint test typecheck --continue
+      - run: pnpm exec turbo run format:check format:js:check lint lint:js test typecheck --continue
       - wait: typeshare
       - name: Check that generated protocol types are up to date
         run: |

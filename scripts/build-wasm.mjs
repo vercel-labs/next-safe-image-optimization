@@ -16,20 +16,32 @@ const release = process.argv.includes('--release')
 
 const wasiSdk = process.env.WASI_SDK_PATH
 if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
-  console.error('Set WASI_SDK_PATH to a wasi-sdk installation (https://github.com/WebAssembly/wasi-sdk).')
+  console.error(
+    'Set WASI_SDK_PATH to a wasi-sdk installation (https://github.com/WebAssembly/wasi-sdk).',
+  )
   process.exit(1)
 }
 
 const exe = process.platform === 'win32' ? '.exe' : ''
-const cargo = spawnSync('cargo', ['build', '-p', 'nsio-wasm', '--locked', '--target', target, ...(release ? ['--release'] : [])], {
-  cwd: root,
-  stdio: 'inherit',
-  env: {
-    ...process.env,
-    CC_wasm32_wasip1: join(wasiSdk, 'bin', `clang${exe}`),
-    AR_wasm32_wasip1: join(wasiSdk, 'bin', `llvm-ar${exe}`),
+const cargo = spawnSync(
+  'cargo',
+  [
+    'build',
+    '--package=nsio-wasm',
+    '--locked',
+    `--target=${target}`,
+    ...(release ? ['--release'] : []),
+  ],
+  {
+    cwd: root,
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      CC_wasm32_wasip1: join(wasiSdk, 'bin', `clang${exe}`),
+      AR_wasm32_wasip1: join(wasiSdk, 'bin', `llvm-ar${exe}`),
+    },
   },
-})
+)
 if (cargo.status !== 0) {
   process.exit(cargo.status ?? 1)
 }

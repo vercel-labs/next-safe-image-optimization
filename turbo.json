@@ -75,7 +75,24 @@
     },
     "//#typecheck": {
       "dependsOn": ["//#build:js"],
-      "inputs": ["js/**", "tsconfig.json", "test/**/*.ts", "test/tsconfig.json", "test/package.json"]
+      "inputs": [
+        "js/**",
+        "tsconfig.json",
+        "test/**/*.ts",
+        "test/tsconfig.json",
+        "test/package.json"
+      ]
+    },
+    // oxlint and oxfmt. They see every file that git doesn't ignore (oxfmt formats Markdown, YAML,
+    // and JSON too), and take milliseconds, so they aren't cached instead of listing inputs.
+    "//#lint:js": {
+      "cache": false
+    },
+    "//#format:js": {
+      "cache": false
+    },
+    "//#format:js:check": {
+      "cache": false
     }
   }
 }

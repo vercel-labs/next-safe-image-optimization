@@ -13,7 +13,9 @@ export function readTarballs() {
     .sort()
     .map((file) => {
       const path = join(TARBALLS_DIR, file)
-      const manifest = JSON.parse(execFileSync('tar', ['-xzOf', path, 'package/package.json'], { encoding: 'utf8' }))
+      const manifest = JSON.parse(
+        execFileSync('tar', ['-xzOf', path, 'package/package.json'], { encoding: 'utf8' }),
+      )
       return { path, manifest }
     })
 }

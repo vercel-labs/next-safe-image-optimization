@@ -84,7 +84,9 @@ const ERROR_CODES: readonly `${generated.ErrorCode}`[] = Object.values(generated
  * anything larger means it's misbehaving. `limitOutputBytes` of 0 is no limit.
  */
 export function maxResponseBytes(limitOutputBytes: number): number {
-  return limitOutputBytes === 0 ? Number.MAX_SAFE_INTEGER : 4 + generated.MAX_JSON_BYTES + limitOutputBytes
+  return limitOutputBytes === 0
+    ? Number.MAX_SAFE_INTEGER
+    : 4 + generated.MAX_JSON_BYTES + limitOutputBytes
 }
 
 /**
@@ -161,7 +163,9 @@ export function decodeResponse(response: Uint8Array, kind: RequestKind): Respons
   }
   let json: unknown
   try {
-    json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(response.subarray(4, jsonEnd)))
+    json = JSON.parse(
+      new TextDecoder('utf-8', { fatal: true }).decode(response.subarray(4, jsonEnd)),
+    )
   } catch {
     throw new InvalidResponseError('invalid JSON')
   }
@@ -176,7 +180,11 @@ export function decodeResponse(response: Uint8Array, kind: RequestKind): Respons
   }
   switch (type) {
     case 'transform': {
-      const data = Buffer.from(response.buffer, response.byteOffset + jsonEnd, response.length - jsonEnd)
+      const data = Buffer.from(
+        response.buffer,
+        response.byteOffset + jsonEnd,
+        response.length - jsonEnd,
+      )
       const info: OutputInfo = {
         format: oneOf(meta.format, 'format', OUTPUT_FORMATS),
         width: integer(meta.width, 'width', 0, U32_MAX),

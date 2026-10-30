@@ -6,7 +6,10 @@ import type { InputFormat, ResizeOptions } from '../dist/index.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
 const pool = defaultPool()
-const png = () => fromRaw(pattern(40, 30, 4)).png().toBuffer()
+const png = () =>
+  fromRaw(pattern(40, 30, 4))
+    .png()
+    .toBuffer()
 
 test('uses the expected backend', () => {
   // So that CI can't silently test the native backend instead of the wasm one, or vice versa.
@@ -67,13 +70,21 @@ describe('argument validation', () => {
     ['rotate()', (p) => (p.rotate as () => Pipeline)(), 'rotate() requires an angle'],
     ['jpeg quality 0', (p) => p.jpeg({ quality: 0 }), 'jpeg.quality must be'],
     ['jpeg quality 101', (p) => p.jpeg({ quality: 101 })],
-    ['jpeg quality NaN', (p) => p.jpeg({ quality: NaN }), 'Expected a finite number for quality but received NaN'],
+    [
+      'jpeg quality NaN',
+      (p) => p.jpeg({ quality: NaN }),
+      'Expected a finite number for quality but received NaN',
+    ],
     ['jpeg progressive', (p) => p.jpeg({ progressive: true } as never)],
     ['jpeg mozjpeg', (p) => p.jpeg({ mozjpeg: 'yes' as never })],
     ['png compressionLevel', (p) => p.png({ compressionLevel: 10 })],
     ['png quality', (p) => p.png({ quality: 50 } as never), 'unknown field `quality`'],
     ['webp effort', (p) => p.webp({ effort: 7 })],
-    ['webp quality', (p) => p.webp({ quality: () => 50 } as never), 'Expected a JSON value for quality but received a function'],
+    [
+      'webp quality',
+      (p) => p.webp({ quality: () => 50 } as never),
+      'Expected a JSON value for quality but received a function',
+    ],
     ['webp quality bigint', (p) => p.webp({ quality: 50n } as never)],
     ['gif effort', (p) => p.gif({ effort: 0 })],
     ['limitInputPixels(-1)', (p) => p.limitInputPixels(-1), 'limitInputPixels must be'],
@@ -83,8 +94,16 @@ describe('argument validation', () => {
     ['limitInputPixels(true)', (p) => p.limitInputPixels(true as never)],
     ['limitAllocatorMemoryBytes(-1)', (p) => p.limitAllocatorMemoryBytes(-1)],
     ['limitOutputBytes(-1)', (p) => p.limitOutputBytes(-1)],
-    ['allowInputFormats([])', (p) => p.allowInputFormats([]), 'allowInputFormats() must not be empty'],
-    ['allowInputFormats bmp', (p) => p.allowInputFormats(['png', 'bmp' as never]), 'unknown variant `bmp`'],
+    [
+      'allowInputFormats([])',
+      (p) => p.allowInputFormats([]),
+      'allowInputFormats() must not be empty',
+    ],
+    [
+      'allowInputFormats bmp',
+      (p) => p.allowInputFormats(['png', 'bmp' as never]),
+      'unknown variant `bmp`',
+    ],
     ['allowInputFormats("png")', (p) => p.allowInputFormats('png' as never)],
     ['animated(false)', (p) => p.animated(false as never)],
     ['animated("all")', (p) => p.animated('all' as never), 'unknown variant `all`'],
@@ -98,12 +117,18 @@ describe('argument validation', () => {
 
   test('limits also apply to metadata()', async () => {
     await rejects(() => pool.prepare(Buffer.alloc(1)).limitInputPixels(-1).metadata())
-    await rejects(() => pool.prepare(Buffer.alloc(1)).animated('all' as never).metadata())
+    await rejects(() =>
+      pool
+        .prepare(Buffer.alloc(1))
+        .animated('all' as never)
+        .metadata(),
+    )
   })
 
   test('accepts null and undefined as unset', async () => {
     const input = await png()
-    const { info } = await pool.prepare(input)
+    const { info } = await pool
+      .prepare(input)
       .resize(null, 15, { kernel: undefined })
       .png(null as never)
       .toBuffer({ resolveWithObject: true })
@@ -126,8 +151,14 @@ describe('allowInputFormats', () => {
     await pool.prepare(input).allowInputFormats(['png']).toBuffer()
     await pool.prepare(input).allowInputFormats(['jpeg', 'png']).metadata()
     for (const formats of [['jpeg'], ['jpeg', 'webp', 'svg']] as InputFormat[][]) {
-      await assertRejectsWithCode(pool.prepare(input).allowInputFormats(formats).toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
-      await assertRejectsWithCode(pool.prepare(input).allowInputFormats(formats).metadata(), 'ERR_UNSUPPORTED_FORMAT')
+      await assertRejectsWithCode(
+        pool.prepare(input).allowInputFormats(formats).toBuffer(),
+        'ERR_UNSUPPORTED_FORMAT',
+      )
+      await assertRejectsWithCode(
+        pool.prepare(input).allowInputFormats(formats).metadata(),
+        'ERR_UNSUPPORTED_FORMAT',
+      )
     }
   })
 
@@ -145,7 +176,8 @@ describe('allowInputFormats', () => {
 
 describe('output', () => {
   test('resolveWithObject', async () => {
-    const { data, info } = await pool.prepare(await png())
+    const { data, info } = await pool
+      .prepare(await png())
       .resize(20)
       .webp()
       .toBuffer({ resolveWithObject: true })
@@ -154,7 +186,8 @@ describe('output', () => {
   })
 
   test('the last output format wins', async () => {
-    const { info } = await pool.prepare(await png())
+    const { info } = await pool
+      .prepare(await png())
       .jpeg()
       .gif()
       .toBuffer({ resolveWithObject: true })
@@ -168,7 +201,8 @@ describe('output', () => {
   })
 
   test('errors are SafeImageOptimizationErrors with a code', async () => {
-    const error = await pool.prepare(Buffer.from('not an image'))
+    const error = await pool
+      .prepare(Buffer.from('not an image'))
       .toBuffer()
       .catch((e: unknown) => e)
     assert.ok(error instanceof SafeImageOptimizationError)
@@ -181,11 +215,25 @@ describe('output', () => {
 describe('metadata', () => {
   const fixtures: [InputFormat, () => Promise<Buffer>, boolean][] = [
     ['jpeg', () => fromRaw(pattern(40, 30)).jpeg().toBuffer(), false],
-    ['png', () => fromRaw(pattern(40, 30, 4)).png().toBuffer(), true],
+    [
+      'png',
+      () =>
+        fromRaw(pattern(40, 30, 4))
+          .png()
+          .toBuffer(),
+      true,
+    ],
     ['webp', () => fromRaw(pattern(40, 30)).webp().toBuffer(), false],
     // sharp's GIF encoder always declares a transparent color index.
     ['gif', () => fromRaw(pattern(40, 30)).gif().toBuffer(), true],
-    ['tiff', () => fromRaw(pattern(40, 30, 4)).tiff({ compression: 'lzw' }).toBuffer(), true],
+    [
+      'tiff',
+      () =>
+        fromRaw(pattern(40, 30, 4))
+          .tiff({ compression: 'lzw' })
+          .toBuffer(),
+      true,
+    ],
   ]
   for (const [format, make, hasAlpha] of fixtures) {
     test(format, async () => {
@@ -203,7 +251,8 @@ describe('metadata', () => {
   }
 
   test('ignores operations', async () => {
-    const meta = await pool.prepare(await png())
+    const meta = await pool
+      .prepare(await png())
       .resize(10)
       .rotate(90)
       .metadata()

@@ -8,7 +8,13 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
-import { EXIT_MEMORY_LIMIT, EXIT_OUT_OF_MEMORY, POOL_CLOSED, decodeResponse, invalidResponse } from './protocol.js'
+import {
+  EXIT_MEMORY_LIMIT,
+  EXIT_OUT_OF_MEMORY,
+  POOL_CLOSED,
+  decodeResponse,
+  invalidResponse,
+} from './protocol.js'
 import type { Backend, RequestKind, RunOptions, RunResult } from './protocol.js'
 import type { WasmRequest, WasmWorkerData, WasmWorkerMessage } from './wasm-worker.js'
 
@@ -77,6 +83,8 @@ export class WasmBackend implements Backend {
   readonly name = 'wasm'
   #options: WasmOptions
   #module: WebAssembly.Module | undefined
+  // Only read by `??=`, which the rule doesn't count.
+  // oxlint-disable-next-line no-unused-private-class-members
   #loading: Promise<void> | undefined
   #slots = new Set<Slot>()
   #idle: Slot[] = []
@@ -92,7 +100,11 @@ export class WasmBackend implements Backend {
     this.#options = options
   }
 
-  run(input: Uint8Array, options: string, { kind, timeoutMs, maxResponseBytes, signal }: RunOptions): Promise<RunResult> {
+  run(
+    input: Uint8Array,
+    options: string,
+    { kind, timeoutMs, maxResponseBytes, signal }: RunOptions,
+  ): Promise<RunResult> {
     if (this.#closing !== undefined) {
       return Promise.resolve({ error: POOL_CLOSED })
     }
@@ -130,6 +142,7 @@ export class WasmBackend implements Backend {
   close(): Promise<void> {
     this.#closing ??= new Promise((resolve) => {
       this.#onClosed = resolve
+      // oxlint-disable-next-line unicorn/no-useless-spread -- `#discard` splices `#idle`
       for (const slot of [...this.#idle]) {
         this.#discard(slot)
       }
@@ -149,6 +162,7 @@ export class WasmBackend implements Backend {
       job.resolve({ error: POOL_CLOSED })
     }
     const closed = this.close()
+    // oxlint-disable-next-line unicorn/no-useless-spread -- `#discard` can add to `#slots`
     for (const slot of [...this.#slots]) {
       this.#discard(slot)
     }
@@ -215,7 +229,10 @@ export class WasmBackend implements Backend {
     const memoryLimit = Math.min(this.#options.memoryLimit || MAX_MEMORY_BYTES, MAX_MEMORY_BYTES)
     const maximumPages = Math.max(INITIAL_PAGES, Math.floor(memoryLimit / PAGE_SIZE))
     const workerData: WasmWorkerData = { module, initialPages: INITIAL_PAGES, maximumPages }
-    const slot: Slot = { worker: new Worker(join(__dirname, 'wasm-worker.js'), { workerData }), responses: 0 }
+    const slot: Slot = {
+      worker: new Worker(join(__dirname, 'wasm-worker.js'), { workerData }),
+      responses: 0,
+    }
     this.#slots.add(slot)
     slot.worker.on('message', (message: WasmWorkerMessage) => {
       const job = slot.job
@@ -239,7 +256,12 @@ export class WasmBackend implements Backend {
         job.resolve(failure('ERR_OUT_OF_MEMORY', 'out of memory'))
         this.#discard(slot)
       } else if (message.exit === EXIT_MEMORY_LIMIT) {
-        job.resolve(failure('ERR_LIMIT_EXCEEDED', 'Limit exceeded: processing allocated more than limitAllocatorMemoryBytes'))
+        job.resolve(
+          failure(
+            'ERR_LIMIT_EXCEEDED',
+            'Limit exceeded: processing allocated more than limitAllocatorMemoryBytes',
+          ),
+        )
         this.#discard(slot)
       } else {
         const reason = message.exit === undefined ? message.crash : `exit code ${message.exit}`

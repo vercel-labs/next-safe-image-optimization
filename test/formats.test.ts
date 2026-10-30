@@ -7,7 +7,15 @@ import { gzipSync } from 'node:zlib'
 
 import { defaultPool } from '../dist/index.js'
 import type { OutputFormat } from '../dist/index.js'
-import { assertRejectsWithCode, assertSimilar, crc32, formatOf, fromRaw, pattern, sharp } from './helpers.ts'
+import {
+  assertRejectsWithCode,
+  assertSimilar,
+  crc32,
+  formatOf,
+  fromRaw,
+  pattern,
+  sharp,
+} from './helpers.ts'
 
 const pool = defaultPool()
 const rgb = pattern(96, 64)
@@ -36,7 +44,9 @@ const inputs: Record<string, () => Promise<Buffer>> = {
   'deflate tiff with alpha': () => fromRaw(rgba).tiff({ compression: 'deflate' }).toBuffer(),
   // A single tile that's larger than the image.
   'tiled tiff': () =>
-    fromRaw(rgb).tiff({ compression: 'none', tile: true, tileWidth: 256, tileHeight: 256 }).toBuffer(),
+    fromRaw(rgb)
+      .tiff({ compression: 'none', tile: true, tileWidth: 256, tileHeight: 256 })
+      .toBuffer(),
   avif: () => fromRaw(rgb).avif({ quality: 90 }).toBuffer(),
   '4:2:0 avif': () => fromRaw(rgb).avif({ quality: 90, chromaSubsampling: '4:2:0' }).toBuffer(),
   'avif with alpha': () => fromRaw(rgba).avif({ quality: 90 }).toBuffer(),
@@ -53,7 +63,10 @@ describe('decodes and re-encodes every format', () => {
     for (const format of outputs) {
       test(`${name} -> ${format}`, async () => {
         const input = await make()
-        const { data, info } = await pool.prepare(input)[format]().toBuffer({ resolveWithObject: true })
+        const { data, info } = await pool
+          .prepare(input)
+          [format]()
+          .toBuffer({ resolveWithObject: true })
         assert.equal(formatOf(data), format)
         assert.equal(info.format, format)
         assert.deepEqual([info.width, info.height], [rgb.width, rgb.height])
@@ -80,7 +93,10 @@ describe('output format defaults to the input format', () => {
 
   for (const name of ['tiff', 'avif'] as const) {
     test(`${name} has no default output format`, async () => {
-      await assertRejectsWithCode(pool.prepare(await inputs[name]()).toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
+      await assertRejectsWithCode(
+        pool.prepare(await inputs[name]()).toBuffer(),
+        'ERR_UNSUPPORTED_FORMAT',
+      )
     })
   }
 })
@@ -89,7 +105,10 @@ describe('alpha', () => {
   test('is preserved for png and webp', async () => {
     const input = await inputs['rgba png']()
     for (const format of ['png', 'webp'] as const) {
-      const { data, info } = await pool.prepare(input)[format]().toBuffer({ resolveWithObject: true })
+      const { data, info } = await pool
+        .prepare(input)
+        [format]()
+        .toBuffer({ resolveWithObject: true })
       assert.equal(info.channels, 4)
       await assertSimilar(data, input, 4, 4)
     }
@@ -97,7 +116,10 @@ describe('alpha', () => {
 
   test('is flattened onto black for jpeg, like sharp', async () => {
     const input = await inputs['rgba png']()
-    const { data, info } = await pool.prepare(input).jpeg({ quality: 95 }).toBuffer({ resolveWithObject: true })
+    const { data, info } = await pool
+      .prepare(input)
+      .jpeg({ quality: 95 })
+      .toBuffer({ resolveWithObject: true })
     assert.equal(info.channels, 3)
     await assertSimilar(data, await sharp(input).jpeg({ quality: 95 }).toBuffer(), 3)
   })
@@ -106,11 +128,16 @@ describe('alpha', () => {
 describe('avif', () => {
   test('metadata', async () => {
     const meta = await pool.prepare(await inputs['avif with alpha']()).metadata()
-    assert.deepEqual([meta.format, meta.width, meta.height, meta.hasAlpha], ['avif', rgb.width, rgb.height, true])
+    assert.deepEqual(
+      [meta.format, meta.width, meta.height, meta.hasAlpha],
+      ['avif', rgb.width, rgb.height, true],
+    )
   })
 
   test('odd dimensions with chroma subsampling', async () => {
-    const input = await fromRaw(pattern(97, 65)).avif({ quality: 90, chromaSubsampling: '4:2:0' }).toBuffer()
+    const input = await fromRaw(pattern(97, 65))
+      .avif({ quality: 90, chromaSubsampling: '4:2:0' })
+      .toBuffer()
     const { data, info } = await pool.prepare(input).png().toBuffer({ resolveWithObject: true })
     assert.deepEqual([info.width, info.height], [97, 65])
     await assertSimilar(data, input, 8)
@@ -155,7 +182,10 @@ describe('svg', () => {
     const meta = await svg(input).metadata()
     const theirs = await sharp(input).metadata()
     assert.deepEqual([meta.format, meta.width, meta.height, meta.hasAlpha], ['svg', 120, 63, true])
-    assert.deepEqual([theirs.format, theirs.width, theirs.height, theirs.hasAlpha], ['svg', 120, 63, true])
+    assert.deepEqual(
+      [theirs.format, theirs.width, theirs.height, theirs.hasAlpha],
+      ['svg', 120, 63, true],
+    )
   })
 
   test('renders like sharp, with png as the default output', async () => {
@@ -186,7 +216,12 @@ describe('svg', () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'nsio-svg-'))
     try {
       const file = path.join(dir, 'red.png')
-      await writeFile(file, await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } }).png().toBuffer())
+      await writeFile(
+        file,
+        await sharp({ create: { width: 4, height: 4, channels: 3, background: 'red' } })
+          .png()
+          .toBuffer(),
+      )
       for (const href of [file, `file://${file}`, 'red.png']) {
         const input = Buffer.from(
           `<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><image width="4" height="4" href="${href}"/></svg>`,
@@ -206,14 +241,19 @@ describe('svg', () => {
   })
 
   test('svgz is not supported', async () => {
-    const input = gzipSync(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>'))
+    const input = gzipSync(
+      Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>'),
+    )
     await assertRejectsWithCode(svg(input).png().toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
   })
 
   test('limitInputPixels applies to the rendered size', async () => {
     const input = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>')
     await svg(input).limitInputPixels(400).resize(20).png().toBuffer()
-    await assertRejectsWithCode(svg(input).limitInputPixels(400).resize(30).png().toBuffer(), 'ERR_LIMIT_EXCEEDED')
+    await assertRejectsWithCode(
+      svg(input).limitInputPixels(400).resize(30).png().toBuffer(),
+      'ERR_LIMIT_EXCEEDED',
+    )
   })
 })
 
@@ -232,11 +272,16 @@ describe('encoder options', () => {
       const ours = await pool.prepare(input).jpeg({ quality, mozjpeg: true }).toBuffer()
       const theirs = await sharp(input).jpeg({ quality, mozjpeg: true }).toBuffer()
       const ratio = ours.length / theirs.length
-      assert.ok(ratio > 0.95 && ratio < 1.05, `quality ${quality}: ${ours.length} vs ${theirs.length} bytes`)
+      assert.ok(
+        ratio > 0.95 && ratio < 1.05,
+        `quality ${quality}: ${ours.length} vs ${theirs.length} bytes`,
+      )
       await assertSimilar(ours, theirs, 3)
     }
     const jpegEncoder = await pool.prepare(input).jpeg().toBuffer()
-    assert.ok((await pool.prepare(input).jpeg({ mozjpeg: true }).toBuffer()).length < jpegEncoder.length)
+    assert.ok(
+      (await pool.prepare(input).jpeg({ mozjpeg: true }).toBuffer()).length < jpegEncoder.length,
+    )
   })
 
   test('webp lossless is lossless', async () => {
@@ -271,7 +316,9 @@ describe('animated input', () => {
   /** Two frames, so the first frame is distinguishable. */
   async function animated(format: 'gif' | 'webp'): Promise<Buffer> {
     const frames = [pattern(32, 32), pattern(32, 32)].map((raw, i) =>
-      fromRaw({ ...raw, data: i === 0 ? raw.data : Buffer.alloc(raw.data.length, 128) }).png().toBuffer(),
+      fromRaw({ ...raw, data: i === 0 ? raw.data : Buffer.alloc(raw.data.length, 128) })
+        .png()
+        .toBuffer(),
     )
     const image = sharp(await Promise.all(frames), { join: { animated: true } })
     return format === 'gif' ? image.gif().toBuffer() : image.webp({ lossless: true }).toBuffer()
@@ -313,14 +360,29 @@ describe('animated input', () => {
     const avis = await fromRaw(pattern(32, 32)).avif().toBuffer()
     avis.write('avis', 8, 'latin1')
     for (const input of [await animated('gif'), await animated('webp'), await apng(), avis]) {
-      await assertRejectsWithCode(pool.prepare(input).animated('reject').png().toBuffer(), 'ERR_ANIMATED')
+      await assertRejectsWithCode(
+        pool.prepare(input).animated('reject').png().toBuffer(),
+        'ERR_ANIMATED',
+      )
       await assertRejectsWithCode(pool.prepare(input).animated('reject').metadata(), 'ERR_ANIMATED')
     }
   })
 
   test("animated('reject') accepts still images", async () => {
-    for (const name of ['png', 'gif', 'lossy webp', 'lossy webp with alpha', 'avif', 'baseline jpeg', 'tiff']) {
-      await pool.prepare(await inputs[name]()).animated('reject').png().toBuffer()
+    for (const name of [
+      'png',
+      'gif',
+      'lossy webp',
+      'lossy webp with alpha',
+      'avif',
+      'baseline jpeg',
+      'tiff',
+    ]) {
+      await pool
+        .prepare(await inputs[name]())
+        .animated('reject')
+        .png()
+        .toBuffer()
     }
   })
 })

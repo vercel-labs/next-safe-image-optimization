@@ -26,7 +26,12 @@ function png(width, height) {
     }
   }
   const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-  return Buffer.concat([signature, chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))])
+  return Buffer.concat([
+    signature,
+    chunk('IHDR', header),
+    chunk('IDAT', deflateSync(rows)),
+    chunk('IEND', Buffer.alloc(0)),
+  ])
 }
 
 async function main() {
@@ -36,10 +41,21 @@ async function main() {
     throw new Error(`expected the ${backend} backend, got ${pool.backend}`)
   }
   const input = png(64, 48)
-  const outputs = { jpeg: { mozjpeg: false }, 'jpeg (mozjpeg)': { mozjpeg: true }, png: {}, webp: {}, gif: {} }
+  const outputs = {
+    jpeg: { mozjpeg: false },
+    'jpeg (mozjpeg)': { mozjpeg: true },
+    png: {},
+    webp: {},
+    gif: {},
+  }
   for (const [name, options] of Object.entries(outputs)) {
     const format = name.split(' ')[0]
-    const { info } = await pool.prepare(input).timeoutMs(30_000).resize(32)[format](options).toBuffer({ resolveWithObject: true })
+    const { info } = await pool
+      .prepare(input)
+      .timeoutMs(30_000)
+      .resize(32)
+      [format](options)
+      .toBuffer({ resolveWithObject: true })
     if (info.format !== format || info.width !== 32 || info.height !== 24) {
       throw new Error(`${name}: unexpected output ${JSON.stringify(info)}`)
     }

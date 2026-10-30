@@ -4,13 +4,15 @@ Images are always output as [8-bit sRGB](https://en.wikipedia.org/wiki/SRGB), wi
 
 ## ICC profiles
 
-| Input Format | Converted? |
-| --- | --- |
-| JPEG, PNG, WebP | Yes |
-| TIFF | Yes, unless the profile is large relative to a very small image (e.g. under ~128×128) |
-| AVIF | No, [most AVIF images use H.273 CICP values instead](https://bugzilla.mozilla.org/show_bug.cgi?id=1634741#:~:text=The%20bug%20isn%27t,entirely%20appropriate%20here.) |
-| AVIF, GIF | No, not widely used |
-| SVG | No, rendered directly as sRGB |
+| Input Format    | Converted?                                                                            |
+| --------------- | ------------------------------------------------------------------------------------- |
+| JPEG, PNG, WebP | Yes                                                                                   |
+| TIFF            | Yes, unless the profile is large relative to a very small image (e.g. under ~128×128) |
+| AVIF            | No, [most AVIF images use H.273 CICP values instead][CICP]                            |
+| AVIF, GIF       | No, not widely used                                                                   |
+| SVG             | No, rendered directly as sRGB                                                         |
+
+[CICP]: https://bugzilla.mozilla.org/show_bug.cgi?id=1634741#:~:text=The%20bug%20isn%27t,entirely%20appropriate%20here.
 
 - Conversion uses the perceptual rendering intent. Alpha is left unchanged.
 - Mismatched, invalid, unsupported, or oversized (>10 MB) profiles are ignored, and the image is treated as sRGB.
@@ -18,12 +20,12 @@ Images are always output as [8-bit sRGB](https://en.wikipedia.org/wiki/SRGB), wi
 
 ## Bit depth
 
-| Input Format | Handling |
-| --- | --- |
-| 8-bit JPEG, PNG, WebP, GIF, TIFF, AVIF | Decoded as 8-bit |
-| 10- and 12-bit AVIF | Reduced to 8-bit |
-| 16-bit PNG and TIFF | Reduced to 8-bit |
-| 32-bit float TIFF | Clamped to 0–1 and reduced to 8-bit as if gamma-encoded (potentially incorrect) |
+| Input Format                           | Handling                                                                        |
+| -------------------------------------- | ------------------------------------------------------------------------------- |
+| 8-bit JPEG, PNG, WebP, GIF, TIFF, AVIF | Decoded as 8-bit                                                                |
+| 10- and 12-bit AVIF                    | Reduced to 8-bit                                                                |
+| 16-bit PNG and TIFF                    | Reduced to 8-bit                                                                |
+| 32-bit float TIFF                      | Clamped to 0–1 and reduced to 8-bit as if gamma-encoded (potentially incorrect) |
 
 Output is always 8 bits per channel. We do not currently use or preserve PNG palettes to improve compression.
 
@@ -50,15 +52,15 @@ There is no HDR support or tone mapping:
 
 Like our defaults, sharp converts images with an embedded profile to 8-bit sRGB and strips all metadata unless configured otherwise.
 
-| Input | Compared to sharp's defaults |
-| --- | --- |
-| 8-bit JPEG, PNG, WebP, or TIFF with an ICC profile | **Same:** converted to sRGB |
-| 16-bit PNG or TIFF with an ICC profile | **Better:** converted to sRGB (sharp converts 16-bit RGB to untagged P3, leaving it desaturated, and skips 16-bit grayscale profiles) |
-| AVIF with an ICC profile | **Worse:** profile is ignored |
-| CICP-tagged wide-gamut AVIF or PNG | **Same:** CICP is ignored and pixels are treated as sRGB |
-| CMYK JPEG or TIFF | **Worse:** naive conversion instead of using an embedded or default CMYK profile |
-| Float (scRGB) TIFF | **Worse:** treated as gamma-encoded instead of linear |
-| HDR (PQ, HLG, Ultra HDR gain maps) | **Same:** PQ/HLG aren't tone-mapped, and JPEG gain maps are dropped |
+| Input                                              | Compared to sharp's defaults                                                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 8-bit JPEG, PNG, WebP, or TIFF with an ICC profile | **Same:** converted to sRGB                                                                                                           |
+| 16-bit PNG or TIFF with an ICC profile             | **Better:** converted to sRGB (sharp converts 16-bit RGB to untagged P3, leaving it desaturated, and skips 16-bit grayscale profiles) |
+| AVIF with an ICC profile                           | **Worse:** profile is ignored                                                                                                         |
+| CICP-tagged wide-gamut AVIF or PNG                 | **Same:** CICP is ignored and pixels are treated as sRGB                                                                              |
+| CMYK JPEG or TIFF                                  | **Worse:** naive conversion instead of using an embedded or default CMYK profile                                                      |
+| Float (scRGB) TIFF                                 | **Worse:** treated as gamma-encoded instead of linear                                                                                 |
+| HDR (PQ, HLG, Ultra HDR gain maps)                 | **Same:** PQ/HLG aren't tone-mapped, and JPEG gain maps are dropped                                                                   |
 
 ### Unsupported sharp options
 

@@ -15,7 +15,16 @@
 // Usage: node scripts/pack-npm.mjs (with cargo-about installed)
 
 import { execFileSync } from 'node:child_process'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TARBALLS_DIR as out } from './npm-tarballs.mjs'
@@ -63,7 +72,11 @@ const packages = TARGETS.map((target) => {
       preferUnplugged: true,
     },
     files: {
-      [binary]: { from: join(root, binary), executable: true, hint: `Build it with scripts/build-native.mjs --target ${target}.` },
+      [binary]: {
+        from: join(root, binary),
+        executable: true,
+        hint: `Build it with scripts/build-native.mjs --target ${target}.`,
+      },
       'README.md': `# ${packageName}\n\n${description} Install ${main} instead, which depends on it.\n`,
       'license.md': license,
     },
@@ -74,18 +87,31 @@ const wasmName = `${pkg.name}-wasm32`
 const wasmDescription = `The wasm build of ${pkg.name}, for platforms without a native worker binary.`
 packages.push({
   target: 'wasm32-wasip1',
-  manifest: { name: wasmName, description: wasmDescription, ...common, files: ['safe-image-optimization.wasm', NOTICES] },
+  manifest: {
+    name: wasmName,
+    description: wasmDescription,
+    ...common,
+    files: ['safe-image-optimization.wasm', NOTICES],
+  },
   files: {
-    'safe-image-optimization.wasm': { from: join(root, 'safe-image-optimization.wasm'), hint: 'Build it with `pnpm build:wasm:release`.' },
+    'safe-image-optimization.wasm': {
+      from: join(root, 'safe-image-optimization.wasm'),
+      hint: 'Build it with `pnpm build:wasm:release`.',
+    },
     'README.md':
       `# ${wasmName}\n\n${wasmDescription} Install it alongside ${main}, which uses it when there's no ` +
-      "native worker binary for the platform (or with `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm`).\n",
+      'native worker binary for the platform (or with `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm`).\n',
     'license.md': license,
   },
 })
 
 // Without the fields that are only for developing this repo.
-const { scripts, devDependencies, packageManager, ...manifest } = pkg
+const {
+  scripts: _scripts,
+  devDependencies: _devDependencies,
+  packageManager: _packageManager,
+  ...manifest
+} = pkg
 packages.push({
   manifest: { ...manifest, optionalDependencies },
   files: {
@@ -135,5 +161,8 @@ const notices = thirdPartyNotices()
 rmSync(out, { recursive: true, force: true })
 mkdirSync(out)
 for (const { target, manifest, files } of packages) {
-  pack(manifest, target === undefined ? files : { ...files, [NOTICES]: notices(target, manifest.name) })
+  pack(
+    manifest,
+    target === undefined ? files : { ...files, [NOTICES]: notices(target, manifest.name) },
+  )
 }

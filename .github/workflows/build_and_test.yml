@@ -436,3 +436,24 @@ jobs:
       - run: node --test test/*.test.js
         env:
           NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND: wasm
+
+  # We block merging unless this job passes. This is enforced by a "require status checks to pass"
+  # rule on the main branch.
+  # <https://github.com/vercel-labs/next-safe-image-optimization/settings/rules/26230958>
+  tests-pass:
+    needs:
+      # Some of these jobs are dependencies of other jobs. If they fail, the dependent jobs are
+      # skipped, which would let this job pass if the dependency isn't listed here.
+      - lint
+      - build
+      - build-wasm
+      - test
+      - test-musl
+      - test-riscv64
+      - test-wasm
+    if: always()
+    runs-on: ubuntu-26.04
+    name: thank you, next
+    steps:
+      - run: exit 1
+        if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}

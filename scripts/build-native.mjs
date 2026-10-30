@@ -17,8 +17,8 @@ const root = join(import.meta.dirname, '..')
 /** The oldest glibc that official Node.js binaries support. */
 const GLIBC_VERSION = '2.28'
 
-function run(command, args) {
-  const result = spawnSync(command, args, { cwd: root, stdio: 'inherit' })
+function run(command, args, env) {
+  const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', env: { ...process.env, ...env } })
   if (result.status !== 0) {
     process.exit(result.status ?? 1)
   }
@@ -46,7 +46,10 @@ if (target === undefined) {
 // cargo-zigbuild takes the glibc version as a suffix (otherwise, it's zig's default), but its output
 // directory doesn't include it.
 const cargoTarget = cross && target.endsWith('-gnu') ? `${target}.${GLIBC_VERSION}` : target
-run('cargo', [cross ? 'zigbuild' : 'build', '-p', 'nsio-worker', '--release', '--locked', '--target', cargoTarget, ...extra])
+// On riscv, rav1d enables `stdarch_riscv_feature_detection` (unstable) for
+// `is_riscv_feature_detected!`, even without asm. This allows nightly features in rav1d only.
+const env = target.startsWith('riscv') ? { RUSTC_BOOTSTRAP: 'rav1d' } : {}
+run('cargo', [cross ? 'zigbuild' : 'build', '-p', 'nsio-worker', '--release', '--locked', '--target', cargoTarget, ...extra], env)
 const name = platform(target)
 if (name === undefined) {
   console.error(`unsupported target: ${target}`)

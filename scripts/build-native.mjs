@@ -46,9 +46,15 @@ if (target === undefined) {
 // cargo-zigbuild takes the glibc version as a suffix (otherwise, it's zig's default), but its output
 // directory doesn't include it.
 const cargoTarget = cross && target.endsWith('-gnu') ? `${target}.${GLIBC_VERSION}` : target
-// On riscv, rav1d enables `stdarch_riscv_feature_detection` (unstable) for
-// `is_riscv_feature_detected!`, even without asm. This allows nightly features in rav1d only.
-const env = target.startsWith('riscv') ? { RUSTC_BOOTSTRAP: 'rav1d' } : {}
+const env = {}
+if (target.startsWith('riscv')) {
+  // rav1d enables `stdarch_riscv_feature_detection` (unstable) for `is_riscv_feature_detected!`,
+  // even without asm. This allows nightly features in rav1d only.
+  env.RUSTC_BOOTSTRAP = 'rav1d'
+  if (cross) {
+    env.CARGO_ZIGBUILD_ZIG_PATH = join(root, 'scripts', 'zig-without-march.sh')
+  }
+}
 run('cargo', [cross ? 'zigbuild' : 'build', '-p', 'nsio-worker', '--release', '--locked', '--target', cargoTarget, ...extra], env)
 const name = platform(target)
 if (name === undefined) {

@@ -106,7 +106,12 @@ packages.push({
 })
 
 // Without the fields that are only for developing this repo.
-const { scripts, devDependencies, packageManager, ...manifest } = pkg
+const {
+  scripts: _scripts,
+  devDependencies: _devDependencies,
+  packageManager: _packageManager,
+  ...manifest
+} = pkg
 packages.push({
   manifest: { ...manifest, optionalDependencies },
   files: {

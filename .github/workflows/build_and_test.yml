@@ -341,7 +341,7 @@ jobs:
       #   (`ERR_WORKER_SPAWN`). This runs them unfiltered instead. Nothing here tests the filters.
       # - NSIO_TEST_QEMU: QEMU ignores `RLIMIT_DATA` (it would also limit QEMU's own allocations),
       #   so this skips the test that `limitProcessMemoryBytes` is enforced.
-      # The fork server tests need `ps`, which the image doesn't have.
+      # The image doesn't have `ps` (for the fork server tests) or libatomic (for Node.js).
       - name: Test in QEMU
         run: |
           set -euo pipefail
@@ -352,7 +352,7 @@ jobs:
             -e NSIO_TEST_QEMU=1 \
             "$IMAGE" sh -euc '
               apt-get update
-              apt-get install -y --no-install-recommends procps
+              apt-get install -y --no-install-recommends procps libatomic1
               /opt/node/bin/node --test test/*.test.js
             '
 

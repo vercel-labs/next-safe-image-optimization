@@ -41,11 +41,11 @@
       "cache": false
     },
     "test:wasm": {
-      "dependsOn": ["build", "//#build:wasm"],
+      "dependsOn": ["build", "nsio-wasm#build:wasm"],
       "cache": false
     },
     "test:wasm:release": {
-      "dependsOn": ["build", "//#build:wasm:release"],
+      "dependsOn": ["build", "nsio-wasm#build:wasm:release"],
       "cache": false
     }
   }

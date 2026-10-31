@@ -4,8 +4,8 @@
   "scripts": {
     "build": "turbo run nsio-worker#build @next/safe-image-optimization#build",
     "build:release": "turbo run nsio-worker#build:release @next/safe-image-optimization#build",
-    "build:wasm": "node scripts/build-wasm.mjs",
-    "build:wasm:release": "node scripts/build-wasm.mjs --release",
+    "build:wasm": "turbo run nsio-wasm#build:wasm @next/safe-image-optimization#build",
+    "build:wasm:release": "turbo run nsio-wasm#build:wasm:release @next/safe-image-optimization#build",
     "test": "turbo run test",
     "test:release": "turbo run test:release",
     "test:wasm": "turbo run test:wasm",

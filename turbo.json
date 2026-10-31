@@ -58,18 +58,7 @@
       "cache": false
     },
 
-    // Root package.json scripts. The wasm build goes through a script that turbo can't see into
-    // (wasi-sdk's C compiler, and the import check), so it isn't cached. Cargo has its own
-    // incremental cache.
-    "//#build:wasm": {
-      "cache": false,
-      "passThroughEnv": ["WASI_SDK_PATH"]
-    },
-    "//#build:wasm:release": {
-      "cache": false,
-      "passThroughEnv": ["WASI_SDK_PATH"]
-    },
-    // oxlint and oxfmt, for the whole repo (oxfmt formats Markdown, YAML, and JSON too). The fixes
+    // Root package.json scripts: oxlint and oxfmt, for the whole repo (oxfmt formats Markdown, YAML, and JSON too). The fixes
     // write files, so they aren't cached, and oxfmt formats after oxlint's fixes, so that they don't
     // write the same files at once.
     "//#lint:js": {},

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Sets the version of every package: package.json, the Cargo workspace (which the worker checks
-// against package.json's), and Cargo.lock. The platform and wasm packages get theirs from
-// package.json when they're packed (scripts/pack-npm.mjs).
+// Sets the version of every package: the JS package's package.json, the Cargo workspace (which the
+// worker checks against the JS package's), and Cargo.lock. The platform and wasm packages get theirs
+// from the JS package when they're packed (scripts/pack-npm.mjs).
 //
 // Usage: node scripts/set-version.mjs <version>
 
@@ -27,7 +27,11 @@ function replace(file, pattern, replacement) {
   writeFileSync(path, text.replace(pattern, `$1${replacement}`))
 }
 
-replace('package.json', /^(  "version": )"[^"]*"/m, JSON.stringify(version))
+replace(
+  join('packages', 'nsio', 'package.json'),
+  /^(  "version": )"[^"]*"/m,
+  JSON.stringify(version),
+)
 replace('Cargo.toml', /(\[workspace\.package\][^[]*?\nversion = )"[^"]*"/, JSON.stringify(version))
 const cargo = spawnSync('cargo', ['update', '--workspace'], { cwd: root, stdio: 'inherit' })
 process.exit(cargo.status ?? 1)

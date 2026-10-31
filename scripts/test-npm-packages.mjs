@@ -21,12 +21,18 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readTarballs } from './npm-tarballs.mjs'
 
-const root = join(import.meta.dirname, '..')
-const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+const packageDir = join(import.meta.dirname, '..', 'packages', 'nsio')
+const pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'))
 const tarballs = new Map(
   readTarballs().map(({ path, manifest }) => [manifest.name, `file:${path}`]),
 )
 const wasm = `${pkg.name}-wasm32`
+// Without the variables that would replace the installed binaries.
+const {
+  NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH: _workerPath,
+  NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH: _wasmPath,
+  ...env
+} = process.env
 
 const dir = mkdtempSync(join(tmpdir(), 'nsio-test-packages-'))
 try {
@@ -55,7 +61,7 @@ try {
     execFileSync('node', ['test.cjs'], {
       cwd: dir,
       stdio: 'inherit',
-      env: { ...process.env, NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND: backend },
+      env: { ...env, NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND: backend },
     })
   }
 } finally {

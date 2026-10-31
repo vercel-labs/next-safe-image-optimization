@@ -13,6 +13,9 @@
     // For `command`.
     "experimentalTaskCommand": true
   },
+  // Packages' own tasks are in their turbo.json (packages/nsio and crates/worker). These are the root
+  // package's (`//`), and the Cargo workspace's (`nsio-cargo`), which is also at the root, so it
+  // can't have its own.
   "tasks": {
     // The built-in commands use `--workspace`, which includes vendor/avif-decode. These only include
     // the default members (crates/*).
@@ -21,77 +24,50 @@
     },
     "nsio-cargo#test": {
       "command": ["cargo", "test", "--locked"],
-      // The worker's tests check its version against package.json's.
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/package.json"]
+      // The worker's tests check its version against the JS package's.
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/nsio/package.json"]
+    },
+    // `turbo quality` runs every package's lints, formatting checks, and typechecks.
+    "nsio-cargo#quality": {
+      "dependsOn": ["nsio-cargo#lint", "nsio-cargo#format:check"]
     },
     "nsio-cargo#format:check": {
       "command": ["cargo", "fmt", "--all", "--check"]
     },
-
-    // `pnpm build` uses the built-in `nsio-worker#build` (cached, with the worker as its output).
-    // This is the same with `--release`, which can't be passed with `-- --release` when `build:js`
-    // runs alongside it. A task with a `command` doesn't get the built-in hashing (only the crate's
-    // own files), so these are the files the worker is built from.
-    "nsio-worker#build:release": {
-      "command": ["cargo", "build", "--package=nsio-worker", "--locked", "--release"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "$TURBO_ROOT$/crates/core/Cargo.toml",
-        "$TURBO_ROOT$/crates/core/src/**",
-        "$TURBO_ROOT$/vendor/avif-decode/Cargo.toml",
-        "$TURBO_ROOT$/vendor/avif-decode/src/**",
-        "$TURBO_ROOT$/Cargo.toml",
-        "$TURBO_ROOT$/Cargo.lock",
-        "$TURBO_ROOT$/rust-toolchain.toml",
-        "$TURBO_ROOT$/.cargo/config.toml"
+    // `turbo quality:fix` runs every package's fixes. These write files, so they aren't cached, and
+    // rustfmt formats after clippy's fixes, so that they don't write the same files at once. Clippy
+    // only fixes a dirty (or staged) worktree with `--allow-dirty` (and `--allow-staged`).
+    "nsio-cargo#quality:fix": {
+      "dependsOn": ["nsio-cargo#format:fix"]
+    },
+    "nsio-cargo#lint:fix": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--fix",
+        "--allow-dirty",
+        "--allow-staged",
+        "--all-targets",
+        "--locked"
       ],
-      "outputs": [
-        "$TURBO_ROOT$/target/release/safe-image-optimization-worker",
-        "$TURBO_ROOT$/target/release/safe-image-optimization-worker.exe"
-      ]
+      "cache": false
+    },
+    "nsio-cargo#format:fix": {
+      "command": ["cargo", "fmt", "--all"],
+      "dependsOn": ["nsio-cargo#lint:fix"],
+      "cache": false
     },
 
-    // Root package.json scripts. The wasm build goes through a script that turbo can't see into
-    // (wasi-sdk's C compiler, and the import check), so it isn't cached. Cargo has its own
-    // incremental cache.
-    "//#build:wasm": {
-      "cache": false,
-      "passThroughEnv": ["WASI_SDK_PATH"]
-    },
-    "//#build:wasm:release": {
-      "cache": false,
-      "passThroughEnv": ["WASI_SDK_PATH"]
-    },
-    // Doesn't depend on the native build (the worker is only spawned), so it runs alongside it.
-    "//#build:js": {
-      "inputs": ["js/**", "tsconfig.json"],
-      "outputs": ["dist/**"]
-    },
-    // Compiles the tests in place (for Node.js 20, which can't strip types), against dist/*.d.ts.
-    "//#build:test": {
-      "dependsOn": ["//#build:js"],
-      "inputs": ["test/**/*.ts", "test/tsconfig.json", "test/package.json"],
-      "outputs": ["test/*.js"]
-    },
-    "//#typecheck": {
-      "dependsOn": ["//#build:js"],
-      "inputs": [
-        "js/**",
-        "tsconfig.json",
-        "test/**/*.ts",
-        "test/tsconfig.json",
-        "test/package.json"
-      ]
-    },
-    // oxlint and oxfmt. They see every file that git doesn't ignore (oxfmt formats Markdown, YAML,
-    // and JSON too), and take milliseconds, so they aren't cached instead of listing inputs.
-    "//#lint:js": {
+    // Root package.json scripts: oxlint and oxfmt, for the whole repo (oxfmt formats Markdown, YAML, and JSON too). The fixes
+    // write files, so they aren't cached, and oxfmt formats after oxlint's fixes, so that they don't
+    // write the same files at once.
+    "//#lint:js": {},
+    "//#lint:js:fix": {
       "cache": false
     },
-    "//#format:js": {
-      "cache": false
-    },
-    "//#format:js:check": {
+    "//#format:js": {},
+    "//#format:js:fix": {
+      "dependsOn": ["//#lint:js:fix"],
       "cache": false
     }
   }

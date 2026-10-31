@@ -1,50 +1,30 @@
 {
-  "name": "@next/safe-image-optimization",
-  "version": "0.0.1",
-  "description": "A safer image optimization library for Node.js, built on memory-safe Rust decoders",
-  "homepage": "https://github.com/vercel-labs/next-safe-image-optimization#readme",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/vercel-labs/next-safe-image-optimization.git"
-  },
-  "files": [
-    "dist"
-  ],
-  "type": "commonjs",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  },
+  "name": "nsio-workspace",
+  "private": true,
   "scripts": {
-    "build": "turbo run nsio-worker#build build:js",
-    "build:release": "turbo run nsio-worker#build:release build:js",
-    "build:wasm": "node scripts/build-wasm.mjs",
-    "build:wasm:release": "node scripts/build-wasm.mjs --release",
-    "build:js": "tsc -p tsconfig.json",
-    "build:test": "tsc -p test/tsconfig.json",
-    "set-version": "node scripts/set-version.mjs",
-    "generate": "typeshare crates/core --lang=typescript --output-file=js/protocol.generated.ts",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
-    "test:wasm": "NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm node --run test",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit",
-    "format": "turbo run format format:js",
-    "format:js": "oxfmt",
-    "format:js:check": "oxfmt --check",
+    "build": "turbo run nsio-worker#build @next/safe-image-optimization#build",
+    "build:release": "turbo run nsio-worker#build:release @next/safe-image-optimization#build",
+    "build:wasm": "turbo run nsio-wasm#build:wasm @next/safe-image-optimization#build",
+    "build:wasm:release": "turbo run nsio-wasm#build:wasm:release @next/safe-image-optimization#build",
+    "test": "turbo run test",
+    "test:release": "turbo run test:release",
+    "test:wasm": "turbo run test:wasm",
+    "test:wasm:release": "turbo run test:wasm:release",
+    "typecheck": "turbo run typecheck",
+    "quality": "turbo run quality",
+    "quality:fix": "turbo run quality:fix",
+    "lint": "turbo run lint",
     "lint:js": "oxlint",
-    "lint": "turbo run lint lint:js format:check format:js:check typecheck"
+    "lint:js:fix": "oxlint --fix",
+    "format:js": "oxfmt --check",
+    "format:js:fix": "oxfmt",
+    "generate": "typeshare crates/core --lang=typescript --output-file=packages/nsio/protocol.generated.ts",
+    "set-version": "node scripts/set-version.mjs"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
     "oxfmt": "^0.75.0",
     "oxlint": "^1.90.0",
-    "sharp": "^0.35.5",
-    "turbo": "^2.11.10",
-    "typescript": "^7.0.2"
-  },
-  "engines": {
-    "node": ">= 20.9.0"
+    "turbo": "^2.11.10"
   },
   "packageManager": "pnpm@12.11.2"
 }

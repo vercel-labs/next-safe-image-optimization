@@ -1,0 +1,52 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Doesn't depend on the worker's build (the worker is only spawned), so they run alongside each
+    // other.
+    "build": {
+      "outputs": ["dist/**"]
+    },
+    // Compiles the tests in place (for Node.js 20, which can't strip types), against dist/*.d.ts.
+    "build:test": {
+      "dependsOn": ["build"],
+      "outputs": ["test/*.js"]
+    },
+    "typecheck": {
+      "dependsOn": ["build"]
+    },
+    // There are no `lint` or `quality` scripts, so these only run their dependencies. That includes
+    // oxlint and oxfmt (`//#lint:js` and `//#format:js`), which check the whole repo, because the
+    // root can't have these tasks: its scripts run `turbo run lint` and `turbo run quality`, which
+    // would run themselves.
+    "lint": {
+      "dependsOn": ["//#lint:js"]
+    },
+    "quality": {
+      "dependsOn": ["lint", "typecheck", "//#format:js"]
+    },
+    // The same for `quality:fix` (oxfmt runs after oxlint's fixes).
+    "quality:fix": {
+      "dependsOn": ["//#format:js:fix"]
+    },
+    // The end-to-end tests, with the worker or wasm module that they depend on (package.json's
+    // scripts set `NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH` or `..._WASM_PATH` to it). They aren't
+    // cached, so that they always run: turbo doesn't hash the Node.js version, for one.
+    "test": {
+      "dependsOn": ["build", "nsio-worker#build"],
+      "cache": false
+    },
+    "test:release": {
+      "dependsOn": ["build", "nsio-worker#build:release"],
+      "cache": false
+    },
+    "test:wasm": {
+      "dependsOn": ["build", "nsio-wasm#build:wasm"],
+      "cache": false
+    },
+    "test:wasm:release": {
+      "dependsOn": ["build", "nsio-wasm#build:wasm:release"],
+      "cache": false
+    }
+  }
+}

@@ -18,14 +18,14 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { readTarballs, TARBALLS_DIR as dir } from './npm-tarballs.mjs'
 import { platform, TARGETS } from './platforms.mjs'
 
-const root = join(import.meta.dirname, '..')
+const packageDir = join(import.meta.dirname, '..', 'packages', 'nsio')
 const REGISTRY = 'https://registry.npmjs.org'
-const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+const pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'))
 const args = process.argv.slice(2)
 
 const tarballs = readTarballs().map(({ path, manifest }) => {
   if (manifest.version !== pkg.version) {
-    throw new Error(`${path} is version ${manifest.version}, but package.json's is ${pkg.version}`)
+    throw new Error(`${path} is version ${manifest.version}, but ${pkg.name} is ${pkg.version}`)
   }
   return { path, name: manifest.name, manifest }
 })

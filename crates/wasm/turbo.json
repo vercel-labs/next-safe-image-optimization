@@ -1,0 +1,19 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // The wasm module, in `target/wasm32-wasip1/<profile>/nsio_wasm.wasm`. This goes through a
+    // script that turbo can't see into (wasi-sdk's C compiler, and the import check), so it isn't
+    // cached. Cargo has its own incremental cache.
+    "build:wasm": {
+      "command": ["node", "../../scripts/build-wasm.mjs"],
+      "passThroughEnv": ["WASI_SDK_PATH"],
+      "cache": false
+    },
+    "build:wasm:release": {
+      "command": ["node", "../../scripts/build-wasm.mjs", "--release"],
+      "passThroughEnv": ["WASI_SDK_PATH"],
+      "cache": false
+    }
+  }
+}

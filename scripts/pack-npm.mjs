@@ -7,10 +7,11 @@
 // - `@next/safe-image-optimization-<platform>`: the worker binary that CI built for the platform
 //   (`safe-image-optimization-worker.<platform>`, from scripts/build-native.mjs), with `os`, `cpu`,
 //   and `libc` fields, so package managers only install the one that matches.
-// - `@next/safe-image-optimization-wasm32`: `safe-image-optimization.wasm` (scripts/build-wasm.mjs).
+// - `@next/safe-image-optimization-wasm32`: `safe-image-optimization.wasm`, from
+//   `target/wasm32-wasip1/release/nsio_wasm.wasm` (scripts/build-wasm.mjs).
 //
 // Every package gets the main package's version, and the binaries' packages include third-party
-// notices (scripts/third-party-notices.mjs). The binaries must all be in packages/nsio first.
+// notices (scripts/third-party-notices.mjs). The worker binaries must all be in packages/nsio first.
 //
 // Usage: node scripts/pack-npm.mjs (with cargo-about installed)
 
@@ -96,7 +97,7 @@ packages.push({
   },
   files: {
     'safe-image-optimization.wasm': {
-      from: join(packageDir, 'safe-image-optimization.wasm'),
+      from: join(root, 'target', 'wasm32-wasip1', 'release', 'nsio_wasm.wasm'),
       hint: 'Build it with `pnpm build:wasm:release`.',
     },
     'README.md':

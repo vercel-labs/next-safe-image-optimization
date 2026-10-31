@@ -102,18 +102,25 @@ jobs:
           tar -xzf "$dir/cargo-about.tar.gz" -C "$dir/bin" --strip-components=1
           chmod +x "$dir/bin/cargo-about"
           echo "$dir/bin" >> "$GITHUB_PATH"
-      - id: binaries
+      - id: workers
         background: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: '{worker-*,wasm32-wasip1}'
+          pattern: worker-*
           merge-multiple: true
           path: packages/nsio
+      # Where scripts/build-wasm.mjs builds it.
+      - id: wasm
+        background: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wasm32-wasip1
+          path: target/wasm32-wasip1/release
       - run: npm install --global pnpm@12.11.2
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
         working-directory: packages/nsio
-      - wait: [rust, cargo-about, binaries]
+      - wait: [rust, cargo-about, workers, wasm]
       - run: node scripts/pack-npm.mjs
       - run: node scripts/test-npm-packages.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

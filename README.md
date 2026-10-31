@@ -96,7 +96,8 @@ Requires Rust (version pinned in `rust-toolchain.toml`), Node.js 24, and pnpm (`
 ```sh
 pnpm install
 pnpm build          # or `pnpm build:release` for release builds
-pnpm test           # Rust unit tests and end-to-end tests
+pnpm test           # Rust unit tests and end-to-end tests (builds first)
+pnpm test:release   # end-to-end tests with a release build
 pnpm lint           # clippy and oxlint
 pnpm quality        # clippy, rustfmt, oxlint, oxfmt, and TypeScript typechecking
 pnpm quality:fix   # clippy's and oxlint's fixes, rustfmt, and oxfmt

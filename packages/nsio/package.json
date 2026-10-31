@@ -20,8 +20,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:test": "tsc -p test/tsconfig.json",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
-    "test:wasm": "NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm node --run test",
+    "test": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/debug/safe-image-optimization-worker node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "test:release": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/release/safe-image-optimization-worker node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "test:wasm": "NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH=../../target/wasm32-wasip1/debug/nsio_wasm.wasm node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "test:wasm:release": "NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH=../../target/wasm32-wasip1/release/nsio_wasm.wasm node --disable-warning=ExperimentalWarning --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit"
   },
   "devDependencies": {

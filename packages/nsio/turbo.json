@@ -29,15 +29,23 @@
     "quality:fix": {
       "dependsOn": ["//#format:js:fix"]
     },
-    // The end-to-end tests. They don't build the worker or the wasm module, because they test
-    // whichever was built (the newest worker, debug or release, see `findWorker`), which is also why
-    // they aren't cached.
+    // The end-to-end tests, with the worker or wasm module that they depend on (package.json's
+    // scripts set `NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH` or `..._WASM_PATH` to it). They aren't
+    // cached, so that they always run: turbo doesn't hash the Node.js version, for one.
     "test": {
-      "dependsOn": ["build"],
+      "dependsOn": ["build", "nsio-worker#build"],
+      "cache": false
+    },
+    "test:release": {
+      "dependsOn": ["build", "nsio-worker#build:release"],
       "cache": false
     },
     "test:wasm": {
-      "dependsOn": ["build"],
+      "dependsOn": ["build", "//#build:wasm"],
+      "cache": false
+    },
+    "test:wasm:release": {
+      "dependsOn": ["build", "//#build:wasm:release"],
       "cache": false
     }
   }

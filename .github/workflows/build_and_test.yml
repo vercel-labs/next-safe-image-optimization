@@ -203,7 +203,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wasm32-wasip1
-          path: packages/nsio/safe-image-optimization.wasm
+          path: target/wasm32-wasip1/release/nsio_wasm.wasm
           if-no-files-found: error
 
   # The full range of Node.js versions is only tested on Linux (glibc) and wasm. Other platforms only
@@ -263,9 +263,15 @@ jobs:
       - run: pnpm build
       - run: pnpm build:test
       - wait: [worker, test-node]
-      # Artifacts don't keep file permissions.
-      - if: ${{ runner.os != 'Windows' }}
-        run: chmod +x safe-image-optimization-worker.*
+      # Artifacts don't keep file permissions (chmod does nothing on Windows). The artifact is just
+      # the worker, named for its platform.
+      - name: Use the downloaded worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          workers=(safe-image-optimization-worker.*)
+          chmod +x "${workers[0]}"
+          echo "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=$GITHUB_WORKSPACE/packages/nsio/${workers[0]}" >> "$GITHUB_ENV"
       # Bash expands the glob (Node.js 20's test runner doesn't), including on Windows.
       - run: node --test test/*.test.js
         shell: bash
@@ -314,13 +320,20 @@ jobs:
       - run: pnpm build
       - run: pnpm build:test
       - wait: [worker, image]
-      # Artifacts don't keep file permissions.
-      - run: chmod +x safe-image-optimization-worker.*
+      # Artifacts don't keep file permissions (chmod does nothing on Windows). The artifact is just
+      # the worker, named for its platform.
+      - name: Use the downloaded worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          workers=(safe-image-optimization-worker.*)
+          chmod +x "${workers[0]}"
+          echo "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=$GITHUB_WORKSPACE/packages/nsio/${workers[0]}" >> "$GITHUB_ENV"
       - name: Test in Alpine
         run: |
           set -euo pipefail
           docker run --rm -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$PWD" \
-            "$IMAGE" node --test test/*.test.js
+            -e NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH "$IMAGE" node --test test/*.test.js
 
   # Under QEMU's user mode emulation, which doesn't support seccomp or `RLIMIT_DATA` (see the test
   # step). Official Node.js binaries and images don't include riscv64, so this uses an unofficial
@@ -391,8 +404,15 @@ jobs:
       - run: pnpm build
       - run: pnpm build:test
       - wait: [worker, image, node]
-      # Artifacts don't keep file permissions.
-      - run: chmod +x safe-image-optimization-worker.*
+      # Artifacts don't keep file permissions (chmod does nothing on Windows). The artifact is just
+      # the worker, named for its platform.
+      - name: Use the downloaded worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          workers=(safe-image-optimization-worker.*)
+          chmod +x "${workers[0]}"
+          echo "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=$GITHUB_WORKSPACE/packages/nsio/${workers[0]}" >> "$GITHUB_ENV"
       # - NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES: QEMU's user mode
       #   emulation doesn't support seccomp, so workers would fail to install their filters and exit
       #   (`ERR_WORKER_SPAWN`). This runs them unfiltered instead. Nothing here tests the filters.
@@ -404,6 +424,7 @@ jobs:
           docker run --rm --platform linux/riscv64 \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$PWD" \
             -v "$RUNNER_TEMP/node-riscv64:/opt/node:ro" \
+            -e NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH \
             -e NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES=1 \
             -e NSIO_TEST_QEMU=1 \
             nsio-riscv64 /opt/node/bin/node --test test/*.test.js
@@ -435,7 +456,7 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: wasm32-wasip1
-          path: packages/nsio
+          path: target/wasm32-wasip1/release
       # Its PATH changes only apply after its `wait`, like in `test`.
       - id: test-node
         background: true
@@ -450,6 +471,7 @@ jobs:
       - run: node --test test/*.test.js
         env:
           NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND: wasm
+          NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH: ${{ github.workspace }}/target/wasm32-wasip1/release/nsio_wasm.wasm
 
   # We block merging unless this job passes. This is enforced by a "require status checks to pass"
   # rule on the main branch.

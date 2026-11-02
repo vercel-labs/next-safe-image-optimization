@@ -4,10 +4,10 @@
 // sends a malformed response, or output it wasn't asked for, is killed.
 
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import type { Socket } from 'node:net'
 import { constants } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 import { isMusl } from './musl.js'
 import {
@@ -64,34 +64,31 @@ function platforms(): string[] {
   }
 }
 
+/**
+ * A path to the worker binary to use instead of the platform's package's, like a local build
+ * (`target/debug/safe-image-optimization-worker`), relative to the current directory. It's used
+ * even if it doesn't exist, so that a mistake fails instead of using the package.
+ */
+export const WORKER_PATH_VARIABLE = 'NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH'
+
 export interface WorkerBinary {
   path: string
-  /** Built locally, instead of installed from the platform's package. */
+  /** From `WORKER_PATH_VARIABLE`, instead of the platform's package. */
   local: boolean
 }
 
 /**
- * The worker is in `target/debug` or `target/release` when built locally (whichever is newer), in
- * the package root when CI built it (`scripts/build-native.mjs`), or else in the platform's package.
- * Returns `undefined` if there isn't one for this platform.
+ * The worker is in the platform's package, unless `WORKER_PATH_VARIABLE` is set. Returns
+ * `undefined` if there isn't one for this platform.
  */
 export function findWorker(): WorkerBinary | undefined {
-  const exe = process.platform === 'win32' ? '.exe' : ''
-  const built = ['debug', 'release']
-    .map((profile) =>
-      join(__dirname, '..', 'target', profile, `safe-image-optimization-worker${exe}`),
-    )
-    .filter((path) => existsSync(path))
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
-  if (built.length > 0) {
-    return { path: built[0], local: true }
+  const override = process.env[WORKER_PATH_VARIABLE]
+  if (override) {
+    return { path: resolve(override), local: true }
   }
+  const exe = process.platform === 'win32' ? '.exe' : ''
   for (const platform of platforms()) {
     const name = `safe-image-optimization-worker.${platform}${exe}`
-    const local = join(__dirname, '..', name)
-    if (existsSync(local)) {
-      return { path: local, local: true }
-    }
     let path
     try {
       path = join(

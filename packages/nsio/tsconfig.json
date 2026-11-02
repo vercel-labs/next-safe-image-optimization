@@ -10,8 +10,9 @@
     "noUnusedParameters": true,
     "declaration": true,
     "stripInternal": true,
-    "rootDir": "js",
+    "rootDir": ".",
     "outDir": "dist"
   },
-  "include": ["js"]
+  // Only the top level: `test/` has its own tsconfig.json.
+  "include": ["*.ts"]
 }

@@ -367,6 +367,9 @@ export class Pool {
    * (read when the pool is created). Otherwise, it's `'native'`, falling back to `'wasm'` if
    * there's no native worker binary for this platform. The wasm build is in a separate package,
    * `@next/safe-image-optimization-wasm32`, which isn't installed by default.
+   *
+   * `NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH` and `NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH` replace
+   * the installed worker binary and wasm module with other files, like local builds.
    */
   readonly backend: BackendName
   #backend: Backend

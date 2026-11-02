@@ -1,7 +1,7 @@
-//! Request options. The TypeScript wrapper in `js/` passes them through mostly as the caller wrote
-//! them, and only validates the few that it uses itself. So this is where they're validated, and
-//! unknown fields are rejected. Those errors are `Error::InvalidOptions`, which the wrapper throws
-//! as `TypeError`s.
+//! Request options. The TypeScript wrapper (`packages/nsio`) passes them through mostly as the
+//! caller wrote them, and only validates the few that it uses itself. So this is where they're
+//! validated, and unknown fields are rejected. Those errors are `Error::InvalidOptions`, which the
+//! wrapper throws as `TypeError`s.
 
 use serde::Deserialize;
 use typeshare_annotation::typeshare;

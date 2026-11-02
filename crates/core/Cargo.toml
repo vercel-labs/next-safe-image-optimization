@@ -9,7 +9,8 @@ publish.workspace = true
 # Requests are JSON options followed by the input (see `protocol.rs`).
 serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
-# `#[typeshare]`, which marks the types that `pnpm generate` exports to `js/protocol.generated.ts`.
+# `#[typeshare]`, which marks the types that `pnpm generate` exports to
+# `packages/nsio/protocol.generated.ts`.
 # Not the `typeshare` crate, which depends on chrono at runtime.
 typeshare-annotation = { version = "1.0.5", default-features = false }
 # `_exit`, for `ExitOnOom`.

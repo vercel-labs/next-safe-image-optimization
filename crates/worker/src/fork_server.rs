@@ -1,6 +1,6 @@
 //! The fork server (unix only). With `--fork-server`, the worker forks a new worker each time the
-//! parent (`js/native.ts`) asks, so that workers skip `exec` and loading the binary. It's
-//! single-threaded (forking only copies the calling thread), and never sees any image data. It has
+//! parent (`packages/nsio/native.ts`) asks, so that workers skip `exec` and loading the binary.
+//! It's single-threaded (forking only copies the calling thread), and never sees any image data. It has
 //! no seccomp filter: workers install theirs after forking (compiled before the server started), and
 //! a filter for the server would have to allow everything they do before that.
 //!
@@ -9,7 +9,7 @@
 //! stdin and stdout, and the server sends the other to the parent, so there's no socket that
 //! another process could connect to. The server exits when the channel closes.
 //!
-//! The parent sends `Message`s (keep in sync with `js/native.ts`):
+//! The parent sends `Message`s (keep in sync with `packages/nsio/native.ts`):
 //!
 //! - `spawn`: forks a worker. The server replies `spawned` with the worker's pid and socket, or
 //!   `spawnFailed`.

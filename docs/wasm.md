@@ -32,5 +32,8 @@ WASI_SDK_PATH=/path/to/wasi-sdk pnpm build:wasm
 # Or for an optimized release build:
 WASI_SDK_PATH=/path/to/wasi-sdk pnpm build:wasm:release
 
-pnpm test:wasm
+# Builds the module first (or `pnpm test:wasm:release`).
+WASI_SDK_PATH=/path/to/wasi-sdk pnpm test:wasm
 ```
+
+The module is in `target/wasm32-wasip1/debug/nsio_wasm.wasm` (or `release`). To use it from another project, set `NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH` to its path.

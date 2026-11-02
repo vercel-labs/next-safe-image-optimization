@@ -1,18 +1,34 @@
 #!/usr/bin/env node
-// Builds the wasm module (`crates/wasm`) for `wasm32-wasip1`, checks its imports against an
-// allowlist, and copies it to the package root as `safe-image-optimization.wasm`.
+// Builds the wasm module (`crates/wasm`) for `wasm32-wasip1`, in
+// `target/wasm32-wasip1/<profile>/nsio_wasm.wasm`, and checks its imports against an allowlist. The
+// JS package uses it with `NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH`.
 //
 // wasi-sdk is only needed to compile libwebp and mozjpeg (C). Rust links with its own wasi-libc.
 //
-// Usage: WASI_SDK_PATH=/path/to/wasi-sdk node scripts/build-wasm.mjs [--release]
+// Usage: WASI_SDK_PATH=/path/to/wasi-sdk node scripts/build-wasm.mjs [cargo build arguments]
 
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
 
 const root = join(import.meta.dirname, '..')
 const target = 'wasm32-wasip1'
-const release = process.argv.includes('--release')
+const args = process.argv.slice(2)
+
+/** The output directory of the profile that `args` chooses (`--release`, `-r`, or `--profile`). */
+function profileDir() {
+  let profile = 'dev'
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--release' || args[i] === '-r') {
+      profile = 'release'
+    } else if (args[i] === '--profile') {
+      profile = args[++i]
+    } else if (args[i].startsWith('--profile=')) {
+      profile = args[i].slice('--profile='.length)
+    }
+  }
+  return profile === 'dev' ? 'debug' : profile
+}
 
 const wasiSdk = process.env.WASI_SDK_PATH
 if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
@@ -25,13 +41,7 @@ if (!wasiSdk || !existsSync(join(wasiSdk, 'bin', 'clang'))) {
 const exe = process.platform === 'win32' ? '.exe' : ''
 const cargo = spawnSync(
   'cargo',
-  [
-    'build',
-    '--package=nsio-wasm',
-    '--locked',
-    `--target=${target}`,
-    ...(release ? ['--release'] : []),
-  ],
+  ['build', '--package=nsio-wasm', '--locked', `--target=${target}`, ...args],
   {
     cwd: root,
     stdio: 'inherit',
@@ -46,9 +56,9 @@ if (cargo.status !== 0) {
   process.exit(cargo.status ?? 1)
 }
 
-// What the module may import, by import module. These are exactly what `js/wasm-worker.ts`
-// provides: the WASI filesystem functions always fail (there are no preopened directories), and
-// nothing calls into JS.
+// What the module may import, by import module. These are exactly what
+// `packages/nsio/wasm-worker.ts` provides: the WASI filesystem functions always fail (there are no
+// preopened directories), and nothing calls into JS.
 const allowedImports = new Map([
   ['env', new Set(['memory'])],
   [
@@ -73,7 +83,7 @@ const allowedImports = new Map([
     ]),
   ],
 ])
-const file = join(root, 'target', target, release ? 'release' : 'debug', 'nsio_wasm.wasm')
+const file = join(root, 'target', target, profileDir(), 'nsio_wasm.wasm')
 const wasm = await WebAssembly.compile(readFileSync(file))
 const disallowed = WebAssembly.Module.imports(wasm)
   .filter(({ module, name }) => !allowedImports.get(module)?.has(name))
@@ -82,6 +92,4 @@ if (disallowed.length > 0) {
   console.error(`The wasm module has imports that aren't allowed: ${disallowed.join(', ')}`)
   process.exit(1)
 }
-console.log('Checked the imports of the wasm module')
-
-copyFileSync(file, join(root, 'safe-image-optimization.wasm'))
+console.log(`Checked the imports of ${relative(root, file)}`)

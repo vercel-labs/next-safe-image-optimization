@@ -5,7 +5,7 @@
 
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
 import {
@@ -58,13 +58,20 @@ export const WASM_PACKAGE = '@next/safe-image-optimization-wasm32'
 const WASM_FILE = 'safe-image-optimization.wasm'
 
 /**
- * The wasm module is in the package root when built locally or by CI (`scripts/build-wasm.mjs`),
- * or else in `WASM_PACKAGE`. Returns `undefined` if neither has it.
+ * A path to the wasm module to use instead of `WASM_PACKAGE`'s, like a local build
+ * (`target/wasm32-wasip1/debug/nsio_wasm.wasm`), relative to the current directory. It's used even
+ * if it doesn't exist, so that a mistake fails instead of using the package.
+ */
+export const WASM_PATH_VARIABLE = 'NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH'
+
+/**
+ * The wasm module is in `WASM_PACKAGE`, unless `WASM_PATH_VARIABLE` is set. Returns `undefined` if
+ * it isn't installed.
  */
 export function findWasm(): string | undefined {
-  const local = join(__dirname, '..', WASM_FILE)
-  if (existsSync(local)) {
-    return local
+  const override = process.env[WASM_PATH_VARIABLE]
+  if (override) {
+    return resolve(override)
   }
   let path
   try {

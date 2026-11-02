@@ -1,8 +1,8 @@
 /target
-/node_modules
-/dist
-/test/*.js
-/safe-image-optimization-worker.*
+node_modules
+/packages/nsio/dist
+/packages/nsio/test/*.js
+/packages/nsio/safe-image-optimization-worker.*
 *.wasm
 *.tgz
 .turbo

@@ -35,6 +35,16 @@ Because of these different goals, `@next/safe-image-optimization` is not a drop-
 - **JPEG output:** Encodes baseline JPEGs with the pure-Rust `jpeg-encoder` crate by default, which produces somewhat larger files than sharp. Passing `mozjpeg: true` uses mozjpeg with the same preset as sharp (including progressive encoding), though it is compiled without assembly optimizations and is slower than in sharp. Individual options like `progressive`, `chromaSubsampling` (always 4:2:0), `optimiseCoding` (always enabled), and `quantisationTable` are not configurable.
 - **PNG output:** Always produces lossless truecolor PNGs. Palette quantization (`palette` / `quality`) is not supported, and `adaptiveFiltering` defaults to `true` (sharp defaults to `false`).
 
+## Performance
+
+`@next/safe-image-optimization` is slower than sharp, and the gap depends on the image. Three things account for most of it:
+
+- **A worker process per image.** By default a worker handles one image and is then replaced, so every image pays for starting a worker (~0.5 ms on Linux with the fork server) and for copying the input and output through a pipe. `maxImagesPerWorker` trades that isolation for throughput.
+- **No shrink-on-load.** libvips decodes a JPEG at a reduced DCT scale when the result is about to be shrunk, so sharp decodes far fewer pixels when generating a thumbnail from a large JPEG. This library always decodes at full size.
+- **Resizing and encoding in Rust.** Resampling uses the `image` crate rather than libvips, and JPEG uses `jpeg-encoder` (or mozjpeg without assembly) rather than libjpeg-turbo.
+
+[`packages/bench`](../packages/bench/README.md) measures all of this against sharp and `@napi-rs/image`, and documents what the numbers don't cover.
+
 ## Colors, metadata, and platforms
 
 - **Metadata:** All metadata (such as EXIF, XMP, and IPTC) is stripped from output images. `metadata()` returns a smaller set of fields: `format`, `width`, `height`, `hasAlpha`, `orientation`, `hasProfile`, and `autoOrient`.

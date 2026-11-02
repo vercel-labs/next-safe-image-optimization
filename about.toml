@@ -2,9 +2,7 @@
 # (scripts/third-party-notices.mjs, with about.hbs). Every package gets the same list of crates: the
 # union of every target's, including proc macros (which cargo-about doesn't tell apart).
 
-# In priority order, for crates that offer a choice. Licenses that don't require a notice in
-# binaries come first, and about.hbs leaves them out. Then the ones that are simplest to comply with
-# (MIT over Apache-2.0, which also requires its NOTICE file).
+# In priority order, for crates that offer a choice: the most permissive first.
 accepted = [
   "0BSD",
   "CC0-1.0",

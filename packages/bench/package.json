@@ -1,0 +1,22 @@
+{
+  "name": "nsio-bench",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Throughput benchmark for @next/safe-image-optimization, sharp, and @napi-rs/image",
+  "type": "module",
+  "scripts": {
+    "bench": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/debug/safe-image-optimization-worker node --disable-warning=ExperimentalWarning bench.ts",
+    "bench:release": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/release/safe-image-optimization-worker node --disable-warning=ExperimentalWarning bench.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@napi-rs/image": "^1.16.0",
+    "@next/safe-image-optimization": "workspace:*",
+    "@types/node": "^26.6.5",
+    "sharp": "^0.35.5",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">= 22.18.0"
+  }
+}

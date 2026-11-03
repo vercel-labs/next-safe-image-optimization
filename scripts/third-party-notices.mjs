@@ -85,8 +85,7 @@ export function thirdPartyNotices() {
   return (target, packageName) =>
     `Third-party notices for ${packageName}\n\n` +
     'This package includes the following third-party software, under the licenses\n' +
-    "below. Software that's available under a license that doesn't require a notice\n" +
-    'in binaries (like Zlib, CC0-1.0, or Unlicense) is not listed.\n' +
+    'below.\n' +
     componentNotices(target) +
     crates
 }

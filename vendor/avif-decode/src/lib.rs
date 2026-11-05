@@ -153,6 +153,14 @@ impl Decoder {
     /// frames don't match the sequence header.
     pub fn output_format(&self) -> Result<OutputFormat> {
         let seq = self.avif.primary_item_metadata()?;
+        // The alpha item is decoded separately. Check its sequence header now, before either item
+        // can make the caller allocate or decode a different number of pixels than the primary.
+        if let Some(alpha) = self.avif.alpha_item_metadata()?
+            && (alpha.max_frame_width != seq.max_frame_width
+                || alpha.max_frame_height != seq.max_frame_height)
+        {
+            return Err(Error::Unsupported("alpha image size doesn't match the primary image"));
+        }
         let has_alpha = self.avif.alpha_item.is_some();
         let pixel_format = match (has_alpha, seq.monochrome, seq.bit_depth > 8) {
             (true, _, false) => PixelFormat::Rgba8,
@@ -238,6 +246,10 @@ impl Decoder {
         if let Some(alpha_av1) = self.avif.alpha_item.take() {
             let alpha = decoder.decode_frame(&alpha_av1)?;
             drop(alpha_av1);
+            // Don't let a malformed frame truncate or overfill the primary image's alpha rows.
+            if alpha.dimensions() != (format.width, format.height) {
+                return Err(Error::Unsupported("alpha frame size doesn't match the sequence header"));
+            }
             let range = alpha.range();
             if let Some(alpha_mc) = alpha.matrix_coefficients().filter(|&mc| mc != MatrixCoefficients::Identity)
                 && color_mc != alpha_mc {

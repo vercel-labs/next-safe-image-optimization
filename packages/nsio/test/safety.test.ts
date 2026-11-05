@@ -5,6 +5,7 @@ import { deflateSync } from 'node:zlib'
 import { SafeImageOptimizationError, defaultPool } from '../dist/index.js'
 import { InputFormat, MAX_JSON_BYTES } from '../dist/protocol.generated.js'
 import { InvalidResponseError, decodeResponse } from '../dist/protocol.js'
+import { replaceAvifPrimary } from './avif.ts'
 import { assertRejectsWithCode, crc32, fromRaw, pattern, sharp } from './helpers.ts'
 
 const pool = defaultPool()
@@ -288,6 +289,33 @@ describe('limits', () => {
       'ERR_LIMIT_EXCEEDED',
     )
     await pool.prepare(input).limitInputPixels(10000).png().toBuffer()
+  })
+
+  test('AVIF alpha dimensions must match the primary image', async () => {
+    const large = await fromRaw(pattern(64, 64, 4))
+      .avif()
+      .toBuffer()
+    const small = await fromRaw(pattern(64, 1, 4))
+      .avif()
+      .toBuffer()
+    await pool
+      .prepare(large)
+      .limitInputPixels(64 * 64)
+      .png()
+      .toBuffer()
+
+    const tallerAlpha = replaceAvifPrimary(large, small)
+    const shorterAlpha = replaceAvifPrimary(small, large)
+    for (const input of [tallerAlpha, shorterAlpha]) {
+      await assertRejectsWithCode(pool.prepare(input).metadata(), 'ERR_UNSUPPORTED_FORMAT')
+      await assertRejectsWithCode(pool.prepare(input).png().toBuffer(), 'ERR_UNSUPPORTED_FORMAT')
+    }
+
+    // Before alpha validation, this decoded a 64x64 alpha item behind a 64x1 primary item.
+    await assertRejectsWithCode(
+      pool.prepare(tallerAlpha).limitInputPixels(64).png().toBuffer(),
+      'ERR_UNSUPPORTED_FORMAT',
+    )
   })
 
   test('AVIF decoder memory counts against the memory limit', async () => {

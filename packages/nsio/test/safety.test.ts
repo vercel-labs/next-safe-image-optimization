@@ -4,7 +4,7 @@ import { deflateSync } from 'node:zlib'
 
 import { SafeImageOptimizationError, defaultPool } from '../dist/index.js'
 import { InputFormat, MAX_JSON_BYTES } from '../dist/protocol.generated.js'
-import { InvalidResponseError, decodeResponse } from '../dist/protocol.js'
+import { InvalidResponseError, decodeResponse, maxResponseBytes } from '../dist/protocol.js'
 import { assertRejectsWithCode, crc32, fromRaw, pattern, sharp } from './helpers.ts'
 
 const pool = defaultPool()
@@ -446,6 +446,7 @@ describe('malformed responses are rejected', () => {
         Buffer.from('abc'),
       ),
       'transform',
+      3,
     )
     assert.deepEqual(transform, {
       kind: 'transform',
@@ -454,12 +455,28 @@ describe('malformed responses are rejected', () => {
     })
     const error = response('{"type":"error","meta":{"code":"ERR_DECODE_FAILED","message":"bad"}}')
     for (const kind of ['transform', 'metadata'] as const) {
-      assert.deepEqual(decodeResponse(error, kind), {
+      assert.deepEqual(decodeResponse(error, kind, 0), {
         kind: 'error',
         code: 'ERR_DECODE_FAILED',
         message: 'bad',
       })
     }
+  })
+
+  test('transform data must fit the exact output limit', () => {
+    const json = '{"type":"transform","meta":{"format":"png","width":1,"height":1,"channels":3}}'
+    const oversized = response(json, Buffer.alloc(65_522))
+    assert.equal(oversized.length, maxResponseBytes(64))
+    assert.throws(() => decodeResponse(oversized, 'transform', 64), InvalidResponseError)
+
+    const exact = decodeResponse(response(json, Buffer.alloc(64)), 'transform', 64)
+    assert.ok(exact.kind === 'transform')
+    assert.equal(exact.data.length, 64)
+
+    // 0 disables the output limit.
+    const unlimited = decodeResponse(oversized, 'transform', 0)
+    assert.ok(unlimited.kind === 'transform')
+    assert.equal(unlimited.data.length, 65_522)
   })
 
   test('invalid responses', () => {
@@ -479,13 +496,16 @@ describe('malformed responses are rejected', () => {
           ...fields,
         },
       })
-    assert.equal(decodeResponse(response(metadata({})), 'metadata').kind, 'metadata')
+    assert.equal(decodeResponse(response(metadata({})), 'metadata', 0).kind, 'metadata')
     // A response to the other kind of request.
-    assert.throws(() => decodeResponse(response(metadata({})), 'transform'), InvalidResponseError)
+    assert.throws(
+      () => decodeResponse(response(metadata({})), 'transform', 0),
+      InvalidResponseError,
+    )
     const transform = response(
       '{"type":"transform","meta":{"format":"png","width":1,"height":1,"channels":3}}',
     )
-    assert.throws(() => decodeResponse(transform, 'metadata'), InvalidResponseError)
+    assert.throws(() => decodeResponse(transform, 'metadata', 0), InvalidResponseError)
     for (const invalid of [
       Buffer.alloc(3),
       Buffer.from([0xff, 0, 0, 0, 0x7b, 0x7d]),
@@ -514,7 +534,11 @@ describe('malformed responses are rejected', () => {
       ),
     ]) {
       for (const kind of ['transform', 'metadata'] as const) {
-        assert.throws(() => decodeResponse(invalid, kind), InvalidResponseError, invalid.toString())
+        assert.throws(
+          () => decodeResponse(invalid, kind, 0),
+          InvalidResponseError,
+          invalid.toString(),
+        )
       }
     }
   })

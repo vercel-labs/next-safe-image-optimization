@@ -420,10 +420,12 @@ export class Pool {
     if (this.#closed) {
       throw new SafeImageOptimizationError('ERR_POOL_CLOSED', 'the pool is closed')
     }
+    const outputLimit = limitOutputBytes ?? DEFAULT_LIMIT_OUTPUT_BYTES
     const result = await this.#backend.run(input, encodeOptions({ [kind]: options }), {
       kind,
       timeoutMs,
-      maxResponseBytes: maxResponseBytes(limitOutputBytes ?? DEFAULT_LIMIT_OUTPUT_BYTES),
+      maxResponseBytes: maxResponseBytes(outputLimit),
+      limitOutputBytes: outputLimit,
       signal,
     })
     if (result.aborted) {

@@ -41,6 +41,7 @@ interface Job {
   request: WasmRequest
   kind: RequestKind
   timeoutMs?: number
+  limitOutputBytes: number
   /** Only the first call does anything. */
   resolve: (result: RunResult) => void
   done: boolean
@@ -110,7 +111,7 @@ export class WasmBackend implements Backend {
   run(
     input: Uint8Array,
     options: string,
-    { kind, timeoutMs, maxResponseBytes, signal }: RunOptions,
+    { kind, timeoutMs, maxResponseBytes, limitOutputBytes, signal }: RunOptions,
   ): Promise<RunResult> {
     if (this.#closing !== undefined) {
       return Promise.resolve({ error: POOL_CLOSED })
@@ -127,6 +128,7 @@ export class WasmBackend implements Backend {
         request: { request, maxResponseBytes },
         kind,
         timeoutMs,
+        limitOutputBytes,
         done: false,
         resolve: (result) => {
           if (!job.done) {
@@ -251,7 +253,7 @@ export class WasmBackend implements Backend {
       if (message.response !== undefined) {
         let response
         try {
-          response = decodeResponse(message.response, job.kind)
+          response = decodeResponse(message.response, job.kind, job.limitOutputBytes)
         } catch (error) {
           job.resolve({ error: invalidResponse((error as Error).message) })
           this.#discard(slot)

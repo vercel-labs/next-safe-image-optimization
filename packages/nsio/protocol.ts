@@ -38,6 +38,8 @@ export interface RunOptions {
   timeoutMs?: number
   /** A larger response is treated as a crash. */
   maxResponseBytes: number
+  /** The exact encoded output limit enforced on a transform response. 0 means no limit. */
+  limitOutputBytes: number
   /** Removes the request from the queue, or kills the worker processing it. */
   signal?: AbortSignal
 }
@@ -146,10 +148,15 @@ const U32_MAX = 0xffffffff
 
 /**
  * Splits the response (without the native worker's length prefix) into its JSON (a
- * `generated.Response`) and data. Throws an `InvalidResponseError` if it's malformed, or if it's
- * neither an error nor a response to a `kind` request.
+ * `generated.Response`) and data. Throws an `InvalidResponseError` if it's malformed, if it's
+ * neither an error nor a response to a `kind` request, or if transform data exceeds
+ * `limitOutputBytes` (0 means no limit).
  */
-export function decodeResponse(response: Uint8Array, kind: RequestKind): Response {
+export function decodeResponse(
+  response: Uint8Array,
+  kind: RequestKind,
+  limitOutputBytes: number,
+): Response {
   if (response.length < 4) {
     throw new InvalidResponseError(`truncated response (${response.length} bytes)`)
   }
@@ -185,6 +192,9 @@ export function decodeResponse(response: Uint8Array, kind: RequestKind): Respons
         response.byteOffset + jsonEnd,
         response.length - jsonEnd,
       )
+      if (limitOutputBytes !== 0 && data.length > limitOutputBytes) {
+        throw new InvalidResponseError('the output exceeds limitOutputBytes')
+      }
       const info: OutputInfo = {
         format: oneOf(meta.format, 'format', OUTPUT_FORMATS),
         width: integer(meta.width, 'width', 0, U32_MAX),

@@ -434,6 +434,7 @@ interface Job {
   kind: RequestKind
   timeoutMs?: number
   maxResponseBytes: number
+  limitOutputBytes: number
   /** Only the first call does anything. */
   resolve: (result: RunResult) => void
   /** Resolved. If it was aborted or destroyed while its worker was starting, it's still starting. */
@@ -475,7 +476,7 @@ export class NativeBackend implements Backend {
   run(
     input: Uint8Array,
     options: string,
-    { kind, timeoutMs, maxResponseBytes, signal }: RunOptions,
+    { kind, timeoutMs, maxResponseBytes, limitOutputBytes, signal }: RunOptions,
   ): Promise<RunResult> {
     if (this.#closing !== undefined) {
       return Promise.resolve({ error: POOL_CLOSED })
@@ -496,6 +497,7 @@ export class NativeBackend implements Backend {
         kind,
         timeoutMs,
         maxResponseBytes,
+        limitOutputBytes,
         done: false,
         resolve: (result) => {
           if (!job.done) {
@@ -704,7 +706,7 @@ export class NativeBackend implements Backend {
     } else if (slot.received === slot.response.length) {
       let response
       try {
-        response = decodeResponse(slot.response, job.kind)
+        response = decodeResponse(slot.response, job.kind, job.limitOutputBytes)
       } catch (error) {
         this.#invalid(slot, (error as Error).message)
         return

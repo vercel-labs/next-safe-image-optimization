@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { Pool, defaultPool } from '../dist/index.js'
 import { NativeBackend } from '../dist/native.js'
 import { findWasm } from '../dist/wasm.js'
-import type { RunResult } from '../dist/protocol.js'
+import { maxResponseBytes, type RunResult } from '../dist/protocol.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
 const backend = defaultPool().backend
@@ -484,6 +484,7 @@ describe(
         kind: 'transform',
         timeoutMs,
         maxResponseBytes: 1024,
+        limitOutputBytes: 1024,
       })
     }
     async function assertFails(result: Promise<RunResult>, code: string) {
@@ -512,6 +513,23 @@ describe(
 
     test('responses are passed through', async () => {
       assert.equal(data(await run(worker(`${respond(3)}; printf abc; exec sleep 10`))), 'abc')
+    })
+
+    test('output data must fit limitOutputBytes', async () => {
+      // This fills the entire outer response budget, including the unused JSON allowance, but
+      // exceeds the 64-byte output limit by 65,458 bytes.
+      const dataLength = 65_522
+      const path = worker(`${respond(dataLength)}; head -c ${dataLength} /dev/zero; exec sleep 10`)
+      const pool = nativeBackend(path)
+      await assertFails(
+        pool.run(Buffer.alloc(16), '{}', {
+          kind: 'transform',
+          maxResponseBytes: maxResponseBytes(64),
+          limitOutputBytes: 64,
+        }),
+        'ERR_WORKER_CRASHED',
+      )
+      await pool.close()
     })
 
     test('exit codes', async () => {
@@ -567,7 +585,11 @@ describe(
       const path = counter()
       const pool = nativeBackend(path, false, 0)
       await assertFails(
-        pool.run(Buffer.alloc(16), '{}', { kind: 'metadata', maxResponseBytes: 1024 }),
+        pool.run(Buffer.alloc(16), '{}', {
+          kind: 'metadata',
+          maxResponseBytes: 1024,
+          limitOutputBytes: 1024,
+        }),
         'ERR_WORKER_CRASHED',
       )
       assert.equal(data(await run(path, undefined, false, pool)), '1')
@@ -591,6 +613,7 @@ describe(
       const result = pool.run(Buffer.alloc(16), '{}', {
         kind: 'transform',
         maxResponseBytes: 1024,
+        limitOutputBytes: 1024,
         signal: controller.signal,
       })
       setTimeout(() => controller.abort(), 100)
@@ -602,7 +625,11 @@ describe(
     test('destroy() kills busy workers', async () => {
       const pool = nativeBackend(worker('exec sleep 10'))
       const start = performance.now()
-      const result = pool.run(Buffer.alloc(16), '{}', { kind: 'transform', maxResponseBytes: 1024 })
+      const result = pool.run(Buffer.alloc(16), '{}', {
+        kind: 'transform',
+        maxResponseBytes: 1024,
+        limitOutputBytes: 1024,
+      })
       await new Promise((resolve) => setTimeout(resolve, 100))
       await pool.destroy()
       assert.equal((await result).error?.code, 'ERR_POOL_CLOSED')

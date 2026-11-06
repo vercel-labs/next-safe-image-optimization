@@ -7,8 +7,8 @@
 //! seccomp filters if installing them fails (like under QEMU's user mode emulation), instead of
 //! exiting.
 //!
-//! Requests arrive on stdin as `[u64 LE length][request]`, and responses are written to stdout
-//! (see `nsio_core::protocol`). The worker handles one request at a time, and never outlives its
+//! Requests arrive on stdin as `[u64 LE length][request]`, and responses are written to stdout,
+//! after `DECODED_FRAME` for transforms (see `nsio_core::protocol`). The worker handles one request at a time, and never outlives its
 //! parent: on Linux, `PR_SET_PDEATHSIG` kills it when the parent exits, even mid-request, and it
 //! only notices stdin closing between requests. `PR_SET_PDEATHSIG` isn't cross-platform, so on
 //! macOS and Windows a reader thread instead watches for stdin closing and exits the process as
@@ -22,7 +22,9 @@ use std::sync::mpsc;
 use std::thread;
 
 use nsio_core::exit_immediately;
-use nsio_core::protocol::{self, EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED, EXIT_VERSION_MISMATCH};
+use nsio_core::protocol::{
+    self, DECODED_FRAME, EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED, EXIT_VERSION_MISMATCH,
+};
 #[cfg(target_os = "linux")]
 use nsio_worker::linux_sandbox;
 
@@ -113,15 +115,19 @@ fn main() {
     let _ = EXIT_SANDBOX_FAILED;
 
     for request in requests() {
-        let response = protocol::handle(request);
-        let written = output
-            .write_all(&response.head)
-            .and_then(|()| output.write_all(&response.data))
-            .and_then(|()| output.flush());
-        if written.is_err() {
-            // The parent is gone.
-            exit_immediately(0);
-        }
+        let response = protocol::handle(request, || send(&mut output, &[&DECODED_FRAME]));
+        send(&mut output, &[&response.head, &response.data]);
+    }
+}
+
+/// Exits if the parent is gone.
+fn send(output: &mut impl Write, parts: &[&[u8]]) {
+    let written = parts
+        .iter()
+        .try_for_each(|part| output.write_all(part))
+        .and_then(|()| output.flush());
+    if written.is_err() {
+        exit_immediately(0);
     }
 }
 

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { Pool, defaultPool } from '../dist/index.js'
 import { NativeBackend } from '../dist/native.js'
 import { VERSION } from '../dist/protocol.js'
-import type { RunResult } from '../dist/protocol.js'
+import type { RequestKind, RunResult } from '../dist/protocol.js'
 import { findWasm } from '../dist/wasm.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
@@ -21,8 +21,7 @@ interface InternalPool {
     input: Uint8Array,
     kind: string,
     options: object,
-    limitOutputBytes: number | undefined,
-    timeoutMs?: number,
+    runOptions: { timeoutMs?: number; decodeTimeoutMs?: number },
   ): Promise<unknown>
 }
 
@@ -62,6 +61,13 @@ describe('pool', () => {
             .timeoutMs(ms as never),
         TypeError,
       )
+      assert.throws(
+        () =>
+          defaultPool()
+            .prepare(Buffer.alloc(1))
+            .decodeTimeoutMs(ms as never),
+        TypeError,
+      )
     }
   })
 
@@ -89,6 +95,7 @@ describe('pool', () => {
       const { info } = await defaultPool()
         .prepare(input)
         .timeoutMs(ms)
+        .decodeTimeoutMs(ms)
         .toBuffer({ resolveWithObject: true })
       assert.equal(info.width, 8)
     }
@@ -151,7 +158,12 @@ describe('pool', () => {
     const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
     const start = performance.now()
     await assertRejectsWithCode(
-      (pool as unknown as InternalPool).run(input, 'transform', { format: 'png' }, undefined, 1),
+      (pool as unknown as InternalPool).run(
+        input,
+        'transform',
+        { format: 'png' },
+        { timeoutMs: 1 },
+      ),
       'ERR_TIMEOUT',
     )
     assert.ok(performance.now() - start < 2000)
@@ -161,6 +173,30 @@ describe('pool', () => {
       .resize(8)
       .toBuffer({ resolveWithObject: true })
     assert.equal(info.width, 8)
+  })
+
+  test('decode timeouts kill the worker, and the pool replaces it', async () => {
+    const pool = new Pool({ concurrency: 1 })
+    const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
+    const start = performance.now()
+    await assert.rejects(
+      (pool as unknown as InternalPool).run(
+        input,
+        'transform',
+        { format: 'png' },
+        { timeoutMs: 60_000, decodeTimeoutMs: 1 },
+      ),
+      { code: 'ERR_TIMEOUT', message: 'decoding took longer than 1ms' },
+    )
+    assert.ok(performance.now() - start < 2000)
+    const { info } = await pool
+      .prepare(input)
+      .timeoutMs(60_000)
+      .decodeTimeoutMs(60_000)
+      .resize(8)
+      .toBuffer({ resolveWithObject: true })
+    assert.equal(info.width, 8)
+    assert.equal((await pool.prepare(input).decodeTimeoutMs(60_000).metadata()).width, 2000)
   })
 
   test('idle workers keep neither themselves nor the process alive', () => {
@@ -532,7 +568,7 @@ describe(
     ): NativeBackend {
       return new NativeBackend({
         workerPath,
-        maxProcesses: 1,
+        maxWorkers: 1,
         idleTimeoutMs: 1000,
         maxImagesPerWorker,
         memoryLimit: 0,
@@ -551,24 +587,32 @@ describe(
         maxResponseBytes: 1024,
       })
     }
-    async function assertFails(result: Promise<RunResult>, code: string) {
+    async function assertFails(result: Promise<RunResult>, code: string, message?: string) {
       const { response, error } = await result
       assert.equal(response, undefined)
       assert.equal(error?.code, code, JSON.stringify(error))
+      if (message !== undefined) {
+        assert.equal(error?.message, message)
+      }
     }
-    /** A command that writes a transform response, except its `length` bytes of data. */
-    function respond(length: number): string {
+    function printf(bytes: Uint8Array): string {
+      const octal = Array.from(bytes, (byte) => `\\${byte.toString(8).padStart(3, '0')}`)
+      return `printf '${octal.join('')}'`
+    }
+    /** A command that writes the `decoded` event (`DECODED_FRAME`). */
+    const decoded = printf(Buffer.alloc(8))
+    /**
+     * A command that writes the `decoded` event (unless `decoded` is false), and a transform
+     * response, except its `length` bytes of data.
+     */
+    function respond(length: number, { decoded = true } = {}): string {
       const json = Buffer.from(
         '{"type":"transform","meta":{"format":"png","width":1,"height":1,"channels":3}}',
       )
       const header = Buffer.alloc(12)
       header.writeBigUInt64LE(BigInt(4 + json.length + length))
       header.writeUInt32LE(json.length, 8)
-      const octal = Array.from(
-        Buffer.concat([header, json]),
-        (byte) => `\\${byte.toString(8).padStart(3, '0')}`,
-      )
-      return `printf '${octal.join('')}'`
+      return printf(Buffer.concat([Buffer.alloc(decoded ? 8 : 0), header, json]))
     }
     function data({ response, error }: RunResult): string {
       assert.ok(response?.kind === 'transform', JSON.stringify(error))
@@ -678,6 +722,48 @@ describe(
       const start = performance.now()
       await assertFails(run(worker('exec sleep 10'), 100), 'ERR_TIMEOUT')
       assert.ok(performance.now() - start < 5000)
+    })
+
+    test('the decode timeout stops once the worker has decoded the input', async () => {
+      const decodeTimeout = (script: string, timeoutMs: number, kind: RequestKind = 'transform') =>
+        nativeBackend(worker(script)).run(Buffer.alloc(16), '{}', {
+          kind,
+          timeoutMs,
+          decodeTimeoutMs: 100,
+          maxResponseBytes: 1024,
+        })
+      await assertFails(
+        decodeTimeout('exec sleep 10', 10_000),
+        'ERR_TIMEOUT',
+        'decoding took longer than 100ms',
+      )
+      // Metadata requests never finish decoding.
+      await assertFails(
+        decodeTimeout(`${decoded}; exec sleep 10`, 10_000, 'metadata'),
+        'ERR_WORKER_CRASHED',
+      )
+      await assertFails(
+        decodeTimeout('exec sleep 10', 10_000, 'metadata'),
+        'ERR_TIMEOUT',
+        'decoding took longer than 100ms',
+      )
+      // Responds after the decode timeout would have run out.
+      const slow = `${decoded}; sleep 0.3; ${respond(3, { decoded: false })}; printf abc; exec sleep 10`
+      assert.equal(data(await decodeTimeout(slow, 10_000)), 'abc')
+      await assertFails(
+        decodeTimeout(`${decoded}; exec sleep 10`, 300),
+        'ERR_TIMEOUT',
+        'processing took longer than 300ms',
+      )
+    })
+
+    test('a worker that sends a transform response without exactly one decoded event is replaced', async () => {
+      for (const script of [
+        `${respond(3, { decoded: false })}; printf abc; exec sleep 10`,
+        `${decoded}; ${respond(3)}; printf abc; exec sleep 10`,
+      ]) {
+        await assertFails(run(worker(script)), 'ERR_WORKER_CRASHED')
+      }
     })
 
     test('oversized and truncated responses', async () => {

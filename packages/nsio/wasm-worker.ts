@@ -1,6 +1,6 @@
 // Runs the wasm module (`crates/wasm`) in a worker thread, so that the pool can terminate it on a
 // timeout. The module can only reach the imports below: there's no filesystem, network, or
-// environment access, and no way to call into JS.
+// environment access, and the only call into JS is `nsio.decoded`, which messages the pool.
 
 import { parentPort, workerData } from 'node:worker_threads'
 
@@ -19,6 +19,8 @@ export interface WasmRequest {
 
 /** A message to the pool. Exactly one field is set. */
 export interface WasmWorkerMessage {
+  /** The module decoded a transform's input (`nsio.decoded`), before responding. */
+  decoded?: true
   /** Without the length prefix. */
   response?: Uint8Array
   /** The module called `proc_exit`. */
@@ -120,8 +122,17 @@ const wasi = {
   },
 }
 
+const nsio = {
+  // Delivered while the module is still running, so the pool can stop the decode timeout.
+  decoded(): void {
+    const message: WasmWorkerMessage = { decoded: true }
+    parentPort!.postMessage(message)
+  },
+}
+
 const instance = new WebAssembly.Instance(wasmModule, {
   env: { memory },
+  nsio,
   wasi_snapshot_preview1: wasi,
 })
 const wasm = instance.exports as unknown as Exports

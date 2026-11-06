@@ -4,10 +4,9 @@
 // sends a malformed response, or output it wasn't asked for, is killed.
 
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
 import type { Socket } from 'node:net'
 import { constants } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 
 import { isMusl } from './musl.js'
 import {
@@ -86,20 +85,47 @@ export function findWorker(): WorkerBinary | undefined {
   if (override) {
     return { path: resolve(override), local: true }
   }
-  const exe = process.platform === 'win32' ? '.exe' : ''
   for (const platform of platforms()) {
-    const name = `safe-image-optimization-worker.${platform}${exe}`
-    let path
     try {
-      path = join(
-        dirname(require.resolve(`@next/safe-image-optimization-${platform}/package.json`)),
-        name,
-      )
-    } catch {
-      continue
-    }
-    if (existsSync(path)) {
+      // Keep these requires literal so @vercel/nft and Turbopack can trace the optional packages.
+      // Each package's entry point exposes its worker through a traceable filesystem reference;
+      // resolving a dynamically constructed package name would omit it from standalone output.
+      let path: string
+      switch (platform) {
+        case 'darwin-arm64':
+          path = require('@next/safe-image-optimization-darwin-arm64')
+          break
+        case 'darwin-x64':
+          path = require('@next/safe-image-optimization-darwin-x64')
+          break
+        case 'win32-x64-msvc':
+          path = require('@next/safe-image-optimization-win32-x64-msvc')
+          break
+        case 'win32-arm64-msvc':
+          path = require('@next/safe-image-optimization-win32-arm64-msvc')
+          break
+        case 'linux-x64-gnu':
+          path = require('@next/safe-image-optimization-linux-x64-gnu')
+          break
+        case 'linux-arm64-gnu':
+          path = require('@next/safe-image-optimization-linux-arm64-gnu')
+          break
+        case 'linux-x64-musl':
+          path = require('@next/safe-image-optimization-linux-x64-musl')
+          break
+        case 'linux-arm64-musl':
+          path = require('@next/safe-image-optimization-linux-arm64-musl')
+          break
+        case 'linux-riscv64-gnu':
+          path = require('@next/safe-image-optimization-linux-riscv64-gnu')
+          break
+        default:
+          continue
+      }
       return { path, local: false }
+    } catch {
+      // Optional packages may be absent, or their worker missing. Try the next platform.
+      continue
     }
   }
   return undefined

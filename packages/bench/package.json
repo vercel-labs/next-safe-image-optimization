@@ -2,11 +2,13 @@
   "name": "nsio-bench",
   "version": "0.0.0",
   "private": true,
-  "description": "Throughput benchmark for @next/safe-image-optimization, sharp, and @napi-rs/image",
+  "description": "Throughput benchmark for @next/safe-image-optimization, sharp, @napi-rs/image, and Bun.Image",
   "type": "module",
   "scripts": {
     "bench": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/debug/safe-image-optimization-worker node --disable-warning=ExperimentalWarning bench.ts",
     "bench:release": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/release/safe-image-optimization-worker node --disable-warning=ExperimentalWarning bench.ts",
+    "bench:bun": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/debug/safe-image-optimization-worker bun bench.ts",
+    "bench:bun:release": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/release/safe-image-optimization-worker bun bench.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

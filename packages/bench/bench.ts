@@ -1,13 +1,15 @@
 /**
- * Throughput benchmark: `@next/safe-image-optimization` against sharp and `@napi-rs/image`, on the
- * pipeline Next.js's image optimizer runs (auto-orient, resize, encode).
+ * Throughput benchmark: `@next/safe-image-optimization` against sharp, `@napi-rs/image`, and
+ * `Bun.Image`, on the pipeline Next.js's image optimizer runs (auto-orient, resize, encode).
  *
  * The method is [@napi-rs/image's benchmark]'s: submit the same pipeline over and over, up to a
  * fixed number of images in flight at once, and report completed images per second. It differs in
  * that every image that starts is also waited for and counted (see `measure`), and that it
  * generates its own input images instead of reading one from the repository.
  *
- * Run it with `pnpm bench:release` from this directory, or `pnpm bench:release` at the root.
+ * Run it with `pnpm bench:release` from this directory, or `pnpm bench:release` at the root. The
+ * same file runs under Bun (`pnpm bench:bun:release`), which adds the `Bun.Image` entry; everything
+ * else is measured under whichever runtime it's run with, so only compare rows from the same run.
  *
  * [@napi-rs/image's benchmark]: https://github.com/Brooooooklyn/Image/blob/main/bench/bench.mjs
  */
@@ -189,6 +191,7 @@ const USAGE = `Usage: pnpm bench:release [options]
 
   Run it from this directory to pass options. From the repository root, turbo
   needs them after a separator: \`pnpm bench:release -- --formats webp\`.
+  \`pnpm bench:bun:release\` runs the same thing under Bun, which adds Bun.Image.
 
   --inputs <names>       Comma-separated: ${FIXTURE_SPECS.map((spec) => spec.name).join(', ')}
   --formats <names>      Comma-separated: ${FORMATS.join(', ')}
@@ -231,7 +234,7 @@ async function main(): Promise<void> {
   )
   const formats = list(values.formats, FORMATS, 'format')
 
-  let chosen = libraries(concurrency)
+  let chosen = await libraries(concurrency)
   if (values.libraries !== undefined) {
     const patterns = values.libraries.split(',').map((part) => part.trim().toLowerCase())
     const matches = (library: Library) =>
@@ -245,12 +248,16 @@ async function main(): Promise<void> {
     }
   }
 
+  // Under Bun, `process.version` is the Node.js version it emulates, which isn't what ran this.
+  const bun = typeof Bun === 'undefined' ? undefined : Bun.version
   const environment = {
-    node: process.version,
+    runtime: bun === undefined ? `Node.js ${process.version}` : `Bun ${bun}`,
     platform: `${process.platform} ${process.arch}`,
     cpu: `${cpus()[0]?.model.trim() ?? 'unknown'} x ${cpus().length}`,
     availableParallelism: availableParallelism(),
-    uvThreadpoolSize: process.env.UV_THREADPOOL_SIZE ?? '(unset: libuv defaults to 4)',
+    uvThreadpoolSize:
+      process.env.UV_THREADPOOL_SIZE ??
+      (bun === undefined ? '(unset: libuv defaults to 4)' : '(unset: Bun has its own pool)'),
     concurrency,
     budget: `${images} images or ${maxDurationMs / 1000}s per measurement`,
     sharp: `${sharp.versions.sharp} (libvips ${sharp.versions.vips})`,

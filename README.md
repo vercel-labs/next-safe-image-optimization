@@ -76,7 +76,7 @@ Idle workers don't keep the process alive, so pools don't need to be closed. To 
 - **Focused scope:** It implements only the small set of operations needed for Next.js's [image optimizer](https://nextjs.org/docs/app/getting-started/images) and [ImageResponse](https://nextjs.org/docs/app/api-reference/functions/image-response).
 - **Designed for untrusted input:** Web servers often optimize images uploaded by users or fetched from remote URLs. This library decodes images using memory-safe Rust libraries inside separate, sandboxed worker processes (or WebAssembly worker threads) with per-image memory and time limits. If an image triggers a bug, exceeds its memory budget, or times out, only that worker stops—the main Node.js process continues running unaffected.
 
-Because of these goals, `@next/safe-image-optimization` has a much smaller feature set than sharp and trades some performance for isolation. [`packages/bench`](packages/bench/README.md) measures that trade, against sharp and [`@napi-rs/image`](https://github.com/Brooooooklyn/Image).
+Because of these goals, `@next/safe-image-optimization` has a much smaller feature set than sharp and trades some performance for isolation. [`packages/bench`](packages/bench/README.md) measures that trade, against sharp, [`@napi-rs/image`](https://github.com/Brooooooklyn/Image), and [`Bun.Image`](https://bun.com/docs/runtime/image).
 
 While this library is designed to protect against untrusted input, it may still have vulnerabilities. You should only fetch remote images from trusted sources or your own object storage. Use Next.js's [`images.remotePatterns` configuration](https://nextjs.org/docs/app/getting-started/images#remote-images) to restrict allowed image sources.
 
@@ -87,7 +87,7 @@ While this library is designed to protect against untrusted input, it may still 
 - **[Color handling](docs/colors.md)** — sRGB conversion, ICC profiles, bit depth, CMYK, and HDR
 - **[Platform support](docs/platforms.md)** — supported operating systems, CPU architectures, and comparison with sharp
 - **[WebAssembly backend](docs/wasm.md)** — using and building the WebAssembly worker backend
-- **[Benchmark](packages/bench/README.md)** — throughput against sharp and `@napi-rs/image`, and how to run it
+- **[Benchmark](packages/bench/README.md)** — throughput against sharp, `@napi-rs/image`, and `Bun.Image`, and how to run it
 - **[Future work](docs/future-work.md)** — planned improvements
 
 ## Development

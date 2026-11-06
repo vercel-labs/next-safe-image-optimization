@@ -27,6 +27,15 @@
     "bench:release": {
       "dependsOn": ["^build", "nsio-worker#build:release"],
       "cache": false
+    },
+    // The same benchmark under Bun, which adds the `Bun.Image` entry. Bun has to be installed.
+    "bench:bun": {
+      "dependsOn": ["^build", "nsio-worker#build"],
+      "cache": false
+    },
+    "bench:bun:release": {
+      "dependsOn": ["^build", "nsio-worker#build:release"],
+      "cache": false
     }
   }
 }

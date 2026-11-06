@@ -66,14 +66,30 @@ const packages = TARGETS.map((target) => {
       name: packageName,
       description,
       ...common,
+      // pnpm 12 keeps the mode from chmodSync below, but its docs say it only keeps `bin`'s.
+      publishConfig: { ...common.publishConfig, executableFiles: [binary] },
       os: [os],
       cpu: [cpu],
       ...(os === 'linux' ? { libc: [abi === 'musl' ? 'musl' : 'glibc'] } : {}),
-      files: [binary, NOTICES],
+      main: 'index.js',
+      files: ['index.js', binary, NOTICES],
       // Yarn PnP can't spawn a binary from inside a zip archive.
       preferUnplugged: true,
     },
     files: {
+      // Tracers follow the literal require in native.ts into this entry point. The static path
+      // and existsSync reference let @vercel/nft and Turbopack include the executable as an asset,
+      // alongside the package metadata, without trying to load the binary as JavaScript.
+      'index.js': `const { join } = require('node:path')
+const { existsSync } = require('node:fs')
+
+// Keep this path static so @vercel/nft and Turbopack include the worker in standalone output.
+const worker = join(__dirname, '${binary}')
+if (!existsSync(worker)) {
+  throw new Error('Missing safe-image-optimization worker')
+}
+module.exports = worker
+`,
       [binary]: {
         from: join(packageDir, binary),
         executable: true,

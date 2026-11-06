@@ -3,9 +3,8 @@
 // discarded after a timeout, a crash (a trap or `proc_exit`), or a malformed response, since its
 // memory may be in an inconsistent state.
 
-import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
 import {
@@ -55,7 +54,6 @@ interface Slot {
 
 /** The package with the wasm module, which isn't in the main package, like sharp's `@img/sharp-wasm32`. */
 export const WASM_PACKAGE = '@next/safe-image-optimization-wasm32'
-const WASM_FILE = 'safe-image-optimization.wasm'
 
 /**
  * A path to the wasm module to use instead of `WASM_PACKAGE`'s, like a local build
@@ -73,13 +71,26 @@ export function findWasm(): string | undefined {
   if (override) {
     return resolve(override)
   }
-  let path
-  try {
-    path = join(dirname(require.resolve(`${WASM_PACKAGE}/package.json`)), WASM_FILE)
-  } catch {
-    return undefined
+  // Literal, like the requires in `findWorker`, so that tracers include the module. Each is
+  // declared in the published package.json (scripts/pack-npm.mjs), so none rely on hoisting.
+  const packages = [
+    // Optional dependencies with their own copies of the module, only installed on FreeBSD and
+    // WebContainers. First, because they're exact-pinned, so the nearest copy is always the right
+    // version.
+    () => require('@next/safe-image-optimization-freebsd-wasm') as string,
+    () => require('@next/safe-image-optimization-webcontainers-wasm') as string,
+    // An optional peer dependency, for when it's installed directly. Last, because if nothing
+    // provides the peer, Node finds whatever copy it can, like one hoisted from another version.
+    () => require('@next/safe-image-optimization-wasm32') as string,
+  ]
+  for (const load of packages) {
+    try {
+      return load()
+    } catch {
+      // Not installed, or its module is missing.
+    }
   }
-  return existsSync(path) ? path : undefined
+  return undefined
 }
 
 function failure(code: string, message: string): RunResult {
@@ -212,7 +223,7 @@ export class WasmBackend implements Backend {
       this.#onClosed = undefined
       // Idle workers don't keep the process alive, but whoever awaits `close()` should see it
       // resolve.
-      const keepAlive = setTimeout(() => {}, MAX_TIMEOUT_MS)
+      const keepAlive = setTimeout(() => { }, MAX_TIMEOUT_MS)
       void Promise.all(this.#exiting).then(() => {
         clearTimeout(keepAlive)
         onClosed()

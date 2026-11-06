@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 // Packs every npm package into `npm/*.tgz`, for scripts/publish-npm.mjs:
 //
-// - `@next/safe-image-optimization`: its `dist/` (`pnpm build`), with the platform packages as
-//   `optionalDependencies`. They aren't in its package.json, so installing this repo doesn't need
-//   them to be published.
+// - `@next/safe-image-optimization`: its `dist/` (`pnpm build`), with the platform packages and
+//   wasm copies as `optionalDependencies`, and the wasm package as an optional peer dependency.
+//   They aren't in its package.json, so installing this repo doesn't need them to be published.
 // - `@next/safe-image-optimization-<platform>`: the worker binary that CI built for the platform
 //   (`safe-image-optimization-worker.<platform>`, from scripts/build-native.mjs), with `os`, `cpu`,
 //   and `libc` fields, so package managers only install the one that matches.
 // - `@next/safe-image-optimization-wasm32`: `safe-image-optimization.wasm`, from
 //   `target/wasm32-wasip1/release/nsio_wasm.wasm` (scripts/build-wasm.mjs).
+// - `@next/safe-image-optimization-{freebsd,webcontainers}-wasm`: the same, with `os` or `cpu`
+//   fields, so that the module is only installed by default where there's no native worker.
 //
 // Every package gets the main package's version, and the binaries' packages include third-party
 // notices (scripts/third-party-notices.mjs). The worker binaries must all be in packages/nsio first.
@@ -36,6 +38,7 @@ const root = join(import.meta.dirname, '..')
 const packageDir = join(root, 'packages', 'nsio')
 const pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'))
 const NOTICES = 'THIRD-PARTY-NOTICES.txt'
+const WASM_FILE = 'safe-image-optimization.wasm'
 const main = `[\`${pkg.name}\`](https://www.npmjs.com/package/${pkg.name})`
 
 /** The fields that every package shares with the main one. */
@@ -102,31 +105,89 @@ module.exports = worker
 })
 
 const wasmName = `${pkg.name}-wasm32`
-const wasmDescription = `The wasm build of ${pkg.name}, for platforms without a native worker binary.`
-packages.push({
-  target: 'wasm32-wasip1',
-  manifest: {
-    name: wasmName,
-    description: wasmDescription,
-    ...common,
-    files: ['safe-image-optimization.wasm', NOTICES],
-  },
-  files: {
-    'safe-image-optimization.wasm': {
-      from: join(root, 'target', 'wasm32-wasip1', 'release', 'nsio_wasm.wasm'),
-      hint: 'Build it with `pnpm build:wasm:release`.',
+
+/** A package with the wasm module, and `fields` in its manifest. */
+function wasmPackage(name, description, readme, fields = {}) {
+  return {
+    target: 'wasm32-wasip1',
+    manifest: {
+      name,
+      description,
+      ...common,
+      ...fields,
+      main: 'index.js',
+      files: ['index.js', WASM_FILE, NOTICES],
     },
-    'README.md':
-      `# ${wasmName}\n\n${wasmDescription} Install it alongside ${main}, which uses it when there's no ` +
-      'native worker binary for the platform (or with `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm`).\n',
-    'license.md': license,
-  },
-})
+    files: {
+      // Traceable, like the platform packages' entry points.
+      'index.js': `const { join } = require('node:path')
+const { existsSync } = require('node:fs')
+
+// Keep this path static so @vercel/nft and Turbopack include the module in standalone output.
+const wasm = join(__dirname, '${WASM_FILE}')
+if (!existsSync(wasm)) {
+  throw new Error('Missing safe-image-optimization wasm module')
+}
+module.exports = wasm
+`,
+      [WASM_FILE]: {
+        from: join(root, 'target', 'wasm32-wasip1', 'release', 'nsio_wasm.wasm'),
+        hint: 'Build it with `pnpm build:wasm:release`.',
+      },
+      'README.md': `# ${name}\n\n${description} ${readme}\n`,
+      'license.md': license,
+    },
+  }
+}
+
+packages.push(
+  wasmPackage(
+    wasmName,
+    `The wasm build of ${pkg.name}, for platforms without a native worker binary.`,
+    `Install it alongside ${main}, which uses it when there's no native worker binary for the ` +
+      'platform (or with `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm`).',
+  ),
+)
+
+// Like sharp's `@img/sharp-freebsd-wasm32` and `@img/sharp-webcontainers-wasm32`: the wasm package
+// has no `os` or `cpu` fields, so as an optional dependency, it would be installed everywhere. These
+// have their own copies of the module, so that their fields keep it from being installed elsewhere.
+// sharp's depend on `@img/sharp-wasm32` instead, but with the wasm package as an optional peer of the
+// main package (so that it's found without hoisting when it's installed directly), npm would then
+// install it everywhere: its tree has every optional dependency, and the peer keeps their
+// dependencies after it drops the ones for other platforms.
+//
+// Not `-wasm32`: pnpm 12 infers missing `os` and `cpu` fields from an `<os>-<cpu>` pair in the name,
+// so it would only install `-freebsd-wasm32` where `process.arch` is `wasm32` (which is why it
+// skips sharp's on FreeBSD).
+for (const [platformName, description, fields] of [
+  ['freebsd', 'FreeBSD', { os: ['freebsd'] }],
+  // WebContainers (StackBlitz) report `process.arch` as `wasm32`.
+  ['webcontainers', 'WebContainers', { cpu: ['wasm32'] }],
+]) {
+  const packageName = `${pkg.name}-${platformName}-wasm`
+  optionalDependencies[packageName] = pkg.version
+  packages.push(
+    wasmPackage(
+      packageName,
+      `The wasm build of ${pkg.name}, for ${description}, which has no native worker binary.`,
+      `Install ${main} instead, which depends on it.`,
+      fields,
+    ),
+  )
+}
 
 // Without the fields that are only for developing this repo.
 const { scripts: _scripts, devDependencies: _devDependencies, ...manifest } = pkg
 packages.push({
-  manifest: { ...manifest, optionalDependencies },
+  manifest: {
+    ...manifest,
+    optionalDependencies,
+    // So that, when it's installed directly, it's linked where the main package can resolve it,
+    // without relying on hoisting.
+    peerDependencies: { [wasmName]: pkg.version },
+    peerDependenciesMeta: { [wasmName]: { optional: true } },
+  },
   files: {
     dist: { from: join(packageDir, 'dist'), hint: 'Build it with `pnpm build`.' },
     'README.md': { from: join(root, 'README.md') },

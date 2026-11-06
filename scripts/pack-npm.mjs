@@ -66,6 +66,8 @@ const packages = TARGETS.map((target) => {
       name: packageName,
       description,
       ...common,
+      // pnpm 12 keeps the mode from chmodSync below, but its docs say it only keeps `bin`'s.
+      publishConfig: { ...common.publishConfig, executableFiles: [binary] },
       os: [os],
       cpu: [cpu],
       ...(os === 'linux' ? { libc: [abi === 'musl' ? 'musl' : 'glibc'] } : {}),

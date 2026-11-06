@@ -31,6 +31,8 @@ bytemuck = { version = "1.25.2", default-features = false, features = ["extern_c
 resvg = { version = "0.49.0", default-features = false, features = ["raster-images"] }
 # ICC profile -> sRGB conversion. Same major version as `image` uses.
 moxcms = { version = "0.8.1", default-features = false, features = ["lut", "neon_shaper_paths", "sse_shaper_paths", "avx_shaper_paths"] }
+# SIMD resampling, including premultiplied alpha. Without Rayon: workers stay single-threaded.
+fast_image_resize = { version = "6.1.0", default-features = false, features = ["image"] }
 
 # Encoders. Sandboxing encoders isn't a goal: they only ever see pixel buffers we produced.
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }

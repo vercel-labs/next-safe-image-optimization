@@ -1,10 +1,10 @@
 //! Pixel operations. Images are always one of `ImageLuma8`, `ImageLumaA8`, `ImageRgb8`, or
 //! `ImageRgba8` (see [`crate::decode::normalize`]).
 
-use image::imageops::{self, FilterType};
-use image::{DynamicImage, ImageBuffer, Pixel};
+use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
+use image::{DynamicImage, GrayAlphaImage, GrayImage, RgbImage, RgbaImage};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::limits::Limits;
 use crate::orientation::Transform;
 
@@ -125,78 +125,47 @@ pub fn resize(
     if crop == (0, 0, width, height) && (out_width, out_height) == (width, height) {
         return Ok(img);
     }
-    // `imageops::resize` resamples vertically first, into an RGBA `f32` buffer.
+    // Bound the resampling workspace. The allocator also accounts for fast_image_resize's buffers.
     limits.check_alloc(u64::from(crop_width) * u64::from(out_height) * 16)?;
-    Ok(resample(img, crop, out_width, out_height, spec.kernel))
+    resample(img, crop, out_width, out_height, spec.kernel)
 }
 
-/// Uses `image`'s resampling, which is simple but not especially fast (no SIMD, and an `f32`
-/// intermediate). If resizing proves to be a significant performance issue, consider a dedicated
-/// crate like `fast_image_resize`.
+/// `fast_image_resize` uses SIMD and premultiplies alpha internally, so transparent pixels don't
+/// bleed color into their neighbors.
 fn resample(
-    mut img: DynamicImage,
+    img: DynamicImage,
     crop: (u32, u32, u32, u32),
     width: u32,
     height: u32,
     kernel: Kernel,
-) -> DynamicImage {
-    fn resample_buffer<P: Pixel<Subpixel = u8> + 'static>(
-        img: &ImageBuffer<P, Vec<u8>>,
-        (x, y, crop_width, crop_height): (u32, u32, u32, u32),
-        width: u32,
-        height: u32,
-        filter: FilterType,
-    ) -> ImageBuffer<P, Vec<u8>> {
-        let view = imageops::crop_imm(img, x, y, crop_width, crop_height);
-        imageops::resize(&*view, width, height, filter)
-    }
-
-    let filter = match kernel {
-        Kernel::Nearest => FilterType::Nearest,
-        Kernel::Linear => FilterType::Triangle,
-        Kernel::Cubic => FilterType::CatmullRom,
-        Kernel::Lanczos3 => FilterType::Lanczos3,
-    };
-    // `imageops::resize` expects premultiplied alpha. Resampling straight alpha would bleed the
-    // color of transparent pixels into their neighbors.
-    premultiply_alpha(&mut img);
+) -> Result<DynamicImage> {
+    let (x, y, crop_width, crop_height) = crop;
     let mut out: DynamicImage = match &img {
-        DynamicImage::ImageLuma8(i) => resample_buffer(i, crop, width, height, filter).into(),
-        DynamicImage::ImageLumaA8(i) => resample_buffer(i, crop, width, height, filter).into(),
-        DynamicImage::ImageRgb8(i) => resample_buffer(i, crop, width, height, filter).into(),
-        DynamicImage::ImageRgba8(i) => resample_buffer(i, crop, width, height, filter).into(),
+        DynamicImage::ImageLuma8(_) => GrayImage::new(width, height).into(),
+        DynamicImage::ImageLumaA8(_) => GrayAlphaImage::new(width, height).into(),
+        DynamicImage::ImageRgb8(_) => RgbImage::new(width, height).into(),
+        DynamicImage::ImageRgba8(_) => RgbaImage::new(width, height).into(),
         _ => unreachable!("images are normalized to 8 bits per channel after decoding"),
     };
-    unpremultiply_alpha(&mut out);
-    out
-}
-
-/// Applies `f(color, alpha)` to each color channel, if the image has alpha (which is last).
-fn map_colors(img: &mut DynamicImage, f: impl Fn(u32, u32) -> u8) {
-    fn map<const N: usize>(data: &mut [u8], f: impl Fn(u32, u32) -> u8) {
-        for pixel in data.as_chunks_mut::<N>().0 {
-            let alpha = u32::from(pixel[N - 1]);
-            for c in &mut pixel[..N - 1] {
-                *c = f(u32::from(*c), alpha);
-            }
-        }
-    }
-    match img {
-        DynamicImage::ImageLumaA8(i) => map::<2>(i, f),
-        DynamicImage::ImageRgba8(i) => map::<4>(i, f),
-        _ => {}
-    }
-}
-
-fn premultiply_alpha(img: &mut DynamicImage) {
-    map_colors(img, |c, alpha| ((c * alpha + 127) / 255) as u8);
-}
-
-fn unpremultiply_alpha(img: &mut DynamicImage) {
-    map_colors(img, |c, alpha| match alpha {
-        0 => 0,
-        _ => ((c * 255 + alpha / 2) / alpha).min(255) as u8,
-    });
+    let filter = match kernel {
+        Kernel::Nearest => ResizeAlg::Nearest,
+        Kernel::Linear => ResizeAlg::Convolution(FilterType::Bilinear),
+        Kernel::Cubic => ResizeAlg::Convolution(FilterType::CatmullRom),
+        Kernel::Lanczos3 => ResizeAlg::Convolution(FilterType::Lanczos3),
+    };
+    let options = ResizeOptions::new()
+        .crop(
+            f64::from(x),
+            f64::from(y),
+            f64::from(crop_width),
+            f64::from(crop_height),
+        )
+        .resize_alg(filter)
+        .use_alpha(true);
+    Resizer::new()
+        .resize(&img, &mut out, &options)
+        .map_err(|err| Error::Internal(format!("failed to resize image: {err}")))?;
+    Ok(out)
 }
 
 #[cfg(test)]

@@ -16,9 +16,9 @@ To choose the WebAssembly backend explicitly, set the `NEXT_SAFE_IMAGE_OPTIMIZAT
 
 The WebAssembly backend runs a pool of Node.js `worker_threads`. Each worker thread hosts its own WebAssembly instance and handles one image at a time:
 
-- **Sandboxing:** The WebAssembly module has no access to the filesystem, network, environment variables, or arbitrary JavaScript code. Its imports are limited to a small set of stubbed WASI functions and are verified against an allowlist at build time.
+- **Sandboxing:** The WebAssembly module has no access to the filesystem, network, environment variables, or arbitrary JavaScript code. Its imports are limited to a small set of stubbed WASI functions, and one function that tells the pool it has decoded the input (which takes no arguments), and are verified against an allowlist at build time.
 - **Memory limits:** Each WebAssembly instance's memory is capped by the pool's `limitProcessMemoryBytes` option (default 768 MiB), in addition to the per-image `limitAllocatorMemoryBytes` limit (default 512 MiB). Unlike the native backend, this hard limit works on macOS and Windows as well as Linux.
-- **Crash and timeout recovery:** If an image exceeds a memory limit, triggers a WebAssembly trap (such as a Rust panic), or exceeds `timeoutMs()`, the worker thread is terminated and replaced before the next request.
+- **Crash and timeout recovery:** If an image exceeds a memory limit, triggers a WebAssembly trap (such as a Rust panic), or exceeds `timeoutMs()` or `decodeTimeoutMs()`, the worker thread is terminated and replaced before the next request.
 
 Compared to native worker processes, the WebAssembly backend runs anywhere Node.js runs (with the same `@next/safe-image-optimization-wasm32` package on every platform), but image processing is slower and runs in threads within the Node.js process rather than separate OS processes (`forkServer` is ignored).
 

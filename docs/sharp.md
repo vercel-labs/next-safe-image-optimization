@@ -43,7 +43,7 @@ Because of these different goals, `@next/safe-image-optimization` is not a drop-
 - **No shrink-on-load.** libvips decodes a JPEG at a reduced DCT scale when the result is about to be shrunk, so sharp decodes far fewer pixels when generating a thumbnail from a large JPEG. This library always decodes at full size.
 - **Resizing and encoding in Rust.** Resampling uses the `image` crate rather than libvips, and JPEG uses `jpeg-encoder` (or mozjpeg without assembly) rather than libjpeg-turbo.
 
-[`packages/bench`](../packages/bench/README.md) measures all of this against sharp and `@napi-rs/image`, and documents what the numbers don't cover.
+[`packages/bench`](../packages/bench/README.md) measures all of this against sharp, `@napi-rs/image`, and `Bun.Image`, and documents what the numbers don't cover.
 
 ## Colors, metadata, and platforms
 

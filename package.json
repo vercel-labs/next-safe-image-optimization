@@ -12,6 +12,8 @@
     "test:wasm:release": "turbo run test:wasm:release",
     "bench": "turbo run bench",
     "bench:release": "turbo run bench:release",
+    "bench:bun": "turbo run bench:bun",
+    "bench:bun:release": "turbo run bench:bun:release",
     "typecheck": "turbo run typecheck",
     "quality": "turbo run quality",
     "quality:fix": "turbo run quality:fix",

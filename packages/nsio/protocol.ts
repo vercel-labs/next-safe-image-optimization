@@ -1,6 +1,7 @@
-// The worker protocol (see `crates/core/src/protocol.rs`). Requests are built by the backends, from
-// `input` and `encodeOptions()`. Responses come from a worker, so they're untrusted, and parsed
-// defensively by the backend (`decodeResponse()`), which kills a worker that sends a malformed one.
+// The worker protocol (see `crates/core/src/protocol.rs`). Requests are built by `encodeRequest()`,
+// from `input` and `encodeOptions()`. Responses come from a worker, so they're untrusted, and parsed
+// defensively by the pool (`decodeResponse()`, in `worker-pool.ts`), which kills a worker that
+// sends a malformed one.
 //
 // The request options and protocol constants are generated from the Rust code
 // (`protocol.generated.ts`, by `pnpm generate`).
@@ -36,6 +37,11 @@ export interface RunOptions {
   kind: RequestKind
   /** Wall time, starting when a worker picks up the request. Omit to wait indefinitely. */
   timeoutMs?: number
+  /**
+   * Like `timeoutMs`, but stops once the worker has decoded the input. Metadata requests never
+   * finish decoding, so it applies to the whole request.
+   */
+  decodeTimeoutMs?: number
   /** A larger response is treated as a crash. */
   maxResponseBytes: number
   /** Removes the request from the queue, or kills the worker processing it. */
@@ -68,7 +74,11 @@ export interface Backend {
   destroy(): Promise<void>
 }
 
-export const POOL_CLOSED: WorkerError = { code: 'ERR_POOL_CLOSED', message: 'the pool is closed' }
+export function failure(code: string, message: string): WorkerError {
+  return { code, message }
+}
+
+export const POOL_CLOSED: WorkerError = failure('ERR_POOL_CLOSED', 'the pool is closed')
 
 /** The `TypeError` for invalid options, with a `code` like Node's own validation errors. */
 export function invalidOptions(message: string): TypeError & { code: 'ERR_INVALID_OPTIONS' } {
@@ -103,6 +113,22 @@ export function encodeOptions(options: RequestOptions): string {
     }
     return value
   })
+}
+
+/**
+ * `[u64 LE length][input][options JSON][u32 LE length of the JSON]`. The wasm worker skips the
+ * length prefix. It's a copy, so that the caller may reuse `input` immediately, and can't change
+ * it while it's being sent. Never from Node's shared pool, so its `buffer` can be transferred.
+ */
+export function encodeRequest(input: Uint8Array, options: string): Buffer {
+  const json = Buffer.from(options)
+  const length = input.length + json.length + 4
+  const frame = Buffer.allocUnsafeSlow(8 + length)
+  frame.writeBigUInt64LE(BigInt(length))
+  frame.set(input, 8)
+  json.copy(frame, 8 + input.length)
+  frame.writeUInt32LE(json.length, 8 + input.length + json.length)
+  return frame
 }
 
 export class InvalidResponseError extends Error {}

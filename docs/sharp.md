@@ -10,11 +10,11 @@ Because of these different goals, `@next/safe-image-optimization` is not a drop-
 ## API and pipeline
 
 - **Pools instead of a default function:** Pipelines are created with `defaultPool().prepare(input)` or `pool.prepare(input)` instead of calling `sharp(input, options)`.
-- **Limits are chained methods:** Instead of constructor options (like sharp's `limitInputPixels`), limits are set with `.limitInputPixels()`, `.limitAllocatorMemoryBytes()`, `.limitOutputBytes()`, `.allowInputFormats()`, `.animated()`, and `.timeoutMs()`.
+- **Limits are chained methods:** Instead of constructor options (like sharp's `limitInputPixels`), limits are set with `.limitInputPixels()`, `.limitAllocatorMemoryBytes()`, `.limitOutputBytes()`, `.allowInputFormats()`, `.animated()`, `.timeoutMs()`, and `.decodeTimeoutMs()`.
 - **Cancellation and shutdown:** `toBuffer()` and `metadata()` accept an `AbortSignal` (`{ signal }`), and pools can be shut down with `close()` or `destroy()`.
 - **In-memory input only:** Input must be a `Buffer`, `Uint8Array` (or another `ArrayBufferView`), `ArrayBuffer`, or `SharedArrayBuffer`. File paths and streams are not supported.
 - **Strict option validation:** Unsupported or unknown options (such as `fit` or `progressive`) are rejected with a `TypeError` instead of being ignored. Most options are validated in the worker when `toBuffer()` or `metadata()` is called, so invalid options reject the returned promise rather than throwing synchronously.
-- **Timeouts:** Set timeouts in milliseconds with `timeoutMs(ms)` instead of sharp's `timeout({ seconds })`.
+- **Timeouts:** Set timeouts in milliseconds with `timeoutMs(ms)` instead of sharp's `timeout({ seconds })`. `decodeTimeoutMs(ms)` adds a separate timeout for decoding, which sharp doesn't have.
 - **Errors:** Processing failures reject with a `SafeImageOptimizationError` that has a stable `code` property (such as `ERR_UNSUPPORTED_FORMAT`, `ERR_LIMIT_EXCEEDED`, or `ERR_TIMEOUT`). Invalid options are `TypeError`s with the code `ERR_INVALID_OPTIONS`.
 - **`limitInputPixels`:** Applies to `metadata()` and to the target render size of SVGs, in addition to raster decoding. Like sharp, it does not apply to raster images embedded inside an SVG.
 - **Removing limits:** `0` removes any limit or timeout, like sharp's `limitInputPixels: 0` and `timeout({ seconds: 0 })`. `limitInputPixels` doesn't accept sharp's `false` (no limit) or `true` (the default).

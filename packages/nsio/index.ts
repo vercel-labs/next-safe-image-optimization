@@ -184,7 +184,8 @@ export interface ToBufferOptions extends MetadataOptions {
  *   `limitOutputBytes()`.
  * - `ERR_DECODE_FAILED`, `ERR_ENCODE_FAILED`: the input is invalid, or encoding failed.
  * - `ERR_INTERNAL`: a bug.
- * - `ERR_TIMEOUT`: processing took longer than `timeoutMs()`.
+ * - `ERR_TIMEOUT`: processing took longer than `timeoutMs()`, or decoding took longer than
+ *   `decodeTimeoutMs()`.
  * - `ERR_OUT_OF_MEMORY`: the worker ran out of memory, either because it exceeded the pool's
  *   `limitProcessMemoryBytes`, or because the system did.
  * - `ERR_WORKER_CRASHED`: the worker crashed, or sent an invalid response.
@@ -209,8 +210,8 @@ export type ErrorCode =
 /**
  * Errors from processing an image (see `ErrorCode`). Invalid options are `TypeError`s instead. Most
  * are only validated by the worker, so `toBuffer()` or `metadata()` rejects with them. The input,
- * the pool and its options, `timeoutMs()`, `limitOutputBytes()`, and `rotate()` without an angle
- * throw immediately.
+ * the pool and its options, `timeoutMs()`, `decodeTimeoutMs()`, `limitOutputBytes()`, and
+ * `rotate()` without an angle throw immediately.
  */
 export class SafeImageOptimizationError extends Error {
   readonly code: ErrorCode
@@ -294,6 +295,14 @@ const DEFAULT_LIMIT_PROCESS_MEMORY = 768 * 1024 * 1024
 const BACKENDS: readonly BackendName[] = ['native', 'wasm']
 const BACKEND_VARIABLE = 'NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND'
 
+/** @internal `Pool.run()`'s options, already validated. */
+export interface InternalRunOptions {
+  limitOutputBytes?: number
+  timeoutMs?: number
+  decodeTimeoutMs?: number
+  signal?: AbortSignal
+}
+
 function createBackend(options: PoolOptions): Backend {
   const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1))
   const idleTimeoutMs =
@@ -342,7 +351,7 @@ function createBackend(options: PoolOptions): Backend {
   }
   return new NativeBackend({
     workerPath: worker.path,
-    maxProcesses: maxWorkers,
+    maxWorkers,
     idleTimeoutMs,
     maxImagesPerWorker: maxImagesPerWorker ?? (process.platform === 'win32' ? 64 : 1),
     memoryLimit,
@@ -412,9 +421,7 @@ export class Pool {
     input: Uint8Array,
     kind: K,
     options: NonNullable<RequestOptions[K]>,
-    limitOutputBytes: number | undefined,
-    timeoutMs?: number,
-    signal?: AbortSignal,
+    { limitOutputBytes, timeoutMs, decodeTimeoutMs, signal }: InternalRunOptions = {},
   ): Promise<Extract<Response, { kind: K }>> {
     signal?.throwIfAborted()
     if (this.#closed) {
@@ -423,6 +430,7 @@ export class Pool {
     const result = await this.#backend.run(input, encodeOptions({ [kind]: options }), {
       kind,
       timeoutMs,
+      decodeTimeoutMs,
       maxResponseBytes: maxResponseBytes(limitOutputBytes ?? DEFAULT_LIMIT_OUTPUT_BYTES),
       signal,
     })
@@ -473,6 +481,7 @@ export class Pipeline {
   /** Validated here, because the response's maximum size depends on it. */
   #limitOutputBytes: number | undefined
   #timeoutMs: number | undefined
+  #decodeTimeoutMs: number | undefined
   #autoOrient = false
   #rotate: unknown
   #resize: ResizeOptions | undefined
@@ -552,6 +561,24 @@ export class Pipeline {
   timeoutMs(ms: number): this {
     checkMs('timeoutMs', ms)
     this.#timeoutMs = ms === 0 ? undefined : ms
+    return this
+  }
+
+  /**
+   * Limits the wall time of decoding the input, in milliseconds. It starts with `timeoutMs()`, and
+   * stops once the worker reports that it has decoded the image, so only `timeoutMs()` applies to
+   * the rest (resizing and encoding). Decoding is usually much faster than encoding, so this can be
+   * much stricter than `timeoutMs()`, which makes images that are slow to decode fail sooner. Like
+   * `timeoutMs()`, the worker is killed when the time runs out, and it fails with `ERR_TIMEOUT`.
+   *
+   * `metadata()` only decodes the header, so this applies to all of it.
+   *
+   * A compromised worker could report that it has decoded the image early, so this doesn't replace
+   * `timeoutMs()`. 0 means no limit, and is the default.
+   */
+  decodeTimeoutMs(ms: number): this {
+    checkMs('decodeTimeoutMs', ms)
+    this.#decodeTimeoutMs = ms === 0 ? undefined : ms
     return this
   }
 
@@ -642,8 +669,8 @@ export class Pipeline {
 
   /**
    * Reads the image header without decoding pixels. Only the limits apply (`limitInputPixels()`,
-   * `limitAllocatorMemoryBytes()`, `allowInputFormats()`, `animated()`, and `timeoutMs()`), and
-   * other operations are ignored.
+   * `limitAllocatorMemoryBytes()`, `allowInputFormats()`, `animated()`, `timeoutMs()`, and
+   * `decodeTimeoutMs()`), and other operations are ignored.
    */
   async metadata(options: MetadataOptions = {}): Promise<Metadata> {
     const { signal } = copyOptions(options)
@@ -671,14 +698,12 @@ export class Pipeline {
     const disposed = this.#disposed.signal
     const checked = checkSignal(signal)
     const combined = checked === undefined ? disposed : AbortSignal.any([checked, disposed])
-    const promise = this.#pool.run(
-      this.#input,
-      kind,
-      options,
-      this.#limitOutputBytes,
-      this.#timeoutMs,
-      combined,
-    )
+    const promise = this.#pool.run(this.#input, kind, options, {
+      limitOutputBytes: this.#limitOutputBytes,
+      timeoutMs: this.#timeoutMs,
+      decodeTimeoutMs: this.#decodeTimeoutMs,
+      signal: combined,
+    })
     this.#pending.add(promise)
     try {
       return await promise

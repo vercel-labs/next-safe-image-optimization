@@ -46,6 +46,7 @@ const meta = await defaultPool().prepare(input).timeoutMs(5_000).metadata()
   - `.animated('reject')` rejects animated images with `ERR_ANIMATED` before decoding. With `.animated('first-frame')` (the default), only the first frame is decoded.
   - `.limitInputPixels()`, `.limitAllocatorMemoryBytes()`, and `.limitOutputBytes()` bound image dimensions, memory use, and output size.
   - `.timeoutMs(ms)` cancels processing if an image takes too long. There is no default timeout, so you should set one when handling untrusted images.
+  - `.decodeTimeoutMs(ms)` is a separate, usually much stricter, timeout for decoding the input. Once the image is decoded, only `.timeoutMs()` applies.
 - **Cancellation:** `.toBuffer({ signal })` and `.metadata({ signal })` accept an `AbortSignal`.
 - **Errors:** Processing errors throw a `SafeImageOptimizationError` with a stable `code` property (such as `ERR_UNSUPPORTED_FORMAT`, `ERR_LIMIT_EXCEEDED`, or `ERR_TIMEOUT`). Invalid options throw a `TypeError` with the code `ERR_INVALID_OPTIONS`.
 

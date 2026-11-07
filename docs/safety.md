@@ -14,6 +14,16 @@ Most image-parsing vulnerabilities occur while decoding untrusted input. Every s
 
 C libraries (`libwebp` for lossy WebP and `mozjpeg` when `mozjpeg: true` is enabled) are only used for encoding, where the input is already validated pixel data produced by this library.
 
+### HEIF and the system libheif
+
+HEIF input (like photos from iPhones) is the one exception, and it's opt-in. There's no memory-safe HEVC decoder, so with the pool's `dangerouslyUseSystemHeifDecoder` option, native workers load the system's [libheif](https://github.com/strukturag/libheif) (C++) and its codec plugins (like libde265) as shared libraries, and decode HEIF with them. Without it, HEIF input is rejected with `ERR_UNSUPPORTED_FORMAT`. Enabling it weakens several of the defenses described here:
+
+- **Memory safety:** libheif and its plugins are C and C++, and parse the untrusted input directly. Their version, and whether they have security fixes, depends on what's installed on the system.
+- **Memory limits:** they allocate outside of the worker's Rust allocator, so `limitAllocatorMemoryBytes()` is only checked against an estimate before decoding. Only `limitProcessMemoryBytes` (Linux) is a hard limit.
+- **`seccomp`:** libde265 always starts a decoding thread (and deadlocks if it can't), so these workers' filters also allow starting threads. They still can't start processes, open files, or use the network. Libraries are loaded at startup, before the filter is installed.
+
+Process isolation still applies, and with the default `maxImagesPerWorker: 1`, a compromised worker only ever sees one image. With `true`, workers that can't load libheif (or the WebAssembly backend, which can't load libraries) reject HEIF input. With `'required'`, they fail to start instead (`ERR_WORKER_SPAWN`), and `new Pool()` throws `ERR_BACKEND_UNAVAILABLE` for the WebAssembly backend.
+
 ## Process isolation
 
 Image processing never runs on the main Node.js thread or in the main process's memory space. Instead, a pool of workers processes one image at a time:
@@ -29,7 +39,7 @@ By default, each worker processes a single image and is then replaced, so an ima
 
 ## OS sandboxing
 
-On Linux (`x64`, `arm64`, and `riscv64`), each worker installs a [`seccomp` system call filter](https://en.wikipedia.org/wiki/Seccomp) before processing any images. Once active, the worker cannot access the filesystem, open network sockets, or spawn new processes.
+On Linux (`x64`, `arm64`, and `riscv64`), each worker installs a [`seccomp` system call filter](https://en.wikipedia.org/wiki/Seccomp) before processing any images. Once active, the worker cannot access the filesystem, open network sockets, or spawn new processes (or, unless `dangerouslyUseSystemHeifDecoder` loaded libheif, start threads).
 
 If a Linux worker fails to install its `seccomp` filter on a supported platform, it exits immediately and requests fail with `ERR_WORKER_SPAWN` unless `NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES=1` is set.
 
@@ -48,7 +58,7 @@ Forking makes starting replacement workers much faster, with one trade-off: fork
 Resource limits prevent a single image from exhausting server memory or CPU time:
 
 - **Input dimensions (`limitInputPixels()`, default ~268 megapixels):** Rejects images whose `width * height` exceeds the limit before decoding pixels. For SVGs, this applies to both the declared SVG dimensions and the rendered output dimensions. However, raster images embedded inside an SVG (`<image href="data:...">`) are decoded during SVG rendering and are only bounded by the memory and timeout limits below.
-- **Per-image memory (`limitAllocatorMemoryBytes()`, default 512 MiB):** Caps the total memory a worker's Rust allocator may use for a single image, including the input buffer and intermediate resize buffers. Exceeding this limit stops the worker and rejects with `ERR_LIMIT_EXCEEDED`. Before calling the C encoders (`libwebp` and `mozjpeg`), the worker also checks their estimated working memory against this limit.
+- **Per-image memory (`limitAllocatorMemoryBytes()`, default 512 MiB):** Caps the total memory a worker's Rust allocator may use for a single image, including the input buffer and intermediate resize buffers. Exceeding this limit stops the worker and rejects with `ERR_LIMIT_EXCEEDED`. Before calling the C encoders (`libwebp` and `mozjpeg`), or libheif with `dangerouslyUseSystemHeifDecoder`, the worker also checks their estimated working memory against this limit.
 - **Per-worker memory (`limitProcessMemoryBytes`, default 768 MiB):** A hard limit on each worker's total memory, covering both Rust allocations and the C encoders. This is enforced by the OS on Linux ([`RLIMIT_DATA`]) and by the WebAssembly runtime on all platforms when using the `wasm` backend. It is not currently enforced for native workers on macOS or Windows. Exceeding it rejects with `ERR_OUT_OF_MEMORY` (not `ERR_LIMIT_EXCEEDED`), because the worker can't tell it apart from the system running out of memory.
 - **Output size (`limitOutputBytes()`, default 128 MiB):** Caps the size of the encoded image and the maximum response size the main process will buffer from a worker.
 - **Processing time (`timeoutMs()`):** Limits how long a worker may spend on one image (starting when a worker picks up the request). If the timer expires, the worker is forcibly terminated and the request fails with `ERR_TIMEOUT`. There is no default timeout, so you should always set `timeoutMs()` when processing untrusted input.

@@ -70,7 +70,7 @@ fn default_output(format: InputFormat) -> Result<OutputSpec> {
         InputFormat::Png | InputFormat::Svg => OutputSpec::Png(PngSpec::default()),
         InputFormat::Webp => OutputSpec::Webp(WebpSpec::default()),
         InputFormat::Gif => OutputSpec::Gif(GifSpec::default()),
-        InputFormat::Tiff | InputFormat::Avif => {
+        InputFormat::Tiff | InputFormat::Avif | InputFormat::Heif => {
             return Err(Error::UnsupportedFormat(format!(
                 "{} output is not supported, choose an output format explicitly",
                 format.name().to_uppercase()

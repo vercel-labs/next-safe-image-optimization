@@ -36,6 +36,9 @@ pub const EXIT_INVALID_FRAME: i32 = 89;
 /// Allocations exceeded the request's `limitAllocatorMemoryBytes` (see `alloc.rs`).
 #[typeshare]
 pub const EXIT_MEMORY_LIMIT: i32 = 90;
+/// `dangerouslyUseSystemHeifDecoder: 'required'`, and libheif couldn't be loaded.
+#[typeshare]
+pub const EXIT_SYSTEM_HEIF_UNAVAILABLE: i32 = 91;
 
 /// The most JSON that a response may have (64 KiB). The data's limit is the request's
 /// `limitOutputBytes`.

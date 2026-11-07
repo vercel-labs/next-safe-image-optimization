@@ -35,6 +35,8 @@ export enum InputFormat {
 	Gif = "gif",
 	Tiff = "tiff",
 	Avif = "avif",
+	/** Only decoded with the pool's `dangerouslyUseSystemHeifDecoder` option. */
+	Heif = "heif",
 	Svg = "svg",
 }
 
@@ -142,4 +144,5 @@ export const EXIT_VERSION_MISMATCH: number = 87;
 export const EXIT_SANDBOX_FAILED: number = 88;
 export const EXIT_INVALID_FRAME: number = 89;
 export const EXIT_MEMORY_LIMIT: number = 90;
+export const EXIT_SYSTEM_HEIF_UNAVAILABLE: number = 91;
 export const MAX_JSON_BYTES: number = 65536;

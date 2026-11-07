@@ -18,8 +18,8 @@ export type InputFormat = `${generated.InputFormat}`
 export type OutputFormat = `${generated.OutputFormat}`
 export type Kernel = `${generated.Kernel}`
 /**
- * What to do with animated input (see `Pipeline.animated()`). PNG (APNG), WebP, and AVIF count as
- * animated if their header declares an animation, and GIF if it has more than one frame.
+ * What to do with animated input (see `Pipeline.animated()`). PNG (APNG), WebP, AVIF, and HEIF count
+ * as animated if their header declares an animation, and GIF if it has more than one frame.
  * - `'first-frame'`: decode only the first frame.
  * - `'reject'`: reject animated input with `ERR_ANIMATED`, before decoding it.
  */
@@ -90,6 +90,30 @@ export interface PoolOptions {
    * the same protocol for years). Ignored on Windows and for `'wasm'`. Default: `true`.
    */
   forkServer?: boolean
+  /**
+   * Decode HEIF input (like photos from iPhones, usually HEVC-compressed) with the system's
+   * [libheif](https://github.com/strukturag/libheif), instead of rejecting it with
+   * `ERR_UNSUPPORTED_FORMAT`. Native workers load it as a shared library (`libheif.so.1`,
+   * `libheif.1.dylib`, or `heif.dll`) when they start, with its codec plugins (like libde265).
+   *
+   * **This is dangerous.** Every other format is decoded with memory-safe Rust, but libheif and its
+   * plugins are C and C++, and their version (and their security fixes) is whatever the system has
+   * installed. They also allocate outside of `limitAllocatorMemoryBytes()`'s reach (it's checked
+   * against an estimate instead), so on macOS and Windows, nothing enforces a hard memory limit.
+   * On Linux, the seccomp filter allows these workers to start threads (libde265 always starts
+   * one), but not processes. A worker still only sees one image (`maxImagesPerWorker`).
+   *
+   * - `false`: HEIF input is rejected.
+   * - `true`: workers load libheif if they can. If they can't, or with the `'wasm'` backend (which
+   *   can't load libraries), HEIF input is rejected with `ERR_UNSUPPORTED_FORMAT`.
+   * - `'required'`: like `true`, but workers that can't load libheif fail to start
+   *   (`ERR_WORKER_SPAWN`), and `new Pool()` throws `ERR_BACKEND_UNAVAILABLE` for `'wasm'`.
+   *
+   * The musl worker (used when Node.js itself uses musl) is statically linked, so it can't load
+   * libheif. `allowInputFormats()` allows `'heif'` by default. HEIF output isn't supported.
+   * Default: `false`.
+   */
+  dangerouslyUseSystemHeifDecoder?: boolean | 'required'
 }
 
 /**
@@ -155,7 +179,10 @@ export interface Metadata {
   /** Stored height, before applying the EXIF orientation. */
   height: number
   hasAlpha: boolean
-  /** EXIF orientation, 1-8. 1 if absent. */
+  /**
+   * EXIF orientation, 1-8. 1 if absent, and for HEIF, whose width and height are already
+   * transformed (libheif applies the container's rotation, mirroring, and cropping).
+   */
   orientation: number
   /** Whether the image has an embedded ICC profile. */
   hasProfile: boolean
@@ -188,10 +215,12 @@ export interface ToBufferOptions extends MetadataOptions {
  * - `ERR_OUT_OF_MEMORY`: the worker ran out of memory, either because it exceeded the pool's
  *   `limitProcessMemoryBytes`, or because the system did.
  * - `ERR_WORKER_CRASHED`: the worker crashed, or sent an invalid response.
- * - `ERR_WORKER_SPAWN`: the worker couldn't be started.
+ * - `ERR_WORKER_SPAWN`: the worker couldn't be started (including if it couldn't load libheif, with
+ *   `dangerouslyUseSystemHeifDecoder: 'required'`).
  * - `ERR_BACKEND_UNAVAILABLE`: thrown by `new Pool()` (and `defaultPool()`) if there's no native
  *   worker binary for this platform and `@next/safe-image-optimization-wasm32` isn't installed, or
- *   `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND` chose a backend that isn't available.
+ *   `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND` chose a backend that isn't available, or the backend is
+ *   `'wasm'` with `dangerouslyUseSystemHeifDecoder: 'required'`.
  * - `ERR_POOL_CLOSED`: the pool was closed before the image was submitted, or destroyed before it
  *   finished.
  *
@@ -309,6 +338,10 @@ function createBackend(options: PoolOptions): Backend {
   const maxImagesPerWorker = optional(options.maxImagesPerWorker, (v) =>
     checkInteger('maxImagesPerWorker', v, 0),
   )
+  const systemHeif: unknown = options.dangerouslyUseSystemHeifDecoder ?? false
+  if (typeof systemHeif !== 'boolean' && systemHeif !== 'required') {
+    throw invalid('dangerouslyUseSystemHeifDecoder', "boolean or 'required'", systemHeif)
+  }
   const backend = process.env[BACKEND_VARIABLE] || undefined
   if (backend !== undefined) {
     checkOneOf(BACKEND_VARIABLE, backend, BACKENDS)
@@ -320,6 +353,11 @@ function createBackend(options: PoolOptions): Backend {
     const wasmPath = findWasm()
     if (wasmPath === undefined) {
       throw unavailable(`${context}Install ${WASM_PACKAGE} to use the wasm backend.`)
+    }
+    if (systemHeif === 'required') {
+      throw unavailable(
+        `${context}The wasm backend can't load libheif, which dangerouslyUseSystemHeifDecoder: 'required' requires.`,
+      )
     }
     return new WasmBackend({
       wasmPath,
@@ -347,6 +385,7 @@ function createBackend(options: PoolOptions): Backend {
     maxImagesPerWorker: maxImagesPerWorker ?? (process.platform === 'win32' ? 64 : 1),
     memoryLimit,
     forkServer,
+    systemHeif,
     // Local builds show the worker's stderr. Installed ones discard it (rav1d logs errors there).
     inheritStderr: worker.local,
   })
@@ -528,7 +567,8 @@ export class Pipeline {
    * Rejects input in any other format with `ERR_UNSUPPORTED_FORMAT`, before decoding it. The format
    * is always detected from the input's contents. Must not be empty. Default: every `InputFormat`
    * except `'svg'`, which must be allowed explicitly: the pixel limit doesn't apply to raster images
-   * embedded in an SVG (see `limitInputPixels()`).
+   * embedded in an SVG (see `limitInputPixels()`). `'heif'` is only decoded with the pool's
+   * `dangerouslyUseSystemHeifDecoder` option.
    */
   allowInputFormats(formats: readonly InputFormat[]): this {
     this.#limits.allowedInputFormats = Array.isArray(formats) ? [...formats] : formats

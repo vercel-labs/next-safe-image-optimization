@@ -45,3 +45,6 @@ gif = { version = "0.14.2", default-features = false, features = ["std", "color_
 # `image-webp` only supports lossless encoding, so lossy WebP comes from libwebp (C). Never use this
 # crate for decoding.
 libwebp-sys = { version = "0.14.4", default-features = false }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+libloading = { version = "0.9.0", default-features = false }

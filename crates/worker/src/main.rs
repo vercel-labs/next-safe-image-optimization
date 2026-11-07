@@ -1,8 +1,10 @@
 //! The worker process. The JS wrapper (`packages/nsio/native.ts`) spawns it with the arguments
-//! `<version> <parent pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for stdin and
-//! stdout. On unix, it instead spawns it once as a fork server (`--fork-server`), which forks
-//! workers with the same setup, except that stdin and stdout are a Unix socket (see
-//! `fork_server.rs`). The only environment variable it may get is
+//! `<version> <parent pid> <memory limit in bytes, or 0> [flags]`, an empty environment, and pipes
+//! for stdin and stdout. On unix, it instead spawns it once as a fork server (`--fork-server`), which
+//! forks workers with the same setup, except that stdin and stdout are a Unix socket (see
+//! `fork_server.rs`). With `--system-heif` (or `--system-heif=required`, which exits with
+//! `EXIT_SYSTEM_HEIF_UNAVAILABLE` if it fails), it loads libheif at startup, before its sandbox (see
+//! `nsio_core::load_system_heif`). The only environment variable it may get is
 //! `NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES=1`, which runs workers without
 //! seccomp filters if installing them fails (like under QEMU's user mode emulation), instead of
 //! exiting.
@@ -22,7 +24,10 @@ use std::sync::mpsc;
 use std::thread;
 
 use nsio_core::exit_immediately;
-use nsio_core::protocol::{self, EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED, EXIT_VERSION_MISMATCH};
+use nsio_core::protocol::{
+    self, EXIT_INVALID_FRAME, EXIT_SANDBOX_FAILED, EXIT_SYSTEM_HEIF_UNAVAILABLE,
+    EXIT_VERSION_MISMATCH,
+};
 #[cfg(target_os = "linux")]
 use nsio_worker::linux_sandbox;
 
@@ -45,7 +50,15 @@ fn main() {
     };
     let parent = number().and_then(|pid| u32::try_from(pid).ok());
     let memory_limit = number().unwrap_or(0);
-    let fork_server = args.next().is_some_and(|arg| arg == "--fork-server");
+    let (mut fork_server, mut system_heif, mut system_heif_required) = (false, false, false);
+    for arg in args {
+        match arg.to_str() {
+            Some("--fork-server") => fork_server = true,
+            Some("--system-heif") => system_heif = true,
+            Some("--system-heif=required") => (system_heif, system_heif_required) = (true, true),
+            _ => {}
+        }
+    }
 
     // Forked workers inherit the limit.
     #[cfg(target_os = "linux")]
@@ -60,6 +73,18 @@ fn main() {
     #[cfg(not(target_os = "linux"))]
     let _ = parent;
 
+    // Before the sandbox (which blocks opening files), and before forking, so that forked workers
+    // share it.
+    let system_heif = system_heif
+        && match nsio_core::load_system_heif() {
+            Ok(()) => true,
+            Err(err) if system_heif_required => {
+                eprintln!("failed to load libheif: {err}");
+                exit_immediately(EXIT_SYSTEM_HEIF_UNAVAILABLE);
+            }
+            Err(_) => false,
+        };
+
     // Before forking, so that forked workers share the compiled filter, and because the fork server
     // clears its environment.
     #[cfg(all(
@@ -71,7 +96,9 @@ fn main() {
         )
     ))]
     let (filters, ignore_seccomp_failures) = (
-        linux_sandbox::compile_filters().unwrap_or_else(|_| exit_immediately(EXIT_SANDBOX_FAILED)),
+        // libheif's codec plugins start threads.
+        linux_sandbox::compile_filters(system_heif)
+            .unwrap_or_else(|_| exit_immediately(EXIT_SANDBOX_FAILED)),
         std::env::var_os("NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES")
             .is_some_and(|value| value == "1"),
     );
@@ -110,7 +137,7 @@ fn main() {
             target_arch = "riscv64"
         )
     )))]
-    let _ = EXIT_SANDBOX_FAILED;
+    let _ = (EXIT_SANDBOX_FAILED, system_heif);
 
     for request in requests() {
         let response = protocol::handle(request);

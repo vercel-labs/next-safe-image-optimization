@@ -14,6 +14,8 @@ use image::error::{
 };
 use image::{ColorType, ImageDecoder, ImageError, ImageFormat, ImageResult};
 
+use crate::decode::ftyp_brands;
+
 /// The extension that `image`'s detection hook uses to identify the format.
 pub const EXTENSION: &str = "avif";
 
@@ -90,18 +92,7 @@ impl ImageDecoder for AvifDecoder {
 /// Image sequences have the `avis` brand, as their major brand (which avif-parse rejects) or a
 /// compatible brand (alongside a still image, which avif-parse decodes).
 pub fn has_sequence_brand(input: &[u8]) -> bool {
-    let Some(size) = input.first_chunk::<4>() else {
-        return false;
-    };
-    // The box size includes the 8 byte header, then the major brand, minor version, and
-    // compatible brands.
-    let end = (u32::from_be_bytes(*size) as usize).min(input.len());
-    let major = input.get(8..12).and_then(|b| b.first_chunk::<4>());
-    let (compatible, _) = input.get(16..end).unwrap_or_default().as_chunks::<4>();
-    major
-        .into_iter()
-        .chain(compatible)
-        .any(|brand| brand == b"avis")
+    ftyp_brands(input).any(|brand| brand == b"avis")
 }
 
 #[cfg(test)]

@@ -1,12 +1,14 @@
 //! Decoders. `image` detects the format from its magic bytes (never file extensions or content
-//! types). Raster formats are decoded with `image`'s decoders, except AVIF (see `avif.rs`).
-//! Anything else that looks like an SVG is rendered with resvg (see `svg.rs`).
+//! types). Raster formats are decoded with `image`'s decoders, except AVIF (see `avif.rs`), and
+//! HEIF, which only the system's libheif decodes, if the worker loaded it (see `heif.rs`). Anything
+//! else that looks like an SVG is rendered with resvg (see `svg.rs`).
 //!
 //! The worker's memory limits and the caller's timeout bound what decoders can do, so the only
 //! check before decoding is the pixel limit (and the caller's allowed formats, and animation).
 
 mod avif;
 mod gif;
+pub mod heif;
 mod svg;
 
 use std::io::Cursor;
@@ -37,6 +39,8 @@ pub enum InputFormat {
     Gif,
     Tiff,
     Avif,
+    /// Only decoded with the pool's `dangerouslyUseSystemHeifDecoder` option.
+    Heif,
     Svg,
 }
 
@@ -46,13 +50,16 @@ impl InputFormat {
     ///   unexpected by some callers.
     /// - The pixel limit doesn't apply to SVG embedded raster images, though the allocator memory
     ///   limit should be a sufficient defense in practice.
-    pub const DEFAULT_ALLOWED: [InputFormat; 6] = [
+    ///
+    /// HEIF is allowed, but it's only decoded if the worker loaded libheif.
+    pub const DEFAULT_ALLOWED: [InputFormat; 7] = [
         InputFormat::Jpeg,
         InputFormat::Png,
         InputFormat::Webp,
         InputFormat::Gif,
         InputFormat::Tiff,
         InputFormat::Avif,
+        InputFormat::Heif,
     ];
 
     pub fn name(self) -> &'static str {
@@ -63,6 +70,7 @@ impl InputFormat {
             InputFormat::Gif => "gif",
             InputFormat::Tiff => "tiff",
             InputFormat::Avif => "avif",
+            InputFormat::Heif => "heif",
             InputFormat::Svg => "svg",
         }
     }
@@ -80,7 +88,7 @@ impl InputFormat {
             Some(ImageFormat::Avif) => InputFormat::Avif,
             _ => {
                 return Err(Error::UnsupportedFormat(
-                    "input is not a JPEG, PNG, WebP, GIF, TIFF, AVIF, or SVG image".into(),
+                    "input is not a JPEG, PNG, WebP, GIF, TIFF, AVIF, HEIF, or SVG image".into(),
                 ));
             }
         })
@@ -131,8 +139,14 @@ fn detect(input: &[u8]) -> Result<InputFormat> {
     let reader = ImageReader::new(Cursor::new(input))
         .with_guessed_format()
         .map_err(|err| Error::Decode(err.to_string()))?;
-    if reader.format().is_none() && svg::is_svg(input) {
-        return Ok(InputFormat::Svg);
+    if reader.format().is_none() {
+        // Even if libheif isn't loaded, for a clearer error.
+        if heif::is_heif(input) {
+            return Ok(InputFormat::Heif);
+        }
+        if svg::is_svg(input) {
+            return Ok(InputFormat::Svg);
+        }
     }
     InputFormat::from_image_format(reader.format())
 }
@@ -207,6 +221,11 @@ fn raster_decoder<'a>(
             reject_animated(&mut || Ok(avif::has_sequence_brand(input)))?;
             Box::new(AvifDecoder::new(reader)?)
         }
+        InputFormat::Heif => {
+            heif::check_available()?;
+            reject_animated(&mut || Ok(heif::has_sequence_brand(input)))?;
+            heif::decoder(input)?
+        }
         InputFormat::Svg => return Err(Error::Internal("SVG is not a raster format".into())),
     };
     decoder.set_limits(limits.image_limits())?;
@@ -233,10 +252,33 @@ fn run(
     if !pixels {
         return Ok((header, None));
     }
+    if format == InputFormat::Heif {
+        let pixels = u64::from(width) * u64::from(height);
+        limits.check_alloc(pixels.saturating_mul(heif::C_DECODER_BYTES_PER_PIXEL))?;
+    }
 
     // For animations, this is the first frame.
     let image = DynamicImage::from_decoder(decoder)?;
     Ok((header, Some(drop_opaque_gif_alpha(format, image))))
+}
+
+/// The major and compatible brands of an ISOBMFF `ftyp` box (AVIF and HEIF), which is always the
+/// first box.
+fn ftyp_brands(input: &[u8]) -> impl Iterator<Item = &[u8; 4]> {
+    let input = if input.get(4..8) == Some(b"ftyp") {
+        input
+    } else {
+        &[]
+    };
+    // The box size includes the 8 byte header, then the major brand, minor version, and
+    // compatible brands.
+    let end = input
+        .first_chunk::<4>()
+        .map_or(0, |size| u32::from_be_bytes(*size) as usize)
+        .min(input.len());
+    let major = input.get(8..12).and_then(|b| b.first_chunk::<4>());
+    let (compatible, _) = input.get(16..end).unwrap_or_default().as_chunks::<4>();
+    major.into_iter().chain(compatible)
 }
 
 /// GIF frames always decode as RGBA. Drop the alpha channel if the frame turned out to be opaque,
@@ -280,6 +322,7 @@ mod tests {
         // Including box sizes that `image`'s own signature doesn't allow.
         assert_eq!(detect(b"\0\0\0\x1cftypavif").unwrap(), InputFormat::Avif);
         assert_eq!(detect(b"\x01\0\0\x1cftypavis").unwrap(), InputFormat::Avif);
+        assert_eq!(detect(b"\0\0\0\x1cftypheic").unwrap(), InputFormat::Heif);
         assert_eq!(
             detect(b"<?xml version=\"1.0\"?><svg").unwrap(),
             InputFormat::Svg
@@ -287,7 +330,7 @@ mod tests {
         // Magic bytes win over text.
         assert_eq!(detect(b"GIF89a<svg").unwrap(), InputFormat::Gif);
         for unsupported in [
-            &b"\0\0\0\x1cftypheic"[..],
+            &b"\0\0\0\x1cftypmif1"[..],
             b"<html>",
             b"",
             b"BM",

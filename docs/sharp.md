@@ -27,8 +27,9 @@ Because of these different goals, `@next/safe-image-optimization` is not a drop-
 
 ## Formats
 
-- **Unsupported formats:** HEIF input is not supported. AVIF, HEIF, and TIFF output are not supported.
-- **Animated images:** Only the first frame of animated GIF, WebP, APNG, and AVIF images is decoded (`animated('first-frame')`, the default), and animated output is not supported. `animated('reject')` rejects animated inputs with `ERR_ANIMATED` before decoding.
+- **Unsupported formats:** AVIF, HEIF, and TIFF output are not supported.
+- **HEIF input:** Only supported with the pool's `dangerouslyUseSystemHeifDecoder` option, which loads the system's libheif in native workers (not the WebAssembly backend), unlike sharp's prebuilt binaries, which bundle libheif without an HEVC decoder (see [Safety model](safety.md#heif-and-the-system-libheif)). libheif applies the container's rotation, mirroring, and cropping, so `metadata()` reports the transformed size, and an `orientation` of 1. ICC profiles are converted to sRGB, and HDR images are reduced to 8-bit.
+- **Animated images:** Only the first frame of animated GIF, WebP, APNG, AVIF, and HEIF images is decoded (`animated('first-frame')`, the default), and animated output is not supported. `animated('reject')` rejects animated inputs with `ERR_ANIMATED` before decoding.
 - **AVIF input:** Grid (tiled) AVIFs and AVIF image sequences are rejected. Orientation (`irot`, `imir`) and cropping (`clap`) properties in the AVIF container are ignored.
 - **SVG input:** SVG is rejected unless allowed explicitly with `allowInputFormats()`, because the pixel limit doesn't apply to raster images embedded in an SVG. SVGs are rendered with `resvg` instead of `librsvg`. Text elements are not rendered (no fonts are bundled; Next.js Open Graph images convert text to paths with Satori), `<image>` elements only load `data:` URLs, and compressed `.svgz` files are not supported.
 - **TIFF input:** YCbCr TIFFs (which includes most JPEG-compressed TIFFs) are not supported.

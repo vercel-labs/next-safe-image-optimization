@@ -16,3 +16,6 @@ pub mod protocol;
 mod request;
 
 pub use crate::alloc::{ExitOnOom, exit_immediately, set_memory_limit};
+/// For the pool's `dangerouslyUseSystemHeifDecoder` option (see `decode/heif.rs`).
+#[cfg(not(target_family = "wasm"))]
+pub use crate::decode::heif::load as load_system_heif;

@@ -13,6 +13,7 @@ import {
   EXIT_MEMORY_LIMIT,
   EXIT_OUT_OF_MEMORY,
   EXIT_SANDBOX_FAILED,
+  EXIT_SYSTEM_HEIF_UNAVAILABLE,
   EXIT_VERSION_MISMATCH,
   POOL_CLOSED,
   decodeResponse,
@@ -31,6 +32,8 @@ export interface NativeOptions {
   memoryLimit: number
   /** Fork workers from a fork server, instead of spawning each one (unix only). Default: `true`. */
   forkServer?: boolean
+  /** `dangerouslyUseSystemHeifDecoder`: load libheif at startup. Default: `false`. */
+  systemHeif?: boolean | 'required'
   /** Show the workers' stderr, instead of discarding it. Default: `false`. */
   inheritStderr?: boolean
 }
@@ -154,6 +157,11 @@ function exitFailure(code: number | null, signal: string | null): WorkerError {
       return failure('ERR_WORKER_SPAWN', "the worker binary doesn't match the package's version")
     case EXIT_SANDBOX_FAILED:
       return failure('ERR_WORKER_SPAWN', 'the worker failed to set up its sandbox')
+    case EXIT_SYSTEM_HEIF_UNAVAILABLE:
+      return failure(
+        'ERR_WORKER_SPAWN',
+        "the worker couldn't load libheif, which dangerouslyUseSystemHeifDecoder: 'required' requires",
+      )
     default:
       return failure(
         'ERR_WORKER_CRASHED',
@@ -181,6 +189,11 @@ function start(options: NativeOptions, forkServer: boolean): Promise<Started | W
     String(process.pid),
     String(memoryLimit),
     ...(forkServer ? ['--fork-server'] : []),
+    ...(options.systemHeif === 'required'
+      ? ['--system-heif=required']
+      : options.systemHeif
+        ? ['--system-heif']
+        : []),
   ]
   const stderr = options.inheritStderr ? 'inherit' : 'ignore'
   let child: ChildProcess

@@ -396,6 +396,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
 name = "libwebp-sys"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -521,6 +531,7 @@ dependencies = [
  "image",
  "jpeg-encoder",
  "libc",
+ "libloading",
  "libwebp-sys",
  "moxcms",
  "mozjpeg",
@@ -543,7 +554,9 @@ name = "nsio-worker"
 version = "0.0.2"
 dependencies = [
  "libc",
+ "libloading",
  "nsio-core",
+ "png",
  "seccompiler",
  "serde",
  "serde_json",

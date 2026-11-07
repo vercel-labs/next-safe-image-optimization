@@ -35,7 +35,7 @@ const meta = await defaultPool().prepare(input).timeoutMs(5_000).metadata()
 
 ### Supported formats and operations
 
-- **Input formats:** JPEG, PNG, WebP, GIF, TIFF, AVIF, and SVG (in-memory `Buffer`, typed array, or `ArrayBuffer` only). SVG must be allowed explicitly with `.allowInputFormats()`.
+- **Input formats:** JPEG, PNG, WebP, GIF, TIFF, AVIF, and SVG (in-memory `Buffer`, typed array, or `ArrayBuffer` only). SVG must be allowed explicitly with `.allowInputFormats()`. HEIF is only supported with the pool's `dangerouslyUseSystemHeifDecoder` option, which decodes it with the system's libheif (C++), outside of the memory-safe decoders (see [Safety model](docs/safety.md#heif-and-the-system-libheif)).
 - **Output formats:** JPEG (`.jpeg()`), PNG (`.png()`), WebP (`.webp()`), and GIF (`.gif()`). Output is always 8-bit sRGB with metadata stripped.
 - **Operations:**
   - `.autoOrient()`: orient using EXIF metadata.

@@ -44,8 +44,11 @@ pub use self::seccomp::{Filters, compile_filters, enable};
     target_arch = "riscv64"
 ))]
 mod seccomp {
-    use libc::{EPERM, c_long};
-    use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, TargetArch};
+    use libc::{ENOSYS, EPERM, c_long};
+    use seccompiler::{
+        BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
+        SeccompRule, TargetArch,
+    };
 
     /// Everything the worker needs after startup: reading requests and writing responses (and
     /// rav1d's logging, to stderr), memory management, threads synchronizing, and exiting.
@@ -82,29 +85,60 @@ mod seccomp {
     /// by the same user (like Node or the fork server) only kills the worker.
     const KILLED: &[c_long] = &[libc::SYS_tgkill, libc::SYS_tkill];
 
-    /// Two filters, because seccompiler's have a single action for matched syscalls. The kernel
-    /// takes the strictest action of all filters, so the `KILLED` filter wins over the allowlist's
-    /// `EPERM`.
+    /// With `threads`, for libheif's codec plugins (libde265 always starts a thread, and deadlocks
+    /// if it can't): what glibc's `pthread_create` and a new thread's setup use, besides `clone`
+    /// (only with `CLONE_THREAD`, so not `fork`) and `clone3`. `clone3`'s flags are in memory, which
+    /// seccomp can't read, so it fails with `ENOSYS` instead, and glibc falls back to `clone`.
+    const THREADS: &[c_long] = &[libc::SYS_set_robust_list, libc::SYS_rseq];
+
+    /// Two filters (three with threads), because seccompiler's have a single action for matched
+    /// syscalls. The kernel takes the strictest action of all filters, so the `KILLED` filter wins
+    /// over the allowlist's `EPERM`, and `clone3`'s `ENOSYS` wins over the allowlist allowing it.
     pub struct Filters {
         killed: BpfProgram,
+        no_clone3: Option<BpfProgram>,
         allowed: BpfProgram,
     }
 
-    pub fn compile_filters() -> Result<Filters, seccompiler::Error> {
+    pub fn compile_filters(threads: bool) -> Result<Filters, seccompiler::Error> {
         let arch = TargetArch::try_from(std::env::consts::ARCH)?;
-        let filter = |syscalls: &[c_long], other, matched| {
-            SeccompFilter::new(
-                syscalls.iter().map(|&nr| (nr, Vec::new())).collect(),
-                other,
-                matched,
-                arch,
-            )
-            .and_then(BpfProgram::try_from)
+        let filter = |rules: Vec<(c_long, Vec<SeccompRule>)>, other, matched| {
+            SeccompFilter::new(rules.into_iter().collect(), other, matched, arch)
+                .and_then(BpfProgram::try_from)
         };
+        let any_args = |syscalls: &[c_long]| -> Vec<_> {
+            syscalls.iter().map(|&nr| (nr, Vec::new())).collect()
+        };
+        let mut allowed = any_args(ALLOWED);
+        let mut no_clone3 = None;
+        if threads {
+            allowed.extend(any_args(THREADS));
+            allowed.extend(any_args(&[libc::SYS_clone3]));
+            let thread = libc::CLONE_THREAD as u64;
+            allowed.push((
+                libc::SYS_clone,
+                vec![SeccompRule::new(vec![SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Qword,
+                    SeccompCmpOp::MaskedEq(thread),
+                    thread,
+                )?])?],
+            ));
+            no_clone3 = Some(filter(
+                any_args(&[libc::SYS_clone3]),
+                SeccompAction::Allow,
+                SeccompAction::Errno(ENOSYS as u32),
+            )?);
+        }
         Ok(Filters {
-            killed: filter(KILLED, SeccompAction::Allow, SeccompAction::KillProcess)?,
+            killed: filter(
+                any_args(KILLED),
+                SeccompAction::Allow,
+                SeccompAction::KillProcess,
+            )?,
+            no_clone3,
             allowed: filter(
-                ALLOWED,
+                allowed,
                 SeccompAction::Errno(EPERM as u32),
                 SeccompAction::Allow,
             )?,
@@ -112,11 +146,15 @@ mod seccomp {
     }
 
     /// Installs the filters on every thread (`SECCOMP_FILTER_FLAG_TSYNC`). The worker is
-    /// single-threaded, but a thread started before this would otherwise be unsandboxed. Also sets
-    /// `PR_SET_NO_NEW_PRIVS`, which installing a filter without `CAP_SYS_ADMIN` requires.
+    /// single-threaded, but a thread started before this would otherwise be unsandboxed (and
+    /// threads started after it inherit the filters). Also sets `PR_SET_NO_NEW_PRIVS`, which
+    /// installing a filter without `CAP_SYS_ADMIN` requires.
     pub fn enable(filters: &Filters) -> Result<(), seccompiler::Error> {
         // The allowlist blocks `prctl` and `seccomp`, so it goes last.
         seccompiler::apply_filter_all_threads(&filters.killed)?;
+        if let Some(no_clone3) = &filters.no_clone3 {
+            seccompiler::apply_filter_all_threads(no_clone3)?;
+        }
         seccompiler::apply_filter_all_threads(&filters.allowed)
     }
 }

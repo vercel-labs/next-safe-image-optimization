@@ -68,6 +68,13 @@ export interface Backend {
   destroy(): Promise<void>
 }
 
+/**
+ * The package's version. The native worker (its first argument) exits with
+ * `EXIT_VERSION_MISMATCH` unless it matches its own, and `findWasm` skips wasm packages from other
+ * versions.
+ */
+export const VERSION = (require('../package.json') as { version: string }).version
+
 export const POOL_CLOSED: WorkerError = { code: 'ERR_POOL_CLOSED', message: 'the pool is closed' }
 
 /** The `TypeError` for invalid options, with a `code` like Node's own validation errors. */

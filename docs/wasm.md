@@ -6,7 +6,7 @@ Alongside native worker processes, `@next/safe-image-optimization` has a WebAsse
 npm install @next/safe-image-optimization @next/safe-image-optimization-wasm32
 ```
 
-Like sharp's `@img/sharp-freebsd-wasm32` and `@img/sharp-webcontainers-wasm32`, the main package has two optional dependencies, `@next/safe-image-optimization-freebsd-wasm` and `@next/safe-image-optimization-webcontainers-wasm`, which package managers only install on those platforms (with `os: ["freebsd"]` and `cpu: ["wasm32"]`). They contain the same module as `@next/safe-image-optimization-wasm32`. `@next/safe-image-optimization-wasm32` is an optional peer dependency of the main package, so when you install it directly, it's found without relying on your package manager's hoisting.
+Like sharp's `@img/sharp-freebsd-wasm32` and `@img/sharp-webcontainers-wasm32`, the main package has two optional dependencies, `@next/safe-image-optimization-freebsd-wasm` and `@next/safe-image-optimization-webcontainers-wasm`, which package managers only install on those platforms (with `os: ["freebsd"]` and `cpu: ["wasm32"]`). They contain the same module as `@next/safe-image-optimization-wasm32`. `@next/safe-image-optimization-wasm32` is an optional peer dependency of the main package, so when you install it directly, it's found without relying on your package manager's hoisting. It must be the same version as `@next/safe-image-optimization`: most package managers only warn about a mismatched optional peer, so the main package ignores a wasm package from another version.
 
 ## When it is used
 

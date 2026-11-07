@@ -1,7 +1,7 @@
 import { availableParallelism } from 'node:os'
 
 import { NativeBackend, findWorker } from './native.js'
-import { encodeOptions, invalidOptions, maxResponseBytes } from './protocol.js'
+import { VERSION, encodeOptions, invalidOptions, maxResponseBytes } from './protocol.js'
 import type {
   Backend,
   LimitOptions,
@@ -190,8 +190,9 @@ export interface ToBufferOptions extends MetadataOptions {
  * - `ERR_WORKER_CRASHED`: the worker crashed, or sent an invalid response.
  * - `ERR_WORKER_SPAWN`: the worker couldn't be started.
  * - `ERR_BACKEND_UNAVAILABLE`: thrown by `new Pool()` (and `defaultPool()`) if there's no native
- *   worker binary for this platform and `@next/safe-image-optimization-wasm32` isn't installed, or
- *   `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND` chose a backend that isn't available.
+ *   worker binary for this platform and `@next/safe-image-optimization-wasm32` isn't installed (or
+ *   is from another version), or `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND` chose a backend that isn't
+ *   available.
  * - `ERR_POOL_CLOSED`: the pool was closed before the image was submitted, or destroyed before it
  *   finished.
  *
@@ -317,12 +318,18 @@ function createBackend(options: PoolOptions): Backend {
   const unavailable = (message: string) =>
     new SafeImageOptimizationError('ERR_BACKEND_UNAVAILABLE', message)
   const wasm = (context: string) => {
-    const wasmPath = findWasm()
-    if (wasmPath === undefined) {
+    const found = findWasm()
+    if (found === undefined) {
       throw unavailable(`${context}Install ${WASM_PACKAGE} to use the wasm backend.`)
     }
+    if ('mismatched' in found) {
+      throw unavailable(
+        `${context}${found.mismatched} doesn't match this package's version. Install ` +
+          `${WASM_PACKAGE}@${VERSION} to use the wasm backend.`,
+      )
+    }
     return new WasmBackend({
-      wasmPath,
+      wasmPath: found.path,
       maxWorkers,
       idleTimeoutMs,
       maxImagesPerWorker: maxImagesPerWorker ?? 1,

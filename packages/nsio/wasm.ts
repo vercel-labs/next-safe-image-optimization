@@ -11,6 +11,7 @@ import {
   EXIT_MEMORY_LIMIT,
   EXIT_OUT_OF_MEMORY,
   POOL_CLOSED,
+  VERSION,
   decodeResponse,
   invalidResponse,
 } from './protocol.js'
@@ -62,35 +63,64 @@ export const WASM_PACKAGE = '@next/safe-image-optimization-wasm32'
  */
 export const WASM_PATH_VARIABLE = 'NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH'
 
+interface WasmPackage {
+  manifest: () => { name: string; version: string }
+  /** Only required if the manifest's version matches. */
+  path: () => string
+}
+
 /**
- * The wasm module is in `WASM_PACKAGE`, unless `WASM_PATH_VARIABLE` is set. Returns `undefined` if
- * it isn't installed.
+ * The wasm module is in `WASM_PACKAGE` (or its copies), unless `WASM_PATH_VARIABLE` is set. A
+ * package must have the main package's version: package managers don't enforce the optional peer's
+ * pinned version. Returns `mismatched` (like `name@version`) if every installed package is from
+ * another version, and `undefined` if none is installed.
  */
-export function findWasm(): string | undefined {
+export function findWasm(): { path: string } | { mismatched: string } | undefined {
   const override = process.env[WASM_PATH_VARIABLE]
   if (override) {
-    return resolve(override)
+    return { path: resolve(override) }
   }
   // Literal, like the requires in `findWorker`, so that tracers include the module. Each is
   // declared in the published package.json (scripts/pack-npm.mjs), so none rely on hoisting.
-  const packages = [
+  const packages: WasmPackage[] = [
     // Optional dependencies with their own copies of the module, only installed on FreeBSD and
     // WebContainers. First, because they're exact-pinned, so the nearest copy is always the right
     // version.
-    () => require('@next/safe-image-optimization-freebsd-wasm') as string,
-    () => require('@next/safe-image-optimization-webcontainers-wasm') as string,
+    {
+      manifest: () => require('@next/safe-image-optimization-freebsd-wasm/package.json'),
+      path: () => require('@next/safe-image-optimization-freebsd-wasm'),
+    },
+    {
+      manifest: () => require('@next/safe-image-optimization-webcontainers-wasm/package.json'),
+      path: () => require('@next/safe-image-optimization-webcontainers-wasm'),
+    },
     // An optional peer dependency, for when it's installed directly. Last, because if nothing
     // provides the peer, Node finds whatever copy it can, like one hoisted from another version.
-    () => require('@next/safe-image-optimization-wasm32') as string,
+    {
+      manifest: () => require('@next/safe-image-optimization-wasm32/package.json'),
+      path: () => require('@next/safe-image-optimization-wasm32'),
+    },
   ]
-  for (const load of packages) {
+  let mismatched
+  for (const wasmPackage of packages) {
+    let manifest
     try {
-      return load()
+      manifest = wasmPackage.manifest()
     } catch {
-      // Not installed, or its module is missing.
+      // Not installed.
+      continue
+    }
+    if (manifest.version !== VERSION) {
+      mismatched ??= `${manifest.name}@${manifest.version}`
+      continue
+    }
+    try {
+      return { path: wasmPackage.path() }
+    } catch {
+      // Its module is missing.
     }
   }
-  return undefined
+  return mismatched === undefined ? undefined : { mismatched }
 }
 
 function failure(code: string, message: string): RunResult {
@@ -223,7 +253,7 @@ export class WasmBackend implements Backend {
       this.#onClosed = undefined
       // Idle workers don't keep the process alive, but whoever awaits `close()` should see it
       // resolve.
-      const keepAlive = setTimeout(() => { }, MAX_TIMEOUT_MS)
+      const keepAlive = setTimeout(() => {}, MAX_TIMEOUT_MS)
       void Promise.all(this.#exiting).then(() => {
         clearTimeout(keepAlive)
         onClosed()

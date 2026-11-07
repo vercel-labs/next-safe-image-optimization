@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, test } from 'node:test'
@@ -8,8 +8,9 @@ import { fileURLToPath } from 'node:url'
 
 import { Pool, defaultPool } from '../dist/index.js'
 import { NativeBackend } from '../dist/native.js'
-import { findWasm } from '../dist/wasm.js'
+import { VERSION } from '../dist/protocol.js'
 import type { RunResult } from '../dist/protocol.js'
+import { findWasm } from '../dist/wasm.js'
 import { assertRejectsWithCode, fromRaw, pattern } from './helpers.ts'
 
 const backend = defaultPool().backend
@@ -358,6 +359,70 @@ test(
     })
   },
 )
+
+test("wasm packages must match the package's version", (t) => {
+  /**
+   * `findWasm()` and `new Pool()`'s error with the wasm backend, in a process where `packages`
+   * (names without the `@next/safe-image-optimization-` prefix, and their versions) are installed
+   * on `NODE_PATH`. Their entry points export a path, like the real ones, or throw if they're from
+   * another version, which `findWasm()` shouldn't require.
+   */
+  function find(packages: Record<string, string>) {
+    const dir = mkdtempSync(join(tmpdir(), 'nsio-test-'))
+    for (const [name, version] of Object.entries(packages)) {
+      const packageDir = join(dir, '@next', `safe-image-optimization-${name}`)
+      mkdirSync(packageDir, { recursive: true })
+      writeFileSync(
+        join(packageDir, 'package.json'),
+        JSON.stringify({ name: `@next/safe-image-optimization-${name}`, version }),
+      )
+      writeFileSync(
+        join(packageDir, 'index.js'),
+        version === VERSION
+          ? `module.exports = ${JSON.stringify(name)}`
+          : `throw new Error('required ${name}')`,
+      )
+    }
+    const script = `
+      const { Pool } = require('./dist/index.js')
+      const { findWasm } = require('./dist/wasm.js')
+      let error
+      try {
+        new Pool()
+      } catch ({ code, message }) {
+        error = { code, message }
+      }
+      console.log(JSON.stringify({ found: findWasm(), error }))
+    `
+    const {
+      NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH: _wasmPath,
+      NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND: _backend,
+      ...env
+    } = process.env
+    const child = spawnSync(process.execPath, ['-e', script], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: { ...env, NODE_PATH: dir, NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND: 'wasm' },
+    })
+    assert.equal(child.status, 0, child.stderr.toString())
+    return JSON.parse(child.stdout.toString()) as {
+      found?: { path: string } | { mismatched: string }
+      error?: { code: string; message: string }
+    }
+  }
+  if (find({}).found !== undefined) {
+    t.skip('a wasm package is installed')
+    return
+  }
+  const other = `${VERSION}-other`
+  const mismatched = find({ wasm32: other })
+  assert.deepEqual(mismatched.found, {
+    mismatched: `@next/safe-image-optimization-wasm32@${other}`,
+  })
+  assert.equal(mismatched.error?.code, 'ERR_BACKEND_UNAVAILABLE')
+  assert.match(mismatched.error?.message ?? '', new RegExp(`-wasm32@${other} doesn't match`))
+  // A copy from another version is skipped.
+  assert.deepEqual(find({ 'freebsd-wasm': other, wasm32: VERSION }), { found: { path: 'wasm32' } })
+})
 
 // Workers are forked from a fork server, except on Windows. These tests inspect idle workers, so
 // they reuse them.

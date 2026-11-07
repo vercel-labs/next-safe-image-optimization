@@ -1,14 +1,16 @@
 # WebAssembly backend
 
-Alongside native worker processes, `@next/safe-image-optimization` has a WebAssembly (`wasm32-wasip1`) build of the same image processing pipeline. Install it alongside the main package:
+Alongside native worker processes, `@next/safe-image-optimization` has a WebAssembly (`wasm32-wasip1`) build of the same image processing pipeline. On FreeBSD and in [WebContainers](https://webcontainers.io/), it's installed automatically. Elsewhere, install it alongside the main package:
 
 ```sh
 npm install @next/safe-image-optimization @next/safe-image-optimization-wasm32
 ```
 
+Like sharp's `@img/sharp-freebsd-wasm32` and `@img/sharp-webcontainers-wasm32`, the main package has two optional dependencies, `@next/safe-image-optimization-freebsd-wasm` and `@next/safe-image-optimization-webcontainers-wasm`, which package managers only install on those platforms (with `os: ["freebsd"]` and `cpu: ["wasm32"]`). They contain the same module as `@next/safe-image-optimization-wasm32`. `@next/safe-image-optimization-wasm32` is an optional peer dependency of the main package, so when you install it directly, it's found without relying on your package manager's hoisting. It must be the same version as `@next/safe-image-optimization`: most package managers only warn about a mismatched optional peer, so the main package ignores a wasm package from another version.
+
 ## When it is used
 
-By default, a `Pool` uses native worker processes when a native binary is available for the current platform, and otherwise falls back to the WebAssembly backend, if `@next/safe-image-optimization-wasm32` is installed. If neither is available, creating a `Pool` throws an error.
+By default, a `Pool` uses native worker processes when a native binary is available for the current platform, and otherwise falls back to the WebAssembly backend, if `@next/safe-image-optimization-wasm32` (or one of those packages) is installed. If neither is available, creating a `Pool` throws an error.
 
 To choose the WebAssembly backend explicitly, set the `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=wasm` environment variable. It's read when each `Pool` is created, and creating one throws an error if `@next/safe-image-optimization-wasm32` isn't installed. Likewise, `NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND=native` requires the native backend, and throws an error if no native binary is available. `pool.backend` reports which backend a pool uses.
 

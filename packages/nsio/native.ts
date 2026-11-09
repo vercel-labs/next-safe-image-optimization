@@ -15,6 +15,7 @@ import {
   EXIT_SANDBOX_FAILED,
   EXIT_VERSION_MISMATCH,
   POOL_CLOSED,
+  VERSION,
   decodeResponse,
   invalidResponse,
 } from './protocol.js'
@@ -42,8 +43,6 @@ export interface NativeOptions {
  */
 const IGNORE_SECCOMP_FAILURES = 'NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES'
 
-/** The worker exits with `EXIT_VERSION_MISMATCH` unless this matches its own version. */
-const VERSION = (require('../package.json') as { version: string }).version
 /** How long the fork server may take to reply, and to reap a worker after killing it. */
 const SERVER_TIMEOUT_MS = 10_000
 const MAX_TIMEOUT_MS = 2 ** 31 - 1

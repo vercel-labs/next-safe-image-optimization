@@ -40,7 +40,9 @@ const binaries = TARGETS.map((target) => {
     `safe-image-optimization-worker.${name}${name.startsWith('win32-') ? '.exe' : ''}`,
   ]
 })
-binaries.push([`${pkg.name}-wasm32`, 'safe-image-optimization.wasm'])
+for (const name of ['wasm32', 'freebsd-wasm', 'webcontainers-wasm']) {
+  binaries.push([`${pkg.name}-${name}`, 'safe-image-optimization.wasm'])
+}
 for (const [name, binary] of binaries) {
   const tarball = tarballs.find((tarball) => tarball.name === name)
   if (tarball === undefined) {

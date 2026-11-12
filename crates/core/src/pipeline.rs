@@ -24,7 +24,8 @@ pub struct Output {
     pub format: OutputFormat,
 }
 
-pub fn run(input: Vec<u8>, pipeline: &Pipeline) -> Result<Output> {
+/// Calls `on_decoded` once the input is decoded, before the rest of the pipeline runs.
+pub fn run(input: Vec<u8>, pipeline: &Pipeline, on_decoded: impl FnOnce()) -> Result<Output> {
     // Vector images have no orientation, so only the rotation applies.
     let decoded = decode::decode(&input, &pipeline.limits, |width, height| {
         pipeline.resize.as_ref().map_or(1.0, |spec| {
@@ -33,6 +34,7 @@ pub fn run(input: Vec<u8>, pipeline: &Pipeline) -> Result<Output> {
         })
     })?;
     drop(input);
+    on_decoded();
 
     let output = match &pipeline.output {
         Some(spec) => spec.clone(),

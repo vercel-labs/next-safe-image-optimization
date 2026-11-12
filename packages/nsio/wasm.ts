@@ -103,13 +103,13 @@ class WasmWorker implements PoolWorker {
   constructor(worker: Worker, events: WorkerEvents) {
     this.#worker = worker
     this.#worker.on('message', (message: WasmWorkerMessage) => {
-      if (message.decoded) {
+      if (message.type === 'decoded') {
         events.decoded()
-      } else if (message.response !== undefined) {
+      } else if (message.type === 'response') {
         events.response(message.response)
-      } else if (message.exit === EXIT_OUT_OF_MEMORY) {
+      } else if (message.type === 'exit' && message.code === EXIT_OUT_OF_MEMORY) {
         events.failed(failure('ERR_OUT_OF_MEMORY', 'out of memory'))
-      } else if (message.exit === EXIT_MEMORY_LIMIT) {
+      } else if (message.type === 'exit' && message.code === EXIT_MEMORY_LIMIT) {
         events.failed(
           failure(
             'ERR_LIMIT_EXCEEDED',
@@ -117,7 +117,7 @@ class WasmWorker implements PoolWorker {
           ),
         )
       } else {
-        const reason = message.exit === undefined ? message.crash : `exit code ${message.exit}`
+        const reason = message.type === 'exit' ? `exit code ${message.code}` : message.reason
         events.failed(failure('ERR_WORKER_CRASHED', `the wasm worker crashed (${reason})`))
       }
     })

@@ -17,17 +17,16 @@ export interface WasmRequest {
   maxResponseBytes: number
 }
 
-/** A message to the pool. Exactly one field is set. */
-export interface WasmWorkerMessage {
+/** A message to the pool. */
+export type WasmWorkerMessage =
   /** The module decoded a transform's input (`nsio.decoded`), before responding. */
-  decoded?: true
+  | { type: 'decoded' }
   /** Without the length prefix. */
-  response?: Uint8Array
+  | { type: 'response'; response: Uint8Array }
   /** The module called `proc_exit`. */
-  exit?: number
+  | { type: 'exit'; code: number }
   /** The module trapped (e.g. panicked), or returned an invalid response. */
-  crash?: string
-}
+  | { type: 'crash'; reason: string }
 
 interface Exports {
   _initialize?(): void
@@ -125,7 +124,7 @@ const wasi = {
 const nsio = {
   // Delivered while the module is still running, so the pool can stop the decode timeout.
   decoded(): void {
-    const message: WasmWorkerMessage = { decoded: true }
+    const message: WasmWorkerMessage = { type: 'decoded' }
     parentPort!.postMessage(message)
   },
 }
@@ -169,10 +168,13 @@ parentPort!.on('message', (request: WasmRequest) => {
   let transfer: ArrayBuffer[] = []
   try {
     const response = handle(request)
-    message = { response }
+    message = { type: 'response', response }
     transfer = [response.buffer as ArrayBuffer]
   } catch (error) {
-    message = error instanceof ProcExit ? { exit: error.code } : { crash: String(error) }
+    message =
+      error instanceof ProcExit
+        ? { type: 'exit', code: error.code }
+        : { type: 'crash', reason: String(error) }
   }
   parentPort!.postMessage(message, transfer)
 })

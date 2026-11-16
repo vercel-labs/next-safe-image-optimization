@@ -1,18 +1,18 @@
 //! The worker process. The JS wrapper (`packages/nsio/native.ts`) spawns it with the arguments
-//! `<version> <parent pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for stdin and
-//! stdout. On unix, it instead spawns it once as a fork server (`--fork-server`), which forks
-//! workers with the same setup, except that stdin and stdout are a Unix socket (see
+//! `<version> <parent pid> <memory limit in bytes, or 0>`, an empty environment, and pipes for
+//! stdin and stdout. On unix, it instead spawns it once as a fork server (`--fork-server`), which
+//! forks workers with the same setup, except that stdin and stdout are a Unix socket (see
 //! `fork_server.rs`). The only environment variable it may get is
 //! `NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE_SECCOMP_FAILURES=1`, which runs workers without
 //! seccomp filters if installing them fails (like under QEMU's user mode emulation), instead of
 //! exiting.
 //!
 //! Requests arrive on stdin as `[u64 LE length][request]`, and responses are written to stdout,
-//! after `DECODED_FRAME` for transforms (see `nsio_core::protocol`). The worker handles one request at a time, and never outlives its
-//! parent: on Linux, `PR_SET_PDEATHSIG` kills it when the parent exits, even mid-request, and it
-//! only notices stdin closing between requests. `PR_SET_PDEATHSIG` isn't cross-platform, so on
-//! macOS and Windows a reader thread instead watches for stdin closing and exits the process as
-//! soon as it does, even mid-request (see `requests`).
+//! after `DECODED_FRAME` for transforms (see `nsio_core::protocol`). The worker handles one request
+//! at a time, and never outlives its parent: on Linux, `PR_SET_PDEATHSIG` kills it when the parent
+//! exits, even mid-request, and it only notices stdin closing between requests. `PR_SET_PDEATHSIG`
+//! isn't cross-platform, so on macOS and Windows a reader thread instead watches for stdin closing
+//! and exits the process as soon as it does, even mid-request (see `requests`).
 
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};

@@ -725,35 +725,48 @@ describe(
     })
 
     test('the decode timeout stops once the worker has decoded the input', async () => {
-      const decodeTimeout = (script: string, timeoutMs: number, kind: RequestKind = 'transform') =>
+      // Scripts that report `decoded` get a long decode timeout, so that a slow shell startup (like
+      // on CI's macOS runners) can't run it out first.
+      const decodeTimeout = (
+        script: string,
+        {
+          kind = 'transform',
+          timeoutMs = 10_000,
+          decodeTimeoutMs = 100,
+        }: {
+          kind?: RequestKind
+          timeoutMs?: number
+          decodeTimeoutMs?: number
+        } = {},
+      ) =>
         nativeBackend(worker(script)).run(Buffer.alloc(16), '{}', {
           kind,
           timeoutMs,
-          decodeTimeoutMs: 100,
+          decodeTimeoutMs,
           maxResponseBytes: 1024,
         })
       await assertFails(
-        decodeTimeout('exec sleep 10', 10_000),
+        decodeTimeout('exec sleep 10'),
         'ERR_TIMEOUT',
         'decoding took longer than 100ms',
       )
       // Metadata requests never finish decoding.
       await assertFails(
-        decodeTimeout(`${decoded}; exec sleep 10`, 10_000, 'metadata'),
+        decodeTimeout(`${decoded}; exec sleep 10`, { kind: 'metadata', decodeTimeoutMs: 5000 }),
         'ERR_WORKER_CRASHED',
       )
       await assertFails(
-        decodeTimeout('exec sleep 10', 10_000, 'metadata'),
+        decodeTimeout('exec sleep 10', { kind: 'metadata' }),
         'ERR_TIMEOUT',
         'decoding took longer than 100ms',
       )
       // Responds after the decode timeout would have run out.
-      const slow = `${decoded}; sleep 0.3; ${respond(3, { decoded: false })}; printf abc; exec sleep 10`
-      assert.equal(data(await decodeTimeout(slow, 10_000)), 'abc')
+      const slow = `${decoded}; sleep 1.5; ${respond(3, { decoded: false })}; printf abc; exec sleep 10`
+      assert.equal(data(await decodeTimeout(slow, { decodeTimeoutMs: 1000 })), 'abc')
       await assertFails(
-        decodeTimeout(`${decoded}; exec sleep 10`, 300),
+        decodeTimeout(`${decoded}; exec sleep 10`, { timeoutMs: 1500, decodeTimeoutMs: 1000 }),
         'ERR_TIMEOUT',
-        'processing took longer than 300ms',
+        'processing took longer than 1500ms',
       )
     })
 

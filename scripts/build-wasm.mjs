@@ -58,9 +58,10 @@ if (cargo.status !== 0) {
 
 // What the module may import, by import module. These are exactly what
 // `packages/nsio/wasm-worker.ts` provides: the WASI filesystem functions always fail (there are no
-// preopened directories), and nothing calls into JS.
+// preopened directories), and the only call into JS is `nsio.decoded`, which takes no arguments.
 const allowedImports = new Map([
   ['env', new Set(['memory'])],
+  ['nsio', new Set(['decoded'])],
   [
     'wasi_snapshot_preview1',
     new Set([

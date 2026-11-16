@@ -1,7 +1,6 @@
-// The native backend: a pool of worker processes (`crates/worker`). On unix, workers are forked by
-// a fork server (`crates/worker/src/fork_server.rs`), one per pool, which also kills and reaps them.
-// Like the wasm backend, each worker handles one request at a time. Workers are untrusted: one that
-// sends a malformed response, or output it wasn't asked for, is killed.
+// The native backend: a pool of worker processes (`crates/worker`), managed by `WorkerPool` (like the
+// wasm backend). On unix, workers are forked by a fork server (`crates/worker/src/fork_server.rs`),
+// one per pool, which also kills and reaps them.
 
 import { type ChildProcess, spawn } from 'node:child_process'
 import type { Socket } from 'node:net'
@@ -14,20 +13,16 @@ import {
   EXIT_OUT_OF_MEMORY,
   EXIT_SANDBOX_FAILED,
   EXIT_VERSION_MISMATCH,
-  POOL_CLOSED,
   VERSION,
-  decodeResponse,
+  failure,
   invalidResponse,
 } from './protocol.js'
-import type { Backend, RequestKind, RunOptions, RunResult, WorkerError } from './protocol.js'
+import type { WorkerError } from './protocol.js'
+import { WorkerPool } from './worker-pool.js'
+import type { Job, PoolWorker, WorkerEvents, WorkerPoolOptions } from './worker-pool.js'
 
-export interface NativeOptions {
+export interface NativeOptions extends WorkerPoolOptions {
   workerPath: string
-  maxProcesses: number
-  /** With 0, or over `MAX_TIMEOUT_MS`, idle workers never exit. */
-  idleTimeoutMs: number
-  /** Responses before a worker is killed, or 0 for no limit. */
-  maxImagesPerWorker: number
   /** Each worker's `RLIMIT_DATA` in bytes (Linux only), or 0 for no limit. */
   memoryLimit: number
   /** Fork workers from a fork server, instead of spawning each one (unix only). Default: `true`. */
@@ -45,7 +40,6 @@ const IGNORE_SECCOMP_FAILURES = 'NEXT_SAFE_IMAGE_OPTIMIZATION_DANGEROUSLY_IGNORE
 
 /** How long the fork server may take to reply, and to reap a worker after killing it. */
 const SERVER_TIMEOUT_MS = 10_000
-const MAX_TIMEOUT_MS = 2 ** 31 - 1
 const U64_MAX = 2n ** 64n - 1n
 
 /** The platform in the worker's file name, like `linux-x64-gnu`, in order of preference. */
@@ -128,10 +122,6 @@ export function findWorker(): WorkerBinary | undefined {
     }
   }
   return undefined
-}
-
-function failure(code: string, message: string): WorkerError {
-  return { code, message }
 }
 
 function signalName(signal: number): string {
@@ -453,188 +443,122 @@ class ForkServer {
   }
 }
 
-interface Job {
-  /** `[u64 LE length][request]`. */
-  frame: Buffer
-  kind: RequestKind
-  timeoutMs?: number
-  maxResponseBytes: number
-  /** Only the first call does anything. */
-  resolve: (result: RunResult) => void
-  /** Resolved. If it was aborted or destroyed while its worker was starting, it's still starting. */
-  done: boolean
+/**
+ * Reads a worker process's stdout: `[u64 LE length][response]` frames (see
+ * `crates/core/src/protocol.rs`), and empty ones for `decoded`.
+ */
+class NativeWorker implements PoolWorker {
+  #process: WorkerProcess
+  #events: WorkerEvents
+  /** The current request's limit, until it has a response. */
+  #maxResponseBytes: number | undefined
+  /** The next frame's length prefix. */
+  #header = Buffer.alloc(8)
+  #response: Buffer | undefined
+  /** Bytes received of `#header`, or once it's complete, of `#response`. */
+  #received = 0
+
+  constructor(process: WorkerProcess, events: WorkerEvents) {
+    this.#process = process
+    this.#events = events
+    const closed = () => events.failed(process.exited)
+    process.output.on('data', (chunk: Buffer) => this.#onData(chunk))
+    process.output.on('end', closed)
+    process.output.on('close', closed)
+    process.output.on('error', closed)
+    process.input.on('error', closed)
+  }
+
+  send(job: Job) {
+    this.#maxResponseBytes = job.maxResponseBytes
+    this.#process.input.write(job.frame)
+  }
+
+  kill() {
+    this.#process.kill()
+    this.#process.input.destroy()
+    this.#process.output.destroy()
+    return this.#process.exited
+  }
+
+  ref(ref: boolean) {
+    this.#process.ref(ref)
+  }
+
+  #onData(chunk: Buffer) {
+    let offset = 0
+    while (offset < chunk.length) {
+      const max = this.#maxResponseBytes
+      if (max === undefined) {
+        this.#invalid('unexpected data')
+        return
+      }
+      if (this.#response === undefined) {
+        const copied = chunk.copy(this.#header, this.#received, offset)
+        offset += copied
+        this.#received += copied
+        if (this.#received < this.#header.length) {
+          return
+        }
+        this.#received = 0
+        const length = this.#header.readBigUInt64LE()
+        if (length === 0n) {
+          this.#events.decoded()
+          continue
+        }
+        if (length > BigInt(max)) {
+          this.#invalid(`${length} bytes exceeds the limit of ${max} bytes`)
+          return
+        }
+        try {
+          this.#response = Buffer.allocUnsafe(Number(length))
+        } catch (error) {
+          this.#invalid(String(error))
+          return
+        }
+      }
+      const copied = chunk.copy(this.#response, this.#received, offset)
+      offset += copied
+      this.#received += copied
+      if (this.#received === this.#response.length) {
+        const response = this.#response
+        this.#response = undefined
+        this.#received = 0
+        this.#maxResponseBytes = undefined
+        // Before the pool sees the response, and sends the next request.
+        if (offset < chunk.length) {
+          this.#invalid('unexpected data after the response')
+          return
+        }
+        this.#events.response(response)
+      }
+    }
+  }
+
+  #invalid(reason: string) {
+    this.#events.failed(invalidResponse(reason))
+  }
 }
 
-interface Slot {
-  process: WorkerProcess
-  job?: Job
-  timer?: NodeJS.Timeout
-  /** The response's length prefix. */
-  header: Buffer
-  response?: Buffer
-  /** Bytes received of `header`, or once it's complete, of `response`. */
-  received: number
-  responses: number
-}
-
-export class NativeBackend implements Backend {
+export class NativeBackend extends WorkerPool<NativeWorker> {
   readonly name = 'native'
   #options: NativeOptions
   #forkServer: Promise<ForkServer | WorkerError> | undefined
-  #slots = new Set<Slot>()
-  /** Jobs whose workers are being spawned. */
-  #starting = new Set<Job>()
-  #idle: Slot[] = []
-  #queue: Job[] = []
-  /** Workers that were killed, until they exit. */
-  #exiting = new Set<Promise<WorkerError>>()
-  /** Set by `close()`. */
-  #closing: Promise<void> | undefined
-  /** Resolves `#closing`, once the last job finishes. */
-  #onClosed: (() => void) | undefined
 
   constructor(options: NativeOptions) {
+    super(options)
     this.#options = options
   }
 
-  run(
-    input: Uint8Array,
-    options: string,
-    { kind, timeoutMs, maxResponseBytes, signal }: RunOptions,
-  ): Promise<RunResult> {
-    if (this.#closing !== undefined) {
-      return Promise.resolve({ error: POOL_CLOSED })
-    }
-    // Copied now, so that the caller may reuse `input` immediately, and can't change it while it's
-    // being written.
-    const json = Buffer.from(options)
-    const length = input.length + json.length + 4
-    const frame = Buffer.allocUnsafe(8 + length)
-    frame.writeBigUInt64LE(BigInt(length))
-    frame.set(input, 8)
-    json.copy(frame, 8 + input.length)
-    frame.writeUInt32LE(json.length, 8 + input.length + json.length)
-    return new Promise((resolve) => {
-      const onAbort = () => this.#abort(job)
-      const job: Job = {
-        frame,
-        kind,
-        timeoutMs,
-        maxResponseBytes,
-        done: false,
-        resolve: (result) => {
-          if (!job.done) {
-            job.done = true
-            signal?.removeEventListener('abort', onAbort)
-            resolve(result)
-          }
-        },
-      }
-      if (signal?.aborted) {
-        job.resolve({ aborted: true })
-        return
-      }
-      signal?.addEventListener('abort', onAbort)
-      this.#queue.push(job)
-      this.#dispatch()
-    })
+  protected async startWorker(events: WorkerEvents): Promise<NativeWorker | WorkerError> {
+    const process = await this.#spawn()
+    return 'code' in process ? process : new NativeWorker(process, events)
   }
 
-  close(): Promise<void> {
-    this.#closing ??= new Promise((resolve) => {
-      this.#onClosed = resolve
-      // oxlint-disable-next-line unicorn/no-useless-spread -- `#discard` splices `#idle`
-      for (const slot of [...this.#idle]) {
-        this.#discard(slot)
-      }
-      this.#dispatch()
-    })
-    return this.#closing
-  }
-
-  destroy(): Promise<void> {
-    const jobs = [...this.#queue.splice(0), ...this.#starting]
-    for (const slot of this.#slots) {
-      if (slot.job !== undefined) {
-        jobs.push(slot.job)
-      }
-    }
-    for (const job of jobs) {
-      job.resolve({ error: POOL_CLOSED })
-    }
-    const closed = this.close()
-    // oxlint-disable-next-line unicorn/no-useless-spread -- `#discard` can add to `#slots`
-    for (const slot of [...this.#slots]) {
-      this.#discard(slot)
-    }
-    return closed
-  }
-
-  #abort(job: Job) {
-    job.resolve({ aborted: true })
-    const index = this.#queue.indexOf(job)
-    if (index !== -1) {
-      this.#queue.splice(index, 1)
-      // In case it was the last job before closing.
-      this.#dispatch()
-    }
-    for (const slot of this.#slots) {
-      if (slot.job === job) {
-        this.#discard(slot)
-      }
-    }
-  }
-
-  #dispatch() {
-    while (this.#queue.length > 0) {
-      const slot = this.#idle.pop()
-      if (slot !== undefined) {
-        this.#assign(slot, this.#queue.shift()!)
-      } else if (this.#slots.size + this.#starting.size < this.#options.maxProcesses) {
-        void this.#start(this.#queue.shift()!)
-      } else {
-        return
-      }
-    }
-    // Closing discards idle workers, so once there are none left, every job has finished.
-    if (this.#onClosed !== undefined && this.#slots.size === 0 && this.#starting.size === 0) {
-      const onClosed = this.#onClosed
-      this.#onClosed = undefined
-      void this.#shutDown().then(onClosed)
-    }
-  }
-
-  /** Once every job has finished. */
-  async #shutDown() {
-    // Workers and the fork server don't keep the process alive, but whoever awaits `close()` should
-    // see it resolve.
-    const keepAlive = setTimeout(ignore, MAX_TIMEOUT_MS)
-    try {
-      await Promise.all(this.#exiting)
-      const server = await this.#forkServer
-      if (server instanceof ForkServer) {
-        await server.close()
-      }
-    } finally {
-      clearTimeout(keepAlive)
-    }
-  }
-
-  async #start(job: Job) {
-    this.#starting.add(job)
-    const worker = await this.#spawn()
-    this.#starting.delete(job)
-    if ('code' in worker) {
-      job.resolve({ error: worker })
-      this.#dispatch()
-      return
-    }
-    const slot = this.#add(worker)
-    if (job.done) {
-      // It was aborted or destroyed while the worker started.
-      this.#next(slot)
-    } else {
-      this.#assign(slot, job)
+  protected async workersExited() {
+    const server = await this.#forkServer
+    if (server instanceof ForkServer) {
+      await server.close()
     }
   }
 
@@ -664,147 +588,5 @@ export class NativeBackend implements Backend {
         return result.failure
       }
     }
-  }
-
-  #add(worker: WorkerProcess): Slot {
-    const slot: Slot = { process: worker, header: Buffer.alloc(8), received: 0, responses: 0 }
-    this.#slots.add(slot)
-    const closed = () => void this.#closed(slot)
-    worker.output.on('data', (chunk: Buffer) => this.#onData(slot, chunk))
-    worker.output.on('end', closed)
-    worker.output.on('close', closed)
-    worker.output.on('error', closed)
-    worker.input.on('error', closed)
-    return slot
-  }
-
-  #assign(slot: Slot, job: Job) {
-    slot.job = job
-    slot.response = undefined
-    slot.received = 0
-    clearTimeout(slot.timer)
-    slot.process.ref(true)
-    // `setTimeout` treats longer delays as 1ms. They're over 24 days, so they never arrive.
-    if (job.timeoutMs !== undefined && job.timeoutMs <= MAX_TIMEOUT_MS) {
-      slot.timer = setTimeout(() => {
-        this.#discard(slot)
-        job.resolve({
-          error: failure('ERR_TIMEOUT', `processing took longer than ${job.timeoutMs}ms`),
-        })
-      }, job.timeoutMs)
-    }
-    slot.process.input.write(job.frame)
-  }
-
-  #onData(slot: Slot, chunk: Buffer) {
-    const { job } = slot
-    if (job === undefined) {
-      this.#discard(slot)
-      return
-    }
-    let offset = 0
-    if (slot.response === undefined) {
-      offset = chunk.copy(slot.header, slot.received)
-      slot.received += offset
-      if (slot.received < slot.header.length) {
-        return
-      }
-      const length = slot.header.readBigUInt64LE()
-      if (length > BigInt(job.maxResponseBytes)) {
-        this.#invalid(slot, `${length} bytes exceeds the limit of ${job.maxResponseBytes} bytes`)
-        return
-      }
-      try {
-        slot.response = Buffer.allocUnsafe(Number(length))
-      } catch (error) {
-        this.#invalid(slot, String(error))
-        return
-      }
-      slot.received = 0
-    }
-    const copied = chunk.copy(slot.response, slot.received, offset)
-    slot.received += copied
-    if (offset + copied < chunk.length) {
-      this.#invalid(slot, 'unexpected data after the response')
-    } else if (slot.received === slot.response.length) {
-      let response
-      try {
-        response = decodeResponse(slot.response, job.kind)
-      } catch (error) {
-        this.#invalid(slot, (error as Error).message)
-        return
-      }
-      clearTimeout(slot.timer)
-      slot.job = undefined
-      slot.response = undefined
-      job.resolve({ response })
-      this.#release(slot)
-    }
-  }
-
-  #invalid(slot: Slot, reason: string) {
-    const { job } = slot
-    this.#discard(slot)
-    job?.resolve({ error: invalidResponse(reason) })
-  }
-
-  /** The worker's output ended, or its pipes failed. */
-  async #closed(slot: Slot) {
-    const { job } = slot
-    if (this.#discard(slot) && job !== undefined) {
-      job.resolve({ error: await slot.process.exited })
-    }
-  }
-
-  #release(slot: Slot) {
-    const { maxImagesPerWorker } = this.#options
-    if (maxImagesPerWorker !== 0 && ++slot.responses >= maxImagesPerWorker) {
-      this.#discard(slot)
-      return
-    }
-    this.#next(slot)
-  }
-
-  /** Assigns the next job to the worker, or else keeps it idle (or kills it, while closing). */
-  #next(slot: Slot) {
-    const job = this.#queue.shift()
-    if (job !== undefined) {
-      this.#assign(slot, job)
-      return
-    }
-    if (this.#closing !== undefined) {
-      this.#discard(slot)
-      return
-    }
-    this.#idle.push(slot)
-    // Idle workers don't keep the process alive.
-    slot.process.ref(false)
-    const { idleTimeoutMs } = this.#options
-    if (idleTimeoutMs !== 0 && idleTimeoutMs <= MAX_TIMEOUT_MS) {
-      slot.timer = setTimeout(() => this.#discard(slot), idleTimeoutMs)
-      slot.timer.unref()
-    }
-  }
-
-  /** Kills the worker. Returns `false` if it was already discarded. */
-  #discard(slot: Slot): boolean {
-    if (!this.#slots.delete(slot)) {
-      return false
-    }
-    clearTimeout(slot.timer)
-    slot.job = undefined
-    const index = this.#idle.indexOf(slot)
-    if (index !== -1) {
-      this.#idle.splice(index, 1)
-    }
-    slot.process.kill()
-    slot.process.input.destroy()
-    slot.process.output.destroy()
-    const { exited } = slot.process
-    this.#exiting.add(exited)
-    void exited.then(() => this.#exiting.delete(exited))
-    // Replace the worker if there's queued work.
-    this.#dispatch()
-    return true
   }
 }

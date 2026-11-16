@@ -1,11 +1,12 @@
 //! The wasm module (`wasm32-wasip1`), driven by `packages/nsio/wasm-worker.ts`. It imports its
 //! memory, so that JS can choose its maximum size, and the only other imports are a few WASI
-//! functions that JS stubs out.
+//! functions that JS stubs out, and `nsio.decoded`.
 //!
 //! To process a request, JS calls `nsio_alloc(len)`, writes the request (see
-//! `nsio_core::protocol`) to the returned pointer, and calls `nsio_handle(ptr, len)`. That
-//! returns a pointer to four `u32`s, `[head pointer, head length, data pointer, data length]`.
-//! After copying the response out, JS calls `nsio_free_response()`.
+//! `nsio_core::protocol`) to the returned pointer, and calls `nsio_handle(ptr, len)`. For
+//! transforms, that calls `nsio.decoded()` once the input is decoded. It returns a pointer to four
+//! `u32`s, `[head pointer, head length, data pointer, data length]`. After copying the response
+//! out, JS calls `nsio_free_response()`.
 //!
 //! A panic traps, and running out of memory calls `proc_exit` with `EXIT_OUT_OF_MEMORY`. Either way,
 //! JS discards the instance.
@@ -26,6 +27,19 @@ struct Current {
 
 static CURRENT: Mutex<Option<Box<Current>>> = Mutex::new(None);
 
+/// Tells JS that the input is decoded, so that the pool can stop the decode timeout.
+fn decoded() {
+    #[cfg(target_family = "wasm")]
+    {
+        #[link(wasm_import_module = "nsio")]
+        unsafe extern "C" {
+            safe fn decoded();
+        }
+        decoded();
+    }
+    // `turbo run build` also builds this crate for the host, where there's nothing to import.
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn nsio_alloc(len: usize) -> *mut u8 {
     ManuallyDrop::new(Vec::<u8>::with_capacity(len)).as_mut_ptr()
@@ -38,7 +52,7 @@ pub extern "C" fn nsio_alloc(len: usize) -> *mut u8 {
 pub unsafe extern "C" fn nsio_handle(ptr: *mut u8, len: usize) -> *const u32 {
     // SAFETY: `nsio_alloc` allocated a `Vec` with capacity `len`, and JS initialized it.
     let request = unsafe { Vec::from_raw_parts(ptr, len, len) };
-    let response = protocol::handle(request);
+    let response = protocol::handle(request, decoded);
     let parts = [
         response.head.as_ptr() as u32,
         response.head.len() as u32,

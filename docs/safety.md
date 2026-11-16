@@ -52,6 +52,7 @@ Resource limits prevent a single image from exhausting server memory or CPU time
 - **Per-worker memory (`limitProcessMemoryBytes`, default 768 MiB):** A hard limit on each worker's total memory, covering both Rust allocations and the C encoders. This is enforced by the OS on Linux ([`RLIMIT_DATA`]) and by the WebAssembly runtime on all platforms when using the `wasm` backend. It is not currently enforced for native workers on macOS or Windows. Exceeding it rejects with `ERR_OUT_OF_MEMORY` (not `ERR_LIMIT_EXCEEDED`), because the worker can't tell it apart from the system running out of memory.
 - **Output size (`limitOutputBytes()`, default 128 MiB):** Caps the size of the encoded image and the maximum response size the main process will buffer from a worker.
 - **Processing time (`timeoutMs()`):** Limits how long a worker may spend on one image (starting when a worker picks up the request). If the timer expires, the worker is forcibly terminated and the request fails with `ERR_TIMEOUT`. There is no default timeout, so you should always set `timeoutMs()` when processing untrusted input.
+- **Decoding time (`decodeTimeoutMs()`):** Decoding is usually much faster than encoding, so this secondary timeout can be much stricter than `timeoutMs()`. For `metadata()`, the shorter of `timeoutMs` and `decodeTimeoutMs` applies.
 
 ## Out of scope
 

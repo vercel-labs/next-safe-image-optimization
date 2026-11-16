@@ -10,6 +10,11 @@
 //! (empty for metadata and errors). The JSON is first, so that the encoded image can be written
 //! out without copying it.
 //!
+//! A transform also reports when it has decoded its input (`on_decoded` in [`handle`]), before its
+//! response, so that the parent can stop its decode timeout. The native worker sends
+//! [`DECODED_FRAME`], and the wasm module calls an import. The parent rejects a successful transform
+//! response without it.
+//!
 //! Items marked `#[typeshare]` (here, and the request options in `request.rs`) are exported to
 //! `packages/nsio/protocol.generated.ts` by `pnpm generate`.
 
@@ -48,6 +53,10 @@ const MAX_MESSAGE_CHARS: usize = 1000;
 
 const LENGTH_PREFIX: usize = 8;
 const JSON_LENGTH: usize = 4;
+
+/// A frame with nothing after its length prefix, which no response can be (it always has the JSON's
+/// length), means the input is decoded.
+pub const DECODED_FRAME: [u8; LENGTH_PREFIX] = [0; LENGTH_PREFIX];
 
 #[typeshare]
 #[derive(Serialize)]
@@ -96,9 +105,10 @@ pub struct Frame {
     pub data: Vec<u8>,
 }
 
-/// Processes a request and returns the framed response.
-pub fn handle(request: Vec<u8>) -> Frame {
-    let result = run(request);
+/// Processes a request and returns the framed response. For transforms, calls `on_decoded` once the
+/// input is decoded (unless decoding fails).
+pub fn handle(request: Vec<u8>, on_decoded: impl FnOnce()) -> Frame {
+    let result = run(request, on_decoded);
     // The next request's input is read before its limit is known.
     set_memory_limit(usize::MAX);
     let (response, data) = result.unwrap_or_else(|err| {
@@ -121,7 +131,7 @@ pub fn handle(request: Vec<u8>) -> Frame {
     Frame { head, data }
 }
 
-fn run(mut request: Vec<u8>) -> Result<(Response, Vec<u8>)> {
+fn run(mut request: Vec<u8>, on_decoded: impl FnOnce()) -> Result<(Response, Vec<u8>)> {
     let invalid = || Error::Internal("invalid request: truncated".into());
     let json_len_start = request.len().checked_sub(4).ok_or_else(invalid)?;
     let json_len = u32::from_le_bytes(request[json_len_start..].try_into().unwrap()) as usize;
@@ -134,7 +144,7 @@ fn run(mut request: Vec<u8>) -> Result<(Response, Vec<u8>)> {
         Request::Transform(options) => {
             let pipeline = request::parse_pipeline(options)?;
             limit_allocator_memory(&pipeline.limits);
-            let output = pipeline::run(input, &pipeline)?;
+            let output = pipeline::run(input, &pipeline, on_decoded)?;
             let encoded = output.encoded;
             let response = Response::Transform(TransformResponse {
                 format: output.format,
@@ -199,12 +209,16 @@ mod tests {
             let mut writer = encoder.write_header().unwrap();
             writer.write_image_data(&[128; 18]).unwrap();
         }
-        let (response, data) = split(handle(request(&png, r#"{"transform":{"format":"jpeg"}}"#)));
+        let mut decoded = false;
+        let transform = request(&png, r#"{"transform":{"format":"jpeg"}}"#);
+        let (response, data) = split(handle(transform, || decoded = true));
+        assert!(decoded);
         let meta = json!({"format": "jpeg", "width": 3, "height": 2, "channels": 3});
         assert_eq!(response, json!({"type": "transform", "meta": meta}));
         assert_eq!(data[..2], [0xFF, 0xD8]);
 
-        let (response, data) = split(handle(request(&png, r#"{"metadata":{}}"#)));
+        let metadata = request(&png, r#"{"metadata":{}}"#);
+        let (response, data) = split(handle(metadata, || panic!("metadata doesn't decode")));
         let meta = json!({
             "format": "png",
             "width": 3,
@@ -227,8 +241,12 @@ mod tests {
                 request(b"not an image", r#"{"metadata":{}}"#),
                 "ERR_UNSUPPORTED_FORMAT",
             ),
+            (
+                request(b"not an image", r#"{"transform":{}}"#),
+                "ERR_UNSUPPORTED_FORMAT",
+            ),
         ] {
-            let (response, data) = split(handle(request));
+            let (response, data) = split(handle(request, || panic!("nothing was decoded")));
             assert_eq!(response["type"], "error");
             assert_eq!(response["meta"]["code"], code);
             assert!(response["meta"]["message"].is_string());
@@ -240,7 +258,7 @@ mod tests {
     fn long_error_messages_are_truncated() {
         // The message includes the JSON.
         let json = format!(r#"{{"other":"{}"}}"#, "é".repeat(100_000));
-        let (response, _) = split(handle(request(b"", &json)));
+        let (response, _) = split(handle(request(b"", &json), || {}));
         assert_eq!(response["meta"]["code"], "ERR_INVALID_OPTIONS");
         let message = response["meta"]["message"].as_str().unwrap();
         assert_eq!(message.chars().count(), MAX_MESSAGE_CHARS);

@@ -170,7 +170,8 @@ pub fn serve() {
                             }
                             // Returning drops the server's `OwnedFd`s, closing them in the worker:
                             // the channel, the wake pipe, both ends of this socketpair, and sockets
-                            // sent to the parent but not yet acknowledged.
+                            // sent to the parent but not yet acknowledged (on macOS, see
+                            // `node_ipc.rs`).
                             return;
                         }
                         -1 => {

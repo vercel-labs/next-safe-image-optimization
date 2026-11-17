@@ -13,7 +13,11 @@
 //! - Node replies to each with `{"cmd":"NODE_HANDLE_ACK"}` (since 0.12), or
 //!   `{"cmd":"NODE_HANDLE_NACK"}` if the file descriptor didn't arrive (since 2017). Some macOS
 //!   versions close a file descriptor in flight if the sender closes its copy first, so like Node,
-//!   we keep ours until the reply.
+//!   we keep ours until the reply on macOS. Elsewhere, we close it immediately, so that the
+//!   parent's is the only one: while another copy is open, closing the parent's doesn't remove it
+//!   from the parent's epoll set. libuv before 1.49 (Node.js 20) removes it after closing it
+//!   (libuv/libuv#4323), so the parent keeps getting its events (like `EPOLLHUP` once the worker
+//!   exits), and delivers them to whichever socket gets the same file descriptor next, as EOF.
 //! - Messages with a `cmd` starting with `NODE_` are Node's own. We ignore the others.
 
 use std::collections::VecDeque;
@@ -65,8 +69,8 @@ pub struct Channel<T> {
     fd: OwnedFd,
     /// Received, after the last complete message.
     buffer: Vec<u8>,
-    /// Sockets sent that the parent hasn't replied to yet, oldest first.
-    sent: VecDeque<(T, OwnedFd)>,
+    /// Sockets sent that the parent hasn't replied to yet, oldest first, with our copy on macOS.
+    sent: VecDeque<(T, Option<OwnedFd>)>,
 }
 
 impl<T> Channel<T> {
@@ -143,7 +147,10 @@ impl<T> Channel<T> {
             msg: message,
         };
         self.write(&line(&handle), Some(socket.as_raw_fd()))?;
-        self.sent.push_back((tag, socket));
+        // hold onto the socket fd to work around a bug in macOS
+        // https://github.com/nodejs/node/issues/7512
+        let kept = cfg!(target_os = "macos").then_some(socket);
+        self.sent.push_back((tag, kept));
         Ok(())
     }
 

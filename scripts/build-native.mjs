@@ -52,7 +52,16 @@ if (target === undefined) {
 // cargo-zigbuild takes the glibc version as a suffix (otherwise, it's zig's default), but its output
 // directory doesn't include it.
 const cargoTarget = cross && target.endsWith('-gnu') ? `${target}.${GLIBC_VERSION}` : target
-const env = {}
+// std is rebuilt (`-Zbuild-std`) with `panic = "immediate-abort"`: a panic is only a trap
+// instruction, without the panic hook, messages, locations, or backtraces (which need the symbols
+// that are stripped anyway). That's about 512 KiB on aarch64, plus about 150 KiB of std's own unwind
+// tables on Linux (worker-release.toml's rustflags also apply to the rebuilt std). A panic ends the
+// worker like any other crash, only by a signal like `SIGILL` or `SIGTRAP` instead of `SIGABRT`.
+// Both are unstable, so `RUSTC_BOOTSTRAP` allows them on the stable toolchain. Cargo itself has to
+// see it in its environment (`[env]` only applies to rustc), so this isn't in worker-release.toml,
+// and local release builds (`pnpm build:release`) don't do it: they're slightly larger, and print
+// panics.
+const env = { RUSTC_BOOTSTRAP: '1' }
 if (cross && target.startsWith('riscv')) {
   env.CARGO_ZIGBUILD_ZIG_PATH = join(root, 'scripts', 'zig-without-march.sh')
 }
@@ -66,6 +75,10 @@ run(
     `--target=${cargoTarget}`,
     '--config',
     join(root, '.cargo', 'worker-release.toml'),
+    '--config',
+    'profile.release.panic = "immediate-abort"',
+    '-Zbuild-std=std,panic_abort',
+    '-Zpanic-immediate-abort',
     ...extra,
   ],
   env,

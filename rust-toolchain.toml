@@ -1,4 +1,5 @@
 [toolchain]
 channel = "1.99.0"
 profile = "minimal"
-components = ["rustfmt", "clippy", "rust-analyzer"]
+# `rust-src` is for release builds, which rebuild std (scripts/build-native.mjs).
+components = ["rustfmt", "clippy", "rust-analyzer", "rust-src"]

@@ -1,3 +1,11 @@
+# Release builds of the worker also use worker-release.toml (scripts/build-native.mjs).
+
+# On riscv, rav1d enables `stdarch_riscv_feature_detection` (unstable) for
+# `is_riscv_feature_detected!`, even without asm. This allows nightly features in rav1d only (and
+# does nothing on other targets).
+[env]
+RUSTC_BOOTSTRAP = "rav1d"
+
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
 

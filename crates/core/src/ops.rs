@@ -1,8 +1,10 @@
 //! Pixel operations. Images are always one of `ImageLuma8`, `ImageLumaA8`, `ImageRgb8`, or
 //! `ImageRgba8` (see [`crate::decode::normalize`]).
 
-use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
-use image::{DynamicImage, GrayAlphaImage, GrayImage, RgbImage, RgbaImage};
+use fast_image_resize::images::TypedImage;
+use fast_image_resize::pixels::{U8, U8x2, U8x3, U8x4};
+use fast_image_resize::{FilterType, PixelTrait, ResizeAlg, ResizeOptions, Resizer};
+use image::{DynamicImage, GrayAlphaImage, GrayImage, ImageBuffer, Pixel, RgbImage, RgbaImage};
 
 use crate::error::{Error, Result};
 use crate::limits::Limits;
@@ -133,7 +135,7 @@ pub fn resize(
 /// `fast_image_resize` uses SIMD and premultiplies alpha internally, so transparent pixels don't
 /// bleed color into their neighbors.
 fn resample(
-    img: DynamicImage,
+    mut img: DynamicImage,
     crop: (u32, u32, u32, u32),
     width: u32,
     height: u32,
@@ -162,10 +164,44 @@ fn resample(
         )
         .resize_alg(filter)
         .use_alpha(true);
-    Resizer::new()
-        .resize(&img, &mut out, &options)
-        .map_err(|err| Error::Internal(format!("failed to resize image: {err}")))?;
+    match (&mut img, &mut out) {
+        (DynamicImage::ImageLuma8(src), DynamicImage::ImageLuma8(dst)) => {
+            resize_typed::<U8, _>(src, dst, &options)
+        }
+        (DynamicImage::ImageLumaA8(src), DynamicImage::ImageLumaA8(dst)) => {
+            resize_typed::<U8x2, _>(src, dst, &options)
+        }
+        (DynamicImage::ImageRgb8(src), DynamicImage::ImageRgb8(dst)) => {
+            resize_typed::<U8x3, _>(src, dst, &options)
+        }
+        (DynamicImage::ImageRgba8(src), DynamicImage::ImageRgba8(dst)) => {
+            resize_typed::<U8x4, _>(src, dst, &options)
+        }
+        _ => unreachable!("the output has the input's color type"),
+    }?;
     Ok(out)
+}
+
+/// Resizes between `TypedImage`s, the type of fast_image_resize's own intermediate buffers. With
+/// `DynamicImage`s, the source would be a `TypedImageRef`, and every convolution would be compiled
+/// for both (about 190 KiB, on aarch64).
+fn resize_typed<P: PixelTrait, Px: Pixel<Subpixel = u8>>(
+    src: &mut ImageBuffer<Px, Vec<u8>>,
+    dst: &mut ImageBuffer<Px, Vec<u8>>,
+    options: &ResizeOptions,
+) -> Result<()> {
+    fn typed<P: PixelTrait, Px: Pixel<Subpixel = u8>>(
+        img: &mut ImageBuffer<Px, Vec<u8>>,
+    ) -> Result<TypedImage<'_, P>> {
+        let (width, height) = img.dimensions();
+        TypedImage::from_buffer(width, height, img)
+            .map_err(|err| Error::Internal(format!("invalid image buffer: {err}")))
+    }
+    let src = typed::<P, _>(src)?;
+    let mut dst = typed::<P, _>(dst)?;
+    Resizer::new()
+        .resize_typed(&src, &mut dst, options)
+        .map_err(|err| Error::Internal(format!("failed to resize image: {err}")))
 }
 
 #[cfg(test)]

@@ -89,6 +89,7 @@ export function formatOf(buffer: Buffer): string {
   if (buffer.subarray(1, 4).toString('latin1') === 'PNG') return 'png'
   if (buffer.subarray(0, 3).toString('latin1') === 'GIF') return 'gif'
   if (buffer.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp'
+  if (buffer.subarray(4, 12).toString('latin1') === 'ftypavif') return 'avif'
   return 'unknown'
 }
 

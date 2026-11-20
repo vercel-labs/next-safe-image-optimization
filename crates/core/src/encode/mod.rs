@@ -1,6 +1,7 @@
 //! Encoders. Encoders only ever see pixel buffers that we produced, so they aren't sandboxed.
 //! Metadata (EXIF, ICC, etc.) is never written: output is always untagged sRGB.
 
+mod avif;
 mod gif;
 mod jpeg;
 mod png;
@@ -10,6 +11,7 @@ use image::DynamicImage;
 use serde::{Deserialize, Serialize};
 use typeshare_annotation::typeshare;
 
+pub use self::avif::AvifSpec;
 pub use self::gif::GifSpec;
 pub use self::jpeg::JpegSpec;
 pub use self::png::PngSpec;
@@ -25,6 +27,7 @@ pub enum OutputFormat {
     Png,
     Webp,
     Gif,
+    Avif,
 }
 
 #[derive(Clone, Debug)]
@@ -33,6 +36,7 @@ pub enum OutputSpec {
     Png(PngSpec),
     Webp(WebpSpec),
     Gif(GifSpec),
+    Avif(AvifSpec),
 }
 
 impl OutputSpec {
@@ -42,6 +46,7 @@ impl OutputSpec {
             OutputSpec::Png(_) => OutputFormat::Png,
             OutputSpec::Webp(_) => OutputFormat::Webp,
             OutputSpec::Gif(_) => OutputFormat::Gif,
+            OutputSpec::Avif(_) => OutputFormat::Avif,
         }
     }
 }
@@ -92,6 +97,7 @@ pub fn encode(img: DynamicImage, spec: &OutputSpec, limits: &Limits) -> Result<E
         OutputSpec::Png(spec) => png::encode(&img, spec)?,
         OutputSpec::Webp(spec) => webp::encode(img, spec)?,
         OutputSpec::Gif(spec) => gif::encode(img, spec)?,
+        OutputSpec::Avif(spec) => avif::encode(img, spec)?,
     };
     Ok(Encoded {
         data,

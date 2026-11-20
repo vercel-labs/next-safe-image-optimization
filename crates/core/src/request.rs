@@ -7,7 +7,7 @@ use serde::Deserialize;
 use typeshare_annotation::typeshare;
 
 use crate::decode::InputFormat;
-use crate::encode::{GifSpec, JpegSpec, OutputFormat, OutputSpec, PngSpec, WebpSpec};
+use crate::encode::{AvifSpec, GifSpec, JpegSpec, OutputFormat, OutputSpec, PngSpec, WebpSpec};
 use crate::error::{Error, Result};
 use crate::limits::{Animated, Limits};
 use crate::ops::{self, ResizeSpec};
@@ -79,6 +79,14 @@ struct GifOptions {
 }
 
 #[typeshare]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AvifOptions {
+    quality: Option<f64>,
+    effort: Option<f64>,
+}
+
+#[typeshare]
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LimitOptions {
@@ -105,6 +113,7 @@ pub struct TransformOptions {
     png: Option<PngOptions>,
     webp: Option<WebpOptions>,
     gif: Option<GifOptions>,
+    avif: Option<AvifOptions>,
 }
 
 pub fn parse(json: &[u8]) -> Result<Request> {
@@ -245,6 +254,18 @@ fn parse_output(options: &mut TransformOptions) -> Result<Option<OutputSpec>> {
             }
             OutputSpec::Gif(spec)
         }
+        OutputFormat::Avif => {
+            let mut spec = AvifSpec::default();
+            if let Some(o) = options.avif.take() {
+                if let Some(q) = o.quality {
+                    spec.quality = int("avif.quality", q, 1.0, 100.0)? as u8;
+                }
+                if let Some(e) = o.effort {
+                    spec.effort = int("avif.effort", e, 0.0, 9.0)? as u8;
+                }
+            }
+            OutputSpec::Avif(spec)
+        }
     }))
 }
 
@@ -328,8 +349,12 @@ mod tests {
                 "png.compressionLevel must be",
             ),
             (
-                r#"{"transform":{"format":"avif"}}"#,
-                "unknown variant `avif`",
+                r#"{"transform":{"format":"heif"}}"#,
+                "unknown variant `heif`",
+            ),
+            (
+                r#"{"transform":{"format":"avif","avif":{"effort":10}}}"#,
+                "avif.effort must be",
             ),
             (
                 r#"{"transform":{"limits":{"failOn":"none"}}}"#,

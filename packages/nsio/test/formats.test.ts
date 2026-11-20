@@ -56,7 +56,7 @@ const inputs: Record<string, () => Promise<Buffer>> = {
   'grayscale avif': () => fromRaw(rgb).toColourspace('b-w').avif({ quality: 90 }).toBuffer(),
 }
 
-const outputs: OutputFormat[] = ['jpeg', 'png', 'webp', 'gif']
+const outputs: OutputFormat[] = ['jpeg', 'png', 'webp', 'gif', 'avif']
 
 describe('decodes and re-encodes every format', () => {
   for (const [name, make] of Object.entries(inputs)) {
@@ -83,7 +83,7 @@ describe('decodes and re-encodes every format', () => {
 })
 
 describe('output format defaults to the input format', () => {
-  for (const name of ['baseline jpeg', 'png', 'lossy webp', 'gif'] as const) {
+  for (const name of ['baseline jpeg', 'png', 'lossy webp', 'gif', 'avif'] as const) {
     test(name, async () => {
       const input = await inputs[name]()
       const output = await pool.prepare(input).toBuffer()
@@ -91,20 +91,18 @@ describe('output format defaults to the input format', () => {
     })
   }
 
-  for (const name of ['tiff', 'avif'] as const) {
-    test(`${name} has no default output format`, async () => {
-      await assertRejectsWithCode(
-        pool.prepare(await inputs[name]()).toBuffer(),
-        'ERR_UNSUPPORTED_FORMAT',
-      )
-    })
-  }
+  test('tiff has no default output format', async () => {
+    await assertRejectsWithCode(
+      pool.prepare(await inputs.tiff()).toBuffer(),
+      'ERR_UNSUPPORTED_FORMAT',
+    )
+  })
 })
 
 describe('alpha', () => {
-  test('is preserved for png and webp', async () => {
+  test('is preserved for png, webp, and avif', async () => {
     const input = await inputs['rgba png']()
-    for (const format of ['png', 'webp'] as const) {
+    for (const format of ['png', 'webp', 'avif'] as const) {
       const { data, info } = await pool
         .prepare(input)
         [format]()
@@ -148,6 +146,34 @@ describe('avif', () => {
     const { data, info } = await pool.prepare(input).png().toBuffer({ resolveWithObject: true })
     assert.equal(info.channels, 4)
     await assertSimilar(data, input, 8, 4)
+  })
+
+  test('encodes like sharp', async () => {
+    const input = await fromRaw(pattern(97, 65)).png().toBuffer()
+    const { data, info } = await pool.prepare(input).avif().toBuffer({ resolveWithObject: true })
+    assert.deepEqual([info.format, info.width, info.height, info.channels], ['avif', 97, 65, 3])
+    const meta = await sharp(data).metadata()
+    assert.deepEqual(
+      [meta.format, meta.compression, meta.width, meta.height, meta.hasAlpha],
+      ['heif', 'av1', 97, 65, false],
+    )
+    await assertSimilar(data, await sharp(input).avif().toBuffer(), 3)
+    await assertSimilar(data, input, 3)
+  })
+
+  test('grayscale is encoded as color', async () => {
+    const input = await inputs['grayscale png']()
+    const { data, info } = await pool.prepare(input).avif().toBuffer({ resolveWithObject: true })
+    assert.equal(info.channels, 3)
+    await assertSimilar(data, input, 3)
+  })
+
+  test('an opaque alpha channel is dropped', async () => {
+    const input = await fromRaw(pattern(32, 32)).ensureAlpha(1).png().toBuffer()
+    const { data, info } = await pool.prepare(input).avif().toBuffer({ resolveWithObject: true })
+    // Like webp's, `channels` is what was encoded, before ravif drops the alpha channel.
+    assert.equal(info.channels, 4)
+    assert.equal((await sharp(data).metadata()).hasAlpha, false)
   })
 })
 
@@ -295,6 +321,25 @@ describe('encoder options', () => {
     const low = await pool.prepare(input).webp({ quality: 10, effort: 0 }).toBuffer()
     const high = await pool.prepare(input).webp({ quality: 95, effort: 6 }).toBuffer()
     assert.ok(low.length < high.length)
+  })
+
+  test('avif quality and effort affect output', async () => {
+    const input = await fromRaw(pattern(128, 128)).png().toBuffer()
+    const low = await pool.prepare(input).avif({ quality: 20 }).toBuffer()
+    const high = await pool.prepare(input).avif({ quality: 95 }).toBuffer()
+    assert.ok(low.length < high.length, `${low.length} vs ${high.length} bytes`)
+    const fast = await pool.prepare(input).avif({ quality: 60, effort: 0 }).toBuffer()
+    const slow = await pool.prepare(input).avif({ quality: 60, effort: 6 }).toBuffer()
+    assert.notDeepEqual(fast, slow)
+  })
+
+  test('avif output is deterministic', async () => {
+    const input = await fromRaw(pattern(64, 64)).png().toBuffer()
+    const [a, b] = await Promise.all([
+      pool.prepare(input).avif().toBuffer(),
+      pool.prepare(input).avif().toBuffer(),
+    ])
+    assert.deepEqual(a, b)
   })
 
   test('png compression level 0 is larger', async () => {

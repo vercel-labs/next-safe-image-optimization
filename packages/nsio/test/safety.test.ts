@@ -192,6 +192,20 @@ describe('limits', () => {
         .toBuffer(),
       'ERR_LIMIT_EXCEEDED',
     )
+    // rav1e (Rust) has no estimate: the allocator stops it.
+    await assert.rejects(
+      pool
+        .prepare(input)
+        .limitAllocatorMemoryBytes(1024 * 1024)
+        .avif()
+        .toBuffer(),
+      (error: unknown) => {
+        assert.ok(error instanceof SafeImageOptimizationError)
+        assert.equal(error.code, 'ERR_LIMIT_EXCEEDED')
+        assert.match(error.message, /allocated more than limitAllocatorMemoryBytes/)
+        return true
+      },
+    )
   })
 
   test('WebP frames must match the canvas', async () => {

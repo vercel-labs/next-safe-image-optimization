@@ -87,6 +87,13 @@ describe('argument validation', () => {
     ],
     ['webp quality bigint', (p) => p.webp({ quality: 50n } as never)],
     ['gif effort', (p) => p.gif({ effort: 0 })],
+    ['avif quality 0', (p) => p.avif({ quality: 0 }), 'avif.quality must be'],
+    ['avif effort 10', (p) => p.avif({ effort: 10 }), 'avif.effort must be'],
+    [
+      'avif chromaSubsampling',
+      (p) => p.avif({ chromaSubsampling: '4:2:0' } as never),
+      'unknown field `chromaSubsampling`',
+    ],
     ['limitInputPixels(-1)', (p) => p.limitInputPixels(-1), 'limitInputPixels must be'],
     ['limitInputPixels(1.5)', (p) => p.limitInputPixels(1.5)],
     // 0 is the only way to remove a limit.

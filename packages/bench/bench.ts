@@ -22,7 +22,7 @@ import sharp from 'sharp'
 
 import { buildFixture, FIXTURE_SPECS } from './fixtures.ts'
 import type { Fixture } from './fixtures.ts'
-import { FORMATS, libraries, QUALITY } from './libraries.ts'
+import { FORMATS, libraries, NEXT_QUALITY } from './libraries.ts'
 import type { Format, Library } from './libraries.ts'
 
 const require = createRequire(import.meta.url)
@@ -167,7 +167,7 @@ function printSuite(suite: Suite): void {
       kilobytes(result.outputBytes),
     ])
   }
-  console.log(`\n${suite.input} → ${suite.format.toUpperCase()} q${QUALITY[suite.format]}`)
+  console.log(`\n${suite.input} → ${suite.format.toUpperCase()} (Next.js q${NEXT_QUALITY})`)
   console.log(`  ${suite.description}\n`)
   console.log(table(rows))
 }

@@ -1,14 +1,15 @@
 /**
- * The libraries under test, and the pipeline each one runs: auto-orient with EXIF, resize to a
- * width, encode. That's [@napi-rs/image's benchmark] pipeline, and what Next.js's image optimizer
- * does.
+ * The libraries under test, and the pipeline each one runs: what Next.js's image optimizer runs with
+ * sharp (`packages/next/src/server/image-optimizer/sharp.ts`): auto-orient with EXIF, resize to a
+ * width (without enlarging), and encode at Next.js's default quality (`images.qualities: [75]`).
  *
- * Every library uses its own defaults for everything else (resampling kernel, JPEG encoder,
- * progressive scans, effort levels), because that's what a caller gets. They aren't all the same,
- * so see `README.md` before reading much into a single number.
- *
- * [@napi-rs/image's benchmark]: https://github.com/Brooooooklyn/Image/blob/main/bench/bench.mjs
+ * sharp gets Next.js's exact options. The other libraries get the closest equivalent each one can
+ * express, at the same visual quality: their AVIF quality scales aren't sharp's (see `AVIF`). Things
+ * none of them can configure (resampling kernel, `Bun.Image`'s JPEG encoder) are left at their
+ * defaults, so see `README.md` before reading much into a single number.
  */
+
+import os from 'node:os'
 
 import { ChromaSubsampling, Transformer } from '@napi-rs/image'
 import sharp from 'sharp'
@@ -18,8 +19,23 @@ import { Pool } from '@next/safe-image-optimization'
 export const FORMATS = ['webp', 'jpeg', 'avif'] as const
 export type Format = (typeof FORMATS)[number]
 
-/** Matching settings, as far as each library can express them. */
-export const QUALITY = { webp: 75, jpeg: 75, avif: 70 } as const
+/** Next.js's default `quality` (`images.qualities`), which WebP and JPEG use as is. */
+export const NEXT_QUALITY = 75
+
+/**
+ * Next.js scales AVIF's quality by 50/80 (so 47), and uses `effort: 3`, with sharp's default 4:4:4.
+ * The other encoders were matched to that by SSIMULACRA2, on the 24 Kodak photos (median quality):
+ * `@napi-rs/image` is libavif with libaom too, and matched at libaom's speed 6 (the preset sharp's
+ * effort 3 uses) and nearly the same quality, 48. ravif's scale is different, and matched at 63.
+ */
+export const AVIF = {
+  sharp: { quality: Math.max(Math.round(NEXT_QUALITY * (50 / 80)), 1), effort: 3 },
+  napi: { quality: 47, speed: 6 },
+  ravif: { quality: 63, effort: 3 },
+} as const
+
+/** Next.js's timeout (`imgOptTimeoutInSeconds`). */
+const TIMEOUT_MS = 7_000
 
 export interface Job {
   readonly input: Buffer
@@ -35,22 +51,24 @@ export interface Library {
   close(): Promise<void>
 }
 
-/** A timeout a server would set for untrusted input. Long enough not to fire here. */
-const TIMEOUT_MS = 30_000
-
 function sharpLibrary(): Library {
+  // Like Next.js in production, which halves libvips's thread pool to reduce memory use.
+  sharp.concurrency(Math.max(Math.floor(os.availableParallelism() / 2), 1))
   return {
     name: 'sharp',
     supports: () => true,
     run: ({ input, width, format }) => {
-      const pipeline = sharp(input).rotate().resize(width)
+      const pipeline = sharp(input)
+        .timeout({ seconds: TIMEOUT_MS / 1000 })
+        .rotate()
+        .resize(width, undefined, { withoutEnlargement: true })
       switch (format) {
         case 'webp':
-          return pipeline.webp({ quality: QUALITY.webp }).toBuffer()
+          return pipeline.webp({ quality: NEXT_QUALITY }).toBuffer()
         case 'jpeg':
-          return pipeline.jpeg({ quality: QUALITY.jpeg }).toBuffer()
+          return pipeline.jpeg({ quality: NEXT_QUALITY, mozjpeg: true }).toBuffer()
         case 'avif':
-          return pipeline.avif({ quality: QUALITY.avif, chromaSubsampling: '4:2:0' }).toBuffer()
+          return pipeline.avif(AVIF.sharp).toBuffer()
       }
     },
     close: () => Promise.resolve(),
@@ -62,18 +80,16 @@ function napiLibrary(): Library {
     name: '@napi-rs/image',
     supports: () => true,
     run: ({ input, width, format }) => {
-      // `rotate()` applies the EXIF orientation, like sharp's.
+      // `rotate()` applies the EXIF orientation, like sharp's. Its JPEG encoder is mozjpeg, like
+      // Next.js's. AVIF uses its default thread count (every core).
       const transformer = new Transformer(input).rotate().resize(width)
       switch (format) {
         case 'webp':
-          return transformer.webp(QUALITY.webp)
+          return transformer.webp(NEXT_QUALITY)
         case 'jpeg':
-          return transformer.jpeg(QUALITY.jpeg)
+          return transformer.jpeg(NEXT_QUALITY)
         case 'avif':
-          return transformer.avif({
-            quality: QUALITY.avif,
-            chromaSubsampling: ChromaSubsampling.Yuv420,
-          })
+          return transformer.avif({ ...AVIF.napi, chromaSubsampling: ChromaSubsampling.Yuv444 })
       }
     },
     close: () => Promise.resolve(),
@@ -87,7 +103,8 @@ function napiLibrary(): Library {
  *
  * There's no call for auto-orienting: `autoOrient` is the constructor's default, and it applies the
  * EXIF orientation before every other operation. `resize(width)` keeps the aspect ratio, like
- * sharp's.
+ * sharp's. It has no mozjpeg option, and its AVIF quality scale (the OS encoder's) is unknown, so
+ * AVIF gets sharp's number.
  */
 function bunImageLibrary(Image: BunImageConstructor, encodesAvif: boolean): Library {
   return {
@@ -97,11 +114,11 @@ function bunImageLibrary(Image: BunImageConstructor, encodesAvif: boolean): Libr
       const image = new Image(input).resize(width)
       switch (format) {
         case 'webp':
-          return image.webp({ quality: QUALITY.webp }).bytes()
+          return image.webp({ quality: NEXT_QUALITY }).bytes()
         case 'jpeg':
-          return image.jpeg({ quality: QUALITY.jpeg }).bytes()
+          return image.jpeg({ quality: NEXT_QUALITY }).bytes()
         case 'avif':
-          return image.avif({ quality: QUALITY.avif }).bytes()
+          return image.avif({ quality: AVIF.sharp.quality }).bytes()
       }
     },
     close: () => Promise.resolve(),
@@ -119,7 +136,7 @@ async function bunEncodesAvif(Image: BunImageConstructor): Promise<boolean> {
     .jpeg()
     .toBuffer()
   try {
-    await new Image(probe).avif({ quality: QUALITY.avif }).bytes()
+    await new Image(probe).avif({ quality: AVIF.sharp.quality }).bytes()
     return true
   } catch (error) {
     if ((error as { code?: string }).code === 'ERR_IMAGE_FORMAT_UNSUPPORTED') return false
@@ -139,17 +156,20 @@ function nsioLibrary(concurrency: number, maxImagesPerWorker: number): Library {
       maxImagesPerWorker === 1
         ? '@next/safe-image-optimization'
         : `@next/safe-image-optimization (maxImagesPerWorker: ${maxImagesPerWorker})`,
-    // No AVIF encoder: it only decodes AVIF.
-    supports: (format) => format !== 'avif',
+    supports: () => true,
     run: ({ input, width, format }) => {
-      const pipeline = pool.prepare(input).timeoutMs(TIMEOUT_MS).autoOrient().resize(width)
+      const pipeline = pool
+        .prepare(input)
+        .timeoutMs(TIMEOUT_MS)
+        .autoOrient()
+        .resize(width, null, { withoutEnlargement: true })
       switch (format) {
         case 'webp':
-          return pipeline.webp({ quality: QUALITY.webp }).toBuffer()
+          return pipeline.webp({ quality: NEXT_QUALITY }).toBuffer()
         case 'jpeg':
-          return pipeline.jpeg({ quality: QUALITY.jpeg }).toBuffer()
+          return pipeline.jpeg({ quality: NEXT_QUALITY, mozjpeg: true }).toBuffer()
         case 'avif':
-          throw new Error('unreachable: AVIF output is unsupported')
+          return pipeline.avif(AVIF.ravif).toBuffer()
       }
     },
     close: () => pool.destroy(),

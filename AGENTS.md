@@ -67,6 +67,8 @@ Every raster format is detected by `image`'s `ImageReader` (`decode/mod.rs`), fr
 
 JPEG uses `jpeg-encoder` by default, and mozjpeg (C) with `mozjpeg: true`. mozjpeg's defaults are sharp's mozjpeg preset (trellis quantization, overshoot deringing, scan optimization). It reports errors by unwinding, which aborts the worker, so check anything it would reject (like dimensions over 65500) before encoding.
 
+AVIF uses `image`'s encoder (its `avif` feature, which is only the encoder: its decoder is `avif-native`, dav1d), which is ravif → rav1e (Rust). With `image`'s default features off, ravif has no `asm` (nasm) and no `threading` (rayon), and rav1e's scene detection, which would use rayon, is off for stills. `encode/avif.rs` passes `with_num_threads(Some(1))`: without it, ravif sizes its tiles by `available_parallelism()`, which the sandbox blocks, and which would make the output depend on the machine. ravif's quality scale isn't libaom's (sharp's), so the default quality is 70, which matches sharp's 50 (by SSIMULACRA2, on the Kodak photos).
+
 libwebp and mozjpeg (C) are the only encoders the allocator can't see, so `encode::c_encoder_bytes_per_pixel` estimates their working memory, and checks it against `limitAllocatorMemoryBytes` before encoding. The numbers are measured (peak RSS on noisy 16 MP images), so re-measure when changing their settings.
 
 ## Commands

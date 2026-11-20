@@ -18,8 +18,9 @@ libc = { version = "0.2.190", default-features = false }
 
 # Decoders (memory-safe Rust). JPEG (zune-jpeg), PNG, WebP, GIF, and TIFF go through `image`, which
 # enables the default features of its codec dependencies (like zune-jpeg's SIMD, and tiff's JPEG
-# support). The worker's limits bound them (see AGENTS.md).
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff"] }
+# support). The worker's limits bound them (see AGENTS.md). `avif` is only the AVIF encoder (ravif and
+# rav1e, without asm or threads, since `image`'s default features are off): never `avif-native`.
+image ={ version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff", "avif"] }
 # Vendored as a git subtree to disable rav1d's asm (see vendor/avif-decode/Cargo.toml).
 avif-decode = { path = "../../vendor/avif-decode", default-features = false }
 # Same version as avif-decode uses, to match on its errors.

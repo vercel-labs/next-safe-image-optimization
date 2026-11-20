@@ -1,7 +1,7 @@
 use crate::color;
 use crate::decode::{self, Header, InputFormat};
 use crate::encode::{
-    self, Encoded, GifSpec, JpegSpec, OutputFormat, OutputSpec, PngSpec, WebpSpec,
+    self, AvifSpec, Encoded, GifSpec, JpegSpec, OutputFormat, OutputSpec, PngSpec, WebpSpec,
 };
 use crate::error::{Error, Result};
 use crate::limits::Limits;
@@ -72,7 +72,8 @@ fn default_output(format: InputFormat) -> Result<OutputSpec> {
         InputFormat::Png | InputFormat::Svg => OutputSpec::Png(PngSpec::default()),
         InputFormat::Webp => OutputSpec::Webp(WebpSpec::default()),
         InputFormat::Gif => OutputSpec::Gif(GifSpec::default()),
-        InputFormat::Tiff | InputFormat::Avif => {
+        InputFormat::Avif => OutputSpec::Avif(AvifSpec::default()),
+        InputFormat::Tiff => {
             return Err(Error::UnsupportedFormat(format!(
                 "{} output is not supported, choose an output format explicitly",
                 format.name().to_uppercase()

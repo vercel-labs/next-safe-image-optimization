@@ -36,7 +36,7 @@ const meta = await defaultPool().prepare(input).timeoutMs(5_000).metadata()
 ### Supported formats and operations
 
 - **Input formats:** JPEG, PNG, WebP, GIF, TIFF, AVIF, and SVG (in-memory `Buffer`, typed array, or `ArrayBuffer` only). SVG must be allowed explicitly with `.allowInputFormats()`.
-- **Output formats:** JPEG (`.jpeg()`), PNG (`.png()`), WebP (`.webp()`), and GIF (`.gif()`). Output is always 8-bit sRGB with metadata stripped.
+- **Output formats:** JPEG (`.jpeg()`), PNG (`.png()`), WebP (`.webp()`), GIF (`.gif()`), and AVIF (`.avif()`). Output is always 8-bit sRGB with metadata stripped.
 - **Operations:**
   - `.autoOrient()`: orient using EXIF metadata.
   - `.rotate(angle)`: rotate by a multiple of 90° (after `.autoOrient()`, if it's also called).

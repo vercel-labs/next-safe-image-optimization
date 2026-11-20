@@ -141,6 +141,23 @@ export interface GifOptions {
   effort?: number
 }
 
+/**
+ * Encoded with ravif (rav1e), always as 8-bit, 4:4:4 YCbCr (like sharp's default), with an alpha
+ * plane only if some pixel isn't opaque. Much slower than the other formats: set a `timeoutMs()`.
+ */
+export interface AvifOptions {
+  /**
+   * 1-100, on ravif's scale, which isn't sharp's (libaom's): on photos, sharp's default (50) looks
+   * about like 70 here. Default: 70.
+   */
+  quality?: number
+  /**
+   * 0 (fastest) to 9 (slowest), like sharp's (rav1e's speed is `10 - effort`). Higher efforts make
+   * much smaller files for graphics and text, but barely change photos. Default: 4.
+   */
+  effort?: number
+}
+
 export interface OutputInfo {
   format: OutputFormat
   width: number
@@ -493,7 +510,8 @@ export class Pipeline {
   #autoOrient = false
   #rotate: unknown
   #resize: ResizeOptions | undefined
-  #output: Pick<Unchecked<TransformOptions>, 'format' | 'jpeg' | 'png' | 'webp' | 'gif'> = {}
+  #output: Pick<Unchecked<TransformOptions>, 'format' | 'jpeg' | 'png' | 'webp' | 'gif' | 'avif'> =
+    {}
   /** Aborted when the pipeline is disposed. */
   #disposed = new AbortController()
   #pending = new Set<Promise<unknown>>()
@@ -652,6 +670,11 @@ export class Pipeline {
 
   gif(options?: GifOptions): this {
     this.#output = { format: 'gif', gif: copyOptions(options) }
+    return this
+  }
+
+  avif(options?: AvifOptions): this {
+    this.#output = { format: 'avif', avif: copyOptions(options) }
     return this
   }
 

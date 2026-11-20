@@ -27,9 +27,8 @@
  */
 
 import { execFile } from 'node:child_process'
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { availableParallelism, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { appendFile } from 'node:fs/promises'
+import { availableParallelism } from 'node:os'
 import { parseArgs, promisify } from 'node:util'
 
 import { buildFixture, FIXTURE_SPECS } from './fixtures.ts'
@@ -79,11 +78,11 @@ if (maxIncrease !== undefined && !(maxIncrease >= 0)) {
 
 interface Case {
   readonly name: string
-  readonly file: string
+  readonly data: Buffer
 }
 
-/** Writes each fixture and format as a request in the worker's format. */
-async function writeRequests(dir: string): Promise<Case[]> {
+/** Builds each fixture and format as a request in the worker's format. */
+async function buildRequests(): Promise<Case[]> {
   const cases: Case[] = []
   for (const spec of FIXTURE_SPECS) {
     const fixture = await buildFixture(spec)
@@ -103,24 +102,26 @@ async function writeRequests(dir: string): Promise<Case[]> {
       const length = Buffer.alloc(4)
       length.writeUInt32LE(json.length)
       const name = `${fixture.name} → ${format}`
-      const file = join(dir, `${fixture.name}-${format}.request`)
-      await writeFile(file, Buffer.concat([fixture.data, json, length]))
-      cases.push({ name, file })
+      cases.push({ name, data: Buffer.concat([fixture.data, json, length]) })
     }
   }
   return cases
 }
 
 /** Runs the harness on one request under cachegrind, and returns the instruction count. */
-async function count(harness: string, request: string): Promise<number> {
-  const { stdout, stderr } = await run(
+async function count(harness: string, request: Case): Promise<number> {
+  const subprocess = run(
     'valgrind',
-    ['--tool=cachegrind', '--cache-sim=no', '--cachegrind-out-file=/dev/null', harness, request],
+    ['--tool=cachegrind', '--cache-sim=no', '--cachegrind-out-file=/dev/null', harness],
     { maxBuffer: 16 * 1024 * 1024 },
   )
+  // If the harness exits before reading all of it, surface the exit error, not the pipe's.
+  subprocess.child.stdin!.on('error', () => {})
+  subprocess.child.stdin!.end(request.data)
+  const { stdout, stderr } = await subprocess
   const response = JSON.parse(stdout) as { type: string; meta: unknown }
   if (response.type !== 'transform') {
-    throw new Error(`${harness} failed on ${request}: ${stdout.trim()}`)
+    throw new Error(`${harness} failed on ${request.name}: ${stdout.trim()}`)
   }
   const match = /I\s+refs:\s+([\d,]+)/.exec(stderr)
   if (!match) {
@@ -187,64 +188,59 @@ function table(rows: Row[]): string[] {
   return lines
 }
 
-const dir = await mkdtemp(join(tmpdir(), 'nsio-instructions-'))
-try {
-  const cases = await writeRequests(dir)
-  const harnesses = values.base === undefined ? [values.head] : [values.base, values.head]
-  // Valgrind runs each program on one thread, so these can run side by side without affecting the
-  // counts.
-  const counts = await pool(
-    cases.flatMap((c) => harnesses.map((harness) => () => count(harness, c.file))),
-    availableParallelism(),
-  )
-  const rows: Row[] = cases.map((c, i) =>
-    values.base === undefined
-      ? { name: c.name, head: counts[i] }
-      : { name: c.name, base: counts[i * 2], head: counts[i * 2 + 1] },
-  )
+const cases = await buildRequests()
+const harnesses = values.base === undefined ? [values.head] : [values.base, values.head]
+// Valgrind runs each program on one thread, so these can run side by side without affecting the
+// counts.
+const counts = await pool(
+  cases.flatMap((c) => harnesses.map((harness) => () => count(harness, c))),
+  availableParallelism(),
+)
+const rows: Row[] = cases.map((c, i) =>
+  values.base === undefined
+    ? { name: c.name, head: counts[i] }
+    : { name: c.name, base: counts[i * 2], head: counts[i * 2 + 1] },
+)
 
-  const lines = table(rows)
-  console.log(lines.join('\n'))
-  if (values.markdown !== undefined) {
-    const title = '### Instruction counts'
-    const note =
-      'Instructions executed per image, counted with Valgrind (cachegrind). ' +
-      'Lower is better. This counts work, not time.'
-    await appendFile(values.markdown, [title, '', note, '', ...lines, ''].join('\n'))
-  }
+const lines = table(rows)
+console.log(lines.join('\n'))
+if (values.markdown !== undefined) {
+  const title = '### Instruction counts'
+  const note =
+    'Instructions executed per image, counted with Valgrind (cachegrind). ' +
+    'Lower is better. This counts work, not time.'
+  await appendFile(values.markdown, [title, '', note, '', ...lines, ''].join('\n'))
+}
 
-  if (maxIncrease !== undefined) {
-    const regressions = rows
-      .filter((row) => (change(row) ?? 0) > maxIncrease)
-      .map(
-        (row) =>
-          `${row.name}: ${percent.format(change(row)!)}% more instructions (limit: +${maxIncrease}%)`,
-      )
-    if (regressions.length > 0) {
-      const hint =
-        `If this regression is acceptable, add the \`${SKIP_LABEL}\` label to the pull request ` +
-        'and re-run this job.'
-      console.error(['Instruction count regression:', ...regressions, '', hint].join('\n'))
-      if (process.env.GITHUB_ACTIONS === 'true') {
-        // An annotation, so it shows on the pull request's checks without opening the log. Workflow
-        // commands escape `%`, carriage returns, and newlines.
-        const message = [...regressions, hint]
-          .join('\n')
-          .replaceAll('%', '%25')
-          .replaceAll('\r', '%0D')
-          .replaceAll('\n', '%0A')
-        console.log(`::error title=Instruction count regression::${message}`)
-      }
-      if (values.markdown !== undefined) {
-        const list = regressions.map((regression) => `- ${regression}`)
-        await appendFile(
-          values.markdown,
-          ['', '**Instruction count regression:**', '', ...list, '', hint, ''].join('\n'),
-        )
-      }
-      process.exitCode = 1
+if (maxIncrease !== undefined) {
+  const regressions = rows
+    .filter((row) => (change(row) ?? 0) > maxIncrease)
+    .map(
+      (row) =>
+        `${row.name}: ${percent.format(change(row)!)}% more instructions (limit: +${maxIncrease}%)`,
+    )
+  if (regressions.length > 0) {
+    const hint =
+      `If this regression is acceptable, add the \`${SKIP_LABEL}\` label to the pull request ` +
+      'and re-run this job.'
+    console.error(['Instruction count regression:', ...regressions, '', hint].join('\n'))
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      // An annotation, so it shows on the pull request's checks without opening the log. Workflow
+      // commands escape `%`, carriage returns, and newlines.
+      const message = [...regressions, hint]
+        .join('\n')
+        .replaceAll('%', '%25')
+        .replaceAll('\r', '%0D')
+        .replaceAll('\n', '%0A')
+      console.log(`::error title=Instruction count regression::${message}`)
     }
+    if (values.markdown !== undefined) {
+      const list = regressions.map((regression) => `- ${regression}`)
+      await appendFile(
+        values.markdown,
+        ['', '**Instruction count regression:**', '', ...list, '', hint, ''].join('\n'),
+      )
+    }
+    process.exitCode = 1
   }
-} finally {
-  await rm(dir, { recursive: true, force: true })
 }

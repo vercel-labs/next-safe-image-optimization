@@ -47,7 +47,7 @@ pnpm instructions --base <harness> --head <harness>      # compare two builds
 pnpm instructions --base <harness> --max-increase 2      # exit with 1 above a 2% increase
 ```
 
-CI runs it on every pull request (the `instructions` job), against a build of the pull request's base with the same harness, and writes the counts for both, the difference, and the percent change to the job summary. It doesn't fail the build.
+CI runs it on every pull request (the `Benchmark instruction count` job), against a build of the pull request's base with the same harness, and writes the counts for both, the difference, and the percent change to the job summary. It fails if any case grows by more than 3%, unless the pull request's title starts with `[skip-benchmark]` (the job reads the current title, so rename the pull request and re-run the job).
 
 An instruction count measures work, not time: it doesn't see cache misses, branch mispredictions, or that some instructions are slower than others, nor the cost of starting and replacing workers. Valgrind's simulated CPU may not report every extension the real one has (like AVX-512), so SIMD code can take different paths than it would natively, though the same ones for both builds. The count includes starting the process and reading the request, which are the same for every build.
 

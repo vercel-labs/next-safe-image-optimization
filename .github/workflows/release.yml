@@ -63,6 +63,9 @@ jobs:
     uses: ./.github/workflows/build_and_test.yml
     permissions:
       contents: read
+      # Its `instructions` job reads the pull request's title. It's skipped here, but a called
+      # workflow's jobs can't ask for more than this grants.
+      pull-requests: read
 
   pack:
     name: Pack

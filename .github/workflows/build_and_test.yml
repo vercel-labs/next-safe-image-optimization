@@ -475,17 +475,16 @@ jobs:
 
   # Counts the instructions the worker executes for the benchmark's pipelines, on the pull request
   # and on its base, and writes both to the job summary (packages/bench/instructions.ts). Counts
-  # barely vary between runs, unlike timings on shared runners. Informational, so it isn't in
-  # `tests-pass`.
+  # barely vary between runs, unlike timings on shared runners. Fails if any case grows by more than
+  # 3%, unless the pull request's title starts with `[skip-benchmark]`.
   instructions:
-    name: Instruction counts
+    name: Benchmark instruction count
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-26.04
     permissions:
       contents: read
-    env:
-      # Shared, so the base's build reuses the dependencies the head's built.
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      # To read the pull request's current title.
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -507,7 +506,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends valgrind
       # Both builds use the head's harness, so they're measured the same way, and the base doesn't
-      # need to have one. It only uses nsio-core's public API (see the file).
+      # need to have one. It only uses nsio-core's public API (see the file). Each side has its own
+      # target dir: with a shared one, cargo considers the base's build fresh (same package, same
+      # relative paths, older mtimes) and reuses the head's binary.
       - name: Build the harness
         run: |
           set -euo pipefail
@@ -519,7 +520,7 @@ jobs:
               rustup toolchain install
               cargo build --release --locked --example instructions -p nsio-core
             )
-            cp "$CARGO_TARGET_DIR/release/examples/instructions" "$RUNNER_TEMP/harness/$side"
+            cp "$side/target/release/examples/instructions" "$RUNNER_TEMP/harness/$side"
           done
       - run: npm install --global pnpm@12.11.2
       - run: pnpm install --frozen-lockfile
@@ -527,12 +528,29 @@ jobs:
       - wait: valgrind
       - name: Count instructions
         working-directory: head/packages/bench
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          # The current title, not the event's, so that re-running the job after renaming the pull
+          # request picks it up.
+          title="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title)"
+          gate=(--max-increase 3)
+          if [[ "$title" == "[skip-benchmark]"* ]]; then
+            gate=()
+            note='The title starts with `[skip-benchmark]`, so increases are reported but not enforced.'
+          else
+            note='Fails if any case grows by more than 3%. To skip that, start the pull request title with `[skip-benchmark]` and re-run this job.'
+          fi
           pnpm instructions \
             --base "$RUNNER_TEMP/harness/base" \
             --head "$RUNNER_TEMP/harness/head" \
-            --markdown "$GITHUB_STEP_SUMMARY"
+            --markdown "$GITHUB_STEP_SUMMARY" \
+            "${gate[@]}" || status=$?
+          echo "$note" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${status:-0}"
 
   # We block merging unless this job passes. This is enforced by a "require status checks to pass"
   # rule on the main branch.
@@ -548,6 +566,7 @@ jobs:
       - test-musl
       - test-riscv64
       - test-wasm
+      - instructions
     if: always()
     runs-on: ubuntu-26.04
     name: thank you, next

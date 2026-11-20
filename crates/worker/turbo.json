@@ -4,10 +4,20 @@
   "tasks": {
     // `pnpm build` uses the built-in `build` (cached, with the worker as its output). This is the
     // same with `--release`, which can't be passed with `-- --release` when the JS package's `build`
-    // runs alongside it. A task with a `command` doesn't get the built-in hashing (only the crate's
-    // own files), so these are the files the worker is built from.
+    // runs alongside it, and CI's flags (worker-release.toml, like scripts/build-native.mjs). Without
+    // `--target`, they also apply to build scripts and proc macros, which only changes how those
+    // fail if they panic (they abort, instead of unwinding). A task with a `command` doesn't get the
+    // built-in hashing (only the crate's own files), so these are the files the worker is built
+    // from.
     "build:release": {
-      "command": ["cargo", "build", "--package=nsio-worker", "--locked", "--release"],
+      "command": [
+        "cargo",
+        "build",
+        "--package=nsio-worker",
+        "--locked",
+        "--release",
+        "--config=../../.cargo/worker-release.toml"
+      ],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/crates/core/Cargo.toml",
@@ -17,7 +27,7 @@
         "$TURBO_ROOT$/Cargo.toml",
         "$TURBO_ROOT$/Cargo.lock",
         "$TURBO_ROOT$/rust-toolchain.toml",
-        "$TURBO_ROOT$/.cargo/config.toml"
+        "$TURBO_ROOT$/.cargo/*"
       ],
       "outputs": [
         "$TURBO_ROOT$/target/release/safe-image-optimization-worker",

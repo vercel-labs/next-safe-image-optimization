@@ -1,6 +1,7 @@
 // The targets that CI builds the worker for (the `build` job in
 // .github/workflows/build_and_test.yml), and their platform names, which `packages/nsio/native.ts`
-// uses in file and package names.
+// uses in file and package names. Linux and macOS targets also need a `CFLAGS_<target>` in
+// .cargo/worker-release.toml.
 
 /** Like `x86_64-unknown-linux-gnu` → `linux-x64-gnu`. Returns `undefined` for unknown targets. */
 export function platform(triple) {

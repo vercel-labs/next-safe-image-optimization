@@ -1,0 +1,24 @@
+# Release builds of the worker, which scripts/build-native.mjs passes with `--config` (always with
+# `--target`, so that these don't apply to build scripts and proc macros). They aren't in
+# config.toml, because tests unwind.
+#
+# Workers abort on panic, and their symbols are stripped, so unwind tables (`.eh_frame`, and
+# `__unwind_info` on macOS) are only dead weight: about 90 KiB on aarch64 Linux, for Rust and the C
+# libraries (std is prebuilt, with its own). On macOS, rustc already omits them with
+# `panic = "abort"`, so only the C libraries change. Windows requires them, and wasm doesn't have
+# them.
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))']
+rustflags = ["-C", "force-unwind-tables=no"]
+
+# For libwebp and mozjpeg (cc). `[env]` can't be conditional, so these are per target.
+# See: https://github.com/rust-lang/cargo/issues/10273
+# See: scripts/platforms.mjs for the list of all supported platforms.
+[env]
+CFLAGS_aarch64_apple_darwin = "-fno-asynchronous-unwind-tables -fno-unwind-tables"
+CFLAGS_x86_64_apple_darwin = "-fno-asynchronous-unwind-tables -fno-unwind-tables"
+CFLAGS_x86_64_unknown_linux_gnu = "-fno-asynchronous-unwind-tables -fno-unwind-tables"
+CFLAGS_aarch64_unknown_linux_gnu = "-fno-asynchronous-unwind-tables -fno-unwind-tables"
+CFLAGS_x86_64_unknown_linux_musl = "-fno-asynchronous-unwind-tables -fno-unwind-tables"
+CFLAGS_aarch64_unknown_linux_musl = "-fno-asynchronous-unwind-tables -fno-unwind-tables"
+CFLAGS_riscv64gc_unknown_linux_gnu = "-fno-asynchronous-unwind-tables -fno-unwind-tables"

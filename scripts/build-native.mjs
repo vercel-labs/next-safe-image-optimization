@@ -3,7 +3,8 @@
 // `packages/nsio/safe-image-optimization-worker.<platform>`, for scripts/pack-npm.mjs (and CI's
 // tests, with `NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH`). The platform is Node's (like
 // `linux-x64-gnu`, or `darwin-arm64`). Local builds don't need this: `pnpm test` uses
-// `target/debug`, and `pnpm test:release` uses `target/release`.
+// `target/debug`, and `pnpm test:release` uses `target/release` (from crates/worker/turbo.json's
+// `build:release`, with the same `--config`).
 //
 // Usage: node scripts/build-native.mjs --target <triple> [-x] [extra cargo args]
 //
@@ -52,13 +53,8 @@ if (target === undefined) {
 // directory doesn't include it.
 const cargoTarget = cross && target.endsWith('-gnu') ? `${target}.${GLIBC_VERSION}` : target
 const env = {}
-if (target.startsWith('riscv')) {
-  // rav1d enables `stdarch_riscv_feature_detection` (unstable) for `is_riscv_feature_detected!`,
-  // even without asm. This allows nightly features in rav1d only.
-  env.RUSTC_BOOTSTRAP = 'rav1d'
-  if (cross) {
-    env.CARGO_ZIGBUILD_ZIG_PATH = join(root, 'scripts', 'zig-without-march.sh')
-  }
+if (cross && target.startsWith('riscv')) {
+  env.CARGO_ZIGBUILD_ZIG_PATH = join(root, 'scripts', 'zig-without-march.sh')
 }
 run(
   'cargo',
@@ -68,6 +64,8 @@ run(
     '--release',
     '--locked',
     `--target=${cargoTarget}`,
+    '--config',
+    join(root, '.cargo', 'worker-release.toml'),
     ...extra,
   ],
   env,

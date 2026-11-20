@@ -66,7 +66,7 @@ Next.js scales AVIF's quality by 50/80 (75 → 47). AVIF quality scales differ b
 
 The settings are as close to Next.js's as each library allows, but the libraries still aren't equivalent:
 
-- **Different encoders.** JPEG is mozjpeg for sharp, `@napi-rs/image`, and this library (which builds it without assembly), and libjpeg-turbo for `Bun.Image`. `@napi-rs/image`'s mozjpeg settings differ from sharp's: its output is about twice the size. AVIF is libaom for sharp (through libheif) and `@napi-rs/image` (through libavif), and rav1e, through ravif, for this library, without assembly. The AVIF settings were matched on photos, not on these noise inputs, so the output sizes in the AVIF tables still differ.
+- **Different encoders.** JPEG is mozjpeg for sharp, `@napi-rs/image`, and this library (which builds it without assembly), and libjpeg-turbo for `Bun.Image`. `@napi-rs/image`'s mozjpeg settings differ from sharp's: its output is about twice the size. AVIF is libaom for sharp (through libheif) and `@napi-rs/image` (through libavif), and rav1e, through ravif, for this library (with assembly on the platforms in `ASM_TARGETS`, in `scripts/build-native.mjs`). The AVIF settings were matched on photos, not on these noise inputs, so the output sizes in the AVIF tables still differ.
 - **Different amounts of work.** libvips decodes a JPEG at a reduced DCT scale when the result is going to be shrunk (shrink-on-load), and `Bun.Image` does the same whenever the target is at most half the source, so both of them decode far fewer pixels than the other two on the large input. That's a real advantage, not a measurement artifact, but it's an advantage at one specific step.
 - **Different metadata.** `Bun.Image` copies the input's ICC profile into its output; sharp, `@napi-rs/image`, and this library all drop it. That's about 0.5 kB of every output size `Bun.Image` reports, so the `output` column isn't quite comparable either.
 - **Different ways of using the cores.** libvips splits a single image across its own threads (half the cores, as Next.js sets it), and `@napi-rs/image`'s AVIF encoder uses every core, so several images in flight oversubscribe the CPU. `@next/safe-image-optimization` processes each image in one single-threaded worker, so its throughput comes entirely from running several at once. Run `--concurrency 1` as well as the default to see both ends of that; the results below include it.
@@ -75,7 +75,7 @@ The settings are as close to Next.js's as each library allows, but the libraries
 
 ## Results
 
-One Node.js run, on a 12 vCPU Linux (arm64) VM on Apple Silicon, with the default 4 images in flight, `UV_THREADPOOL_SIZE` unset, Node.js v24.17.0, sharp 0.35.5 (libvips 8.18.7, libaom 3.15.1), `@napi-rs/image` 1.16.0, and a local release build of the worker. It's a shared VM, so treat the ratios as approximate, and rerun on your own hardware.
+One Node.js run, on a 12 vCPU Linux (arm64) VM on Apple Silicon, with the default 4 images in flight, `UV_THREADPOOL_SIZE` unset, Node.js v24.17.0, sharp 0.35.5 (libvips 8.18.7, libaom 3.15.1), `@napi-rs/image` 1.16.0, and a local release build of the worker (`pnpm bench:release` builds it with rav1e's assembly, like the published workers). It's a shared VM, so treat the ratios as approximate, and rerun on your own hardware.
 
 Completed images per second, with 4 in flight at once:
 
@@ -83,35 +83,35 @@ Completed images per second, with 4 in flight at once:
 
 | Library                                                  | WebP | JPEG | AVIF |
 | -------------------------------------------------------- | ---: | ---: | ---: |
-| sharp                                                    |  306 |  314 |  207 |
-| `@napi-rs/image`                                         |  419 |  402 |  107 |
-| `@next/safe-image-optimization`                          |  512 |  360 | 32.9 |
-| `@next/safe-image-optimization (maxImagesPerWorker: 64)` |  606 |  453 | 33.7 |
+| sharp                                                    |  306 |  323 |  218 |
+| `@napi-rs/image`                                         |  418 |  355 | 92.3 |
+| `@next/safe-image-optimization`                          |  510 |  377 | 72.8 |
+| `@next/safe-image-optimization (maxImagesPerWorker: 64)` |  585 |  453 | 75.2 |
 
 **3000x2000 JPEG → 640px**
 
 | Library                                                  | WebP | JPEG | AVIF |
 | -------------------------------------------------------- | ---: | ---: | ---: |
-| sharp                                                    | 96.5 |  103 | 80.3 |
-| `@napi-rs/image`                                         | 20.9 | 28.4 | 24.4 |
-| `@next/safe-image-optimization`                          | 83.6 | 77.2 | 10.1 |
-| `@next/safe-image-optimization (maxImagesPerWorker: 64)` | 92.3 | 84.3 |  9.9 |
+| sharp                                                    | 95.0 |  103 | 78.1 |
+| `@napi-rs/image`                                         | 22.7 | 28.6 | 25.2 |
+| `@next/safe-image-optimization`                          | 81.5 | 75.5 | 21.1 |
+| `@next/safe-image-optimization (maxImagesPerWorker: 64)` | 92.0 | 85.3 | 21.6 |
 
 And with only one image at a time, as latency per image in milliseconds (a shorter run):
 
 | Library                                                  | small WebP | small JPEG | small AVIF | large WebP | large JPEG | large AVIF |
 | -------------------------------------------------------- | ---------: | ---------: | ---------: | ---------: | ---------: | ---------: |
-| sharp                                                    |       11.8 |       11.7 |       14.8 |       40.6 |       37.7 |       39.2 |
-| `@napi-rs/image`                                         |       10.6 |        7.3 |       35.6 |      100.1 |       79.5 |      130.0 |
-| `@next/safe-image-optimization`                          |        7.8 |        9.8 |      118.6 |       44.9 |       48.0 |      410.9 |
-| `@next/safe-image-optimization (maxImagesPerWorker: 64)` |        7.0 |        8.8 |      116.1 |       41.9 |       46.1 |      403.8 |
+| sharp                                                    |       11.8 |       11.0 |       14.4 |       41.6 |       37.7 |       38.1 |
+| `@napi-rs/image`                                         |       10.6 |        6.6 |       41.2 |       94.8 |       82.1 |      136.5 |
+| `@next/safe-image-optimization`                          |        7.7 |        9.6 |       55.9 |       46.6 |       48.1 |      192.0 |
+| `@next/safe-image-optimization (maxImagesPerWorker: 64)` |        6.9 |        8.6 |       52.5 |       42.9 |       45.6 |      184.7 |
 
 Output sizes (small, large): WebP was 4.2-4.3 and 11.5-11.6 kB for every library. JPEG was 6.3 and 18.5 kB for sharp and this library, and 12.2 and 39.1 kB for `@napi-rs/image`. AVIF was 3.9 and 11.2 kB for sharp, 2.8 and 7.4 kB for `@napi-rs/image`, and 3.8 and 10.0 kB for this library.
 
 What stands out:
 
-- **AVIF is where this library is slowest: 6-10x slower than sharp**, and 2.4-3.3x slower than `@napi-rs/image`. At Next.js's `effort: 3`, libaom uses a fast preset (speed 6), and rav1e, without assembly, has nothing comparable at the same quality: it's about as fast as libaom's next slower preset (speed 5, sharp's default `effort: 4`), which takes about 8x as long.
-- **For WebP and JPEG, the isolation is close to free.** On the small input, this library is faster than sharp for both, and replacing a worker after every image costs 8-20% of throughput (the gap between its two rows). On the large input, sharp is 1.15-1.33x faster, mostly from decoding the JPEG at a reduced DCT scale (shrink-on-load), which neither Rust library does. See [future work](../../docs/future-work.md).
+- **AVIF is where this library is slowest: 3-5x slower than sharp**, and 1.2-1.4x slower than `@napi-rs/image`. At Next.js's `effort: 3`, libaom uses a fast preset (speed 6), and rav1e has nothing comparable at the same quality. rav1e's assembly makes it 2.2-2.4x faster than without it (on this machine, and on x86_64 under emulation), with identical output, but platforms without it (wasm, aarch64 Windows, x86_64 macOS, riscv64) are 6-10x slower than sharp.
+- **For WebP and JPEG, the isolation is close to free.** On the small input, this library is faster than sharp for both, and replacing a worker after every image costs 11-17% of throughput (the gap between its two rows). On the large input, sharp is 1.17-1.36x faster, mostly from decoding the JPEG at a reduced DCT scale (shrink-on-load), which neither Rust library does. See [future work](../../docs/future-work.md).
 - **Quality numbers are not comparable across encoders**, so the AVIF settings are matched by measurement, not by number (see above), and `@napi-rs/image`'s mozjpeg produces JPEGs about twice the size of the other two at the same `quality`. Encoding speed and file size trade against each other, so the slower encoder in a row may simply be doing more.
 
 ### Bun (previous configuration)

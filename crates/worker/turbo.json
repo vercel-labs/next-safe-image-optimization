@@ -5,9 +5,17 @@
     // `pnpm build` uses the built-in `build` (cached, with the worker as its output). This is the
     // same with `--release`, which can't be passed with `-- --release` when the JS package's `build`
     // runs alongside it. A task with a `command` doesn't get the built-in hashing (only the crate's
-    // own files), so these are the files the worker is built from.
+    // own files), so these are the files the worker is built from. With rav1e's assembly (`asm`),
+    // like the published workers (scripts/build-native.mjs), but debug builds don't use it.
     "build:release": {
-      "command": ["cargo", "build", "--package=nsio-worker", "--locked", "--release"],
+      "command": [
+        "cargo",
+        "build",
+        "--package=nsio-worker",
+        "--locked",
+        "--release",
+        "--features=asm"
+      ],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/crates/core/Cargo.toml",

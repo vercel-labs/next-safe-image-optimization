@@ -132,6 +132,33 @@ jobs:
               chmod +x "$dir/bin/cargo-zigbuild"
               echo "$dir" >> "$GITHUB_PATH"
               echo "$dir/bin" >> "$GITHUB_PATH"
+          # For rav1e's x86_64 assembly (`ASM_TARGETS` in scripts/build-native.mjs). aarch64 needs
+          # no assembler. nasm.us is the only source of official binaries (no GitHub releases), and
+          # publishes no checksums, so they're pinned here. Linux has an RPM, which the runner image
+          # can unpack (`rpm2cpio`).
+          - name: Install nasm
+            if: ${{ contains(fromJSON('["x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]'), matrix.settings.target) }}
+            shell: bash
+            env:
+              NASM_VERSION: 2.16.03
+              NASM_LINUX_SHA256: 92a8f03e749abb55f928bad785878740cd578c8539ff42150025dfebcf0c2edf
+              NASM_WINDOWS_SHA256: 3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa7226e6
+            run: |
+              set -euo pipefail
+              dir="$RUNNER_TEMP/nasm"
+              mkdir -p "$dir"
+              url="https://www.nasm.us/pub/nasm/releasebuilds/$NASM_VERSION"
+              if [ "$RUNNER_OS" = Windows ]; then
+                curl --retry 3 -fsSL -o "$dir/nasm.zip" "$url/win64/nasm-$NASM_VERSION-win64.zip"
+                echo "$NASM_WINDOWS_SHA256  $dir/nasm.zip" | sha256sum -c -
+                unzip -q -j "$dir/nasm.zip" "nasm-$NASM_VERSION/nasm.exe" -d "$dir"
+              else
+                curl --retry 3 -fsSL -o "$dir/nasm.rpm" "$url/linux/nasm-$NASM_VERSION-0.fc39.x86_64.rpm"
+                echo "$NASM_LINUX_SHA256  $dir/nasm.rpm" | sha256sum -c -
+                (cd "$dir" && rpm2cpio nasm.rpm | cpio -idm --quiet ./usr/bin/nasm && mv usr/bin/nasm .)
+              fi
+              PATH="$dir:$PATH" nasm -v
+              echo "$dir" >> "$GITHUB_PATH"
       # Only needs Node.js, not turbo (or pnpm).
       - name: Build
         shell: bash

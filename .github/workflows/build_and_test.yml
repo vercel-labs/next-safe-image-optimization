@@ -476,14 +476,14 @@ jobs:
   # Counts the instructions the worker executes for the benchmark's pipelines, on the pull request
   # and on its base, and writes both to the job summary (packages/bench/instructions.ts). Counts
   # barely vary between runs, unlike timings on shared runners. Fails if any case grows by more than
-  # 3%, unless the pull request's title starts with `[skip-benchmark]`.
+  # 3%, unless the pull request has the `skip-benchmark` label.
   instructions:
     name: Benchmark instruction count
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-26.04
     permissions:
       contents: read
-      # To read the pull request's current title.
+      # To read the pull request's current labels.
       pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -526,31 +526,39 @@ jobs:
       - run: pnpm install --frozen-lockfile
         working-directory: head
       - wait: valgrind
-      - name: Count instructions
-        working-directory: head/packages/bench
+      # In its own step, so that the token isn't in the environment of the pull request's code. It
+      # reads the current labels, not the event's, so that re-running the job after adding the label
+      # picks it up. Only people with triage access can add labels.
+      - name: Check for the skip-benchmark label
+        id: labels
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          # The current title, not the event's, so that re-running the job after renaming the pull
-          # request picks it up.
-          title="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title)"
+          labels="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.labels[].name')"
+          skip=false
+          if grep -qx skip-benchmark <<< "$labels"; then
+            skip=true
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+      - name: Count instructions
+        working-directory: head/packages/bench
+        env:
+          SKIP: ${{ steps.labels.outputs.skip }}
+        run: |
+          set -euo pipefail
           gate=(--max-increase 3)
-          if [[ "$title" == "[skip-benchmark]"* ]]; then
+          if [[ "$SKIP" == true ]]; then
             gate=()
-            note='The title starts with `[skip-benchmark]`, so increases are reported but not enforced.'
-          else
-            note='Fails if any case grows by more than 3%. To skip that, start the pull request title with `[skip-benchmark]` and re-run this job.'
+            echo 'The pull request has the `skip-benchmark` label, so increases are reported but not enforced.' >> "$GITHUB_STEP_SUMMARY"
           fi
           pnpm instructions \
             --base "$RUNNER_TEMP/harness/base" \
             --head "$RUNNER_TEMP/harness/head" \
             --markdown "$GITHUB_STEP_SUMMARY" \
-            "${gate[@]}" || status=$?
-          echo "$note" | tee -a "$GITHUB_STEP_SUMMARY"
-          exit "${status:-0}"
+            "${gate[@]}"
 
   # We block merging unless this job passes. This is enforced by a "require status checks to pass"
   # rule on the main branch.

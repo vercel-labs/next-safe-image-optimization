@@ -39,6 +39,12 @@ const run = promisify(execFile)
 /** The throughput benchmark's settings (`QUALITY` in `libraries.ts`), for the formats we encode. */
 const FORMATS = { webp: { quality: 75 }, jpeg: { quality: 75 } } as const
 
+/**
+ * The pull request label that CI's `instructions` job checks for: with it, the job reports increases
+ * without passing `--max-increase` (see `.github/workflows/build_and_test.yml`).
+ */
+const SKIP_LABEL = 'skip-benchmark'
+
 const DEFAULT_HARNESS = new URL('../../target/release/examples/instructions', import.meta.url)
   .pathname
 
@@ -208,13 +214,34 @@ try {
   }
 
   if (maxIncrease !== undefined) {
-    const regressions = rows.filter((row) => (change(row) ?? 0) > maxIncrease)
-    for (const row of regressions) {
-      console.error(
-        `${row.name}: ${percent.format(change(row)!)}% more instructions (limit: ${maxIncrease}%)`,
+    const regressions = rows
+      .filter((row) => (change(row) ?? 0) > maxIncrease)
+      .map(
+        (row) =>
+          `${row.name}: ${percent.format(change(row)!)}% more instructions (limit: +${maxIncrease}%)`,
       )
-    }
     if (regressions.length > 0) {
+      const hint =
+        `If this regression is acceptable, add the \`${SKIP_LABEL}\` label to the pull request ` +
+        'and re-run this job.'
+      console.error(['Instruction count regression:', ...regressions, '', hint].join('\n'))
+      if (process.env.GITHUB_ACTIONS === 'true') {
+        // An annotation, so it shows on the pull request's checks without opening the log. Workflow
+        // commands escape `%`, carriage returns, and newlines.
+        const message = [...regressions, hint]
+          .join('\n')
+          .replaceAll('%', '%25')
+          .replaceAll('\r', '%0D')
+          .replaceAll('\n', '%0A')
+        console.log(`::error title=Instruction count regression::${message}`)
+      }
+      if (values.markdown !== undefined) {
+        const list = regressions.map((regression) => `- ${regression}`)
+        await appendFile(
+          values.markdown,
+          ['', '**Instruction count regression:**', '', ...list, '', hint, ''].join('\n'),
+        )
+      }
       process.exitCode = 1
     }
   }

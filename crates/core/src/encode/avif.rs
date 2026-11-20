@@ -1,4 +1,5 @@
-//! AVIF via `image`'s encoder: ravif, which encodes with rav1e (Rust, without asm or threads).
+//! AVIF via `image`'s encoder: ravif, which encodes with rav1e (Rust, without threads, and with
+//! assembly only with the `asm` feature).
 //! Always 8-bit 4:4:4 YCbCr, plus a separate alpha plane if any pixel isn't opaque.
 
 use image::codecs::avif::AvifEncoder;
@@ -100,6 +101,15 @@ mod tests {
         assert_eq!(channels, 3);
         assert_eq!((decoded.width(), decoded.height()), (16, 16));
         assert!(!decoded.color().has_alpha());
+    }
+
+    /// The `asm` feature enables rav1e's assembly through our own dependency on it, which only
+    /// reaches ravif's copy if it's the same version.
+    #[test]
+    fn rav1e_is_deduplicated() {
+        let lock = include_str!("../../../../Cargo.lock");
+        let count = lock.matches("name = \"rav1e\"\n").count();
+        assert_eq!(count, 1, "rav1e is in Cargo.lock {count} times");
     }
 
     #[test]

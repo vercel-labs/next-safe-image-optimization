@@ -5,6 +5,13 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# rav1e's assembly, for AVIF encoding only. Enabled on rav1e itself, not with `image`'s `nasm`
+# feature, which could someday cover more than ravif (like a decoder). x86_64 needs nasm, and
+# aarch64 compiles GNU-syntax `.S` files with the C compiler, which MSVC can't. Other architectures
+# ignore it. scripts/build-native.mjs and `pnpm build:release` enable it.
+asm = ["dep:rav1e", "rav1e/asm"]
+
 [dependencies]
 # Requests are JSON options followed by the input (see `protocol.rs`).
 serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
@@ -19,8 +26,9 @@ libc = { version = "0.2.190", default-features = false }
 # Decoders (memory-safe Rust). JPEG (zune-jpeg), PNG, WebP, GIF, and TIFF go through `image`, which
 # enables the default features of its codec dependencies (like zune-jpeg's SIMD, and tiff's JPEG
 # support). The worker's limits bound them (see AGENTS.md). `avif` is only the AVIF encoder (ravif and
-# rav1e, without asm or threads, since `image`'s default features are off): never `avif-native`.
-image ={ version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff", "avif"] }
+# rav1e, without threads, since `image`'s default features are off, and with assembly only with
+# `asm`): never `avif-native`.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff", "avif"] }
 # Vendored as a git subtree to disable rav1d's asm (see vendor/avif-decode/Cargo.toml).
 avif-decode = { path = "../../vendor/avif-decode", default-features = false }
 # Same version as avif-decode uses, to match on its errors.
@@ -36,6 +44,10 @@ moxcms = { version = "0.8.1", default-features = false, features = ["lut", "neon
 fast_image_resize = { version = "6.1.0", default-features = false, features = ["image"] }
 
 # Encoders. Sandboxing encoders isn't a goal: they only ever see pixel buffers we produced.
+# AVIF's encoder, through ravif (`image`'s `avif`). Only a direct dependency to enable its `asm`
+# (Cargo unifies features, so ravif's copy gets it). Must be the same version as ravif's, which
+# `encode::avif::tests::rav1e_is_deduplicated` checks.
+rav1e = { version = "0.8.1", default-features = false, optional = true }
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
 # `mozjpeg: true` (C). Without SIMD (asm), so builds don't need nasm. On wasm, it's compiled with
 # wasi-sdk, like libwebp.

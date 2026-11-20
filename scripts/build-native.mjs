@@ -8,6 +8,9 @@
 // Usage: node scripts/build-native.mjs --target <triple> [-x] [extra cargo args]
 //
 // `-x` cross-compiles with cargo-zigbuild.
+//
+// Targets in `ASM_TARGETS` get rav1e's assembly (the `asm` feature), for AVIF encoding. On x86_64,
+// that needs nasm in `PATH`.
 
 import { spawnSync } from 'node:child_process'
 import { copyFileSync } from 'node:fs'
@@ -17,6 +20,15 @@ import { platform } from './platforms.mjs'
 const root = join(import.meta.dirname, '..')
 /** The oldest glibc that official Node.js binaries support. */
 const GLIBC_VERSION = '2.28'
+/** Not aarch64 Windows: MSVC can't compile rav1e's GNU-syntax `.S` files. */
+const ASM_TARGETS = new Set([
+  'aarch64-apple-darwin',
+  'aarch64-unknown-linux-gnu',
+  'aarch64-unknown-linux-musl',
+  'x86_64-pc-windows-msvc',
+  'x86_64-unknown-linux-gnu',
+  'x86_64-unknown-linux-musl',
+])
 
 function run(command, args, env) {
   const result = spawnSync(command, args, {
@@ -68,6 +80,7 @@ run(
     '--release',
     '--locked',
     `--target=${cargoTarget}`,
+    ...(ASM_TARGETS.has(target) ? ['--features=asm'] : []),
     ...extra,
   ],
   env,

@@ -93,7 +93,12 @@ While this library is designed to protect against untrusted input, it may still 
 
 ## Development
 
-Requires Rust (version pinned in `rust-toolchain.toml`), Node.js 24, and pnpm (`npm install --global pnpm`).
+Requires:
+
+- Rust (version pinned in `rust-toolchain.toml`)
+- Node.js 24, and pnpm (`npm install --global pnpm`)
+- A C compiler, for libwebp and mozjpeg: Xcode's command line tools on macOS, the MSVC build tools on Windows, or GCC or Clang on Linux
+- For release builds on x86_64, [nasm](https://www.nasm.us) 2.15 or later (e.g. `brew install nasm` or `apt install nasm`).
 
 ```sh
 pnpm install
@@ -102,7 +107,7 @@ pnpm test           # Rust unit tests and end-to-end tests (builds first)
 pnpm test:release   # end-to-end tests with a release build
 pnpm lint           # clippy and oxlint
 pnpm quality        # clippy, rustfmt, oxlint, oxfmt, and TypeScript typechecking
-pnpm quality:fix   # clippy's and oxlint's fixes, rustfmt, and oxfmt
+pnpm quality:fix    # clippy's and oxlint's fixes, rustfmt, and oxfmt
 
 # Regenerate TypeScript protocol types after changing request options in crates/core
 # (requires `cargo install typeshare-cli --version 1.13.4 --locked`)

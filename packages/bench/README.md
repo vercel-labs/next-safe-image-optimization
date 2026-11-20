@@ -36,6 +36,21 @@ pnpm bench:release --json > results.json
 
 sharp and `@napi-rs/image` run each image on libuv's thread pool, which has 4 threads by default, so under Node.js on a machine with more cores than that, raise `UV_THREADPOOL_SIZE` before deciding anything. It does nothing for `@next/safe-image-optimization`, which uses worker processes, and nothing at all under Bun, which doesn't use libuv: `UV_THREADPOOL_SIZE=1` cuts `@napi-rs/image` to about a quarter of its throughput under Node.js and leaves it unchanged under Bun.
 
+### Instruction counts
+
+Throughput depends on the machine, and on whatever else is running on it, so it can't tell a pull request's slowdown from a noisy CI runner. `instructions.ts` instead counts the CPU instructions `@next/safe-image-optimization` executes for each of the same pipelines (both inputs, to WebP and JPEG), with Valgrind's cachegrind, which gives almost the same number on every run. It runs [`crates/core/examples/instructions.rs`](../../crates/core/examples/instructions.rs), which handles one request with `nsio_core::protocol::handle`, without the worker's process setup and seccomp filters, which Valgrind can't run under. On Linux, with Valgrind installed:
+
+```sh
+cargo build --release --locked --example instructions -p nsio-core
+pnpm instructions                                        # from this directory
+pnpm instructions --base <harness> --head <harness>      # compare two builds
+pnpm instructions --base <harness> --max-increase 2      # exit with 1 above a 2% increase
+```
+
+CI runs it on every pull request (the `instructions` job), against a build of the pull request's base with the same harness, and writes the counts for both, the difference, and the percent change to the job summary. It doesn't fail the build.
+
+An instruction count measures work, not time: it doesn't see cache misses, branch mispredictions, or that some instructions are slower than others, nor the cost of starting and replacing workers. Valgrind's simulated CPU may not report every extension the real one has (like AVX-512), so SIMD code can take different paths than it would natively, though the same ones for both builds. The count includes starting the process and reading the request, which are the same for every build.
+
 ## What it measures
 
 | Entry                                                    | Notes                                                                                                                 |

@@ -473,6 +473,67 @@ jobs:
           NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND: wasm
           NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH: ${{ github.workspace }}/target/wasm32-wasip1/release/nsio_wasm.wasm
 
+  # Counts the instructions the worker executes for the benchmark's pipelines, on the pull request
+  # and on its base, and writes both to the job summary (packages/bench/instructions.ts). Counts
+  # barely vary between runs, unlike timings on shared runners. Informational, so it isn't in
+  # `tests-pass`.
+  instructions:
+    name: Instruction counts
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    env:
+      # Shared, so the base's build reuses the dependencies the head's built.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install Valgrind
+        id: valgrind
+        background: true
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends valgrind
+      # Both builds use the head's harness, so they're measured the same way, and the base doesn't
+      # need to have one. It only uses nsio-core's public API (see the file).
+      - name: Build the harness
+        run: |
+          set -euo pipefail
+          mkdir -p base/crates/core/examples "$RUNNER_TEMP/harness"
+          cp head/crates/core/examples/instructions.rs base/crates/core/examples/
+          for side in head base; do
+            (
+              cd "$side"
+              rustup toolchain install
+              cargo build --release --locked --example instructions -p nsio-core
+            )
+            cp "$CARGO_TARGET_DIR/release/examples/instructions" "$RUNNER_TEMP/harness/$side"
+          done
+      - run: npm install --global pnpm@12.11.2
+      - run: pnpm install --frozen-lockfile
+        working-directory: head
+      - wait: valgrind
+      - name: Count instructions
+        working-directory: head/packages/bench
+        run: |
+          set -euo pipefail
+          pnpm instructions \
+            --base "$RUNNER_TEMP/harness/base" \
+            --head "$RUNNER_TEMP/harness/head" \
+            --markdown "$GITHUB_STEP_SUMMARY"
+
   # We block merging unless this job passes. This is enforced by a "require status checks to pass"
   # rule on the main branch.
   # <https://github.com/vercel-labs/next-safe-image-optimization/settings/rules/26230958>

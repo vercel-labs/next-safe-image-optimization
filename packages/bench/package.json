@@ -9,6 +9,7 @@
     "bench:release": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/release/safe-image-optimization-worker node --disable-warning=ExperimentalWarning bench.ts",
     "bench:bun": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/debug/safe-image-optimization-worker bun bench.ts",
     "bench:bun:release": "NEXT_SAFE_IMAGE_OPTIMIZATION_WORKER_PATH=../../target/release/safe-image-optimization-worker bun bench.ts",
+    "instructions": "node --disable-warning=ExperimentalWarning instructions.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

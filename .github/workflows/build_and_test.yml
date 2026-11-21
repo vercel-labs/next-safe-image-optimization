@@ -473,6 +473,96 @@ jobs:
           NEXT_SAFE_IMAGE_OPTIMIZATION_BACKEND: wasm
           NEXT_SAFE_IMAGE_OPTIMIZATION_WASM_PATH: ${{ github.workspace }}/target/wasm32-wasip1/release/nsio_wasm.wasm
 
+  # Counts the instructions the worker executes for the benchmark's pipelines, on the pull request
+  # and on its base, and writes both to the job summary (packages/bench/instructions.ts). Counts
+  # barely vary between runs, unlike timings on shared runners. Fails if any case grows by more than
+  # 3%, unless the pull request has the `skip-benchmark` label.
+  instructions:
+    name: Benchmark instruction count
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      # To read the pull request's current labels.
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: base
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # apt rather than a pinned download: Valgrind isn't a single binary, and its deb needs the
+      # libc6-dbg that matches the image's libc6, which changes with the image. The step runs in the
+      # background, so the builds below hide its time.
+      - name: Install Valgrind
+        id: valgrind
+        background: true
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends valgrind
+      # Both builds use the head's harness, so they're measured the same way, and the base doesn't
+      # need to have one. It only uses nsio-core's public API (see the file). Each side has its own
+      # target dir: with a shared one, cargo considers the base's build fresh (same package, same
+      # relative paths, older mtimes) and reuses the head's binary.
+      - name: Build the harness
+        run: |
+          set -euo pipefail
+          mkdir -p base/crates/core/examples "$RUNNER_TEMP/harness"
+          cp head/crates/core/examples/instructions.rs base/crates/core/examples/
+          for side in head base; do
+            (
+              cd "$side"
+              rustup toolchain install
+              cargo build --release --locked --example instructions -p nsio-core
+            )
+            cp "$side/target/release/examples/instructions" "$RUNNER_TEMP/harness/$side"
+          done
+      - run: npm install --global pnpm@12.11.2
+      - run: pnpm install --frozen-lockfile
+        working-directory: head
+      - wait: valgrind
+      # In its own step, so that the token isn't in the environment of the pull request's code. It
+      # reads the current labels, not the event's, so that re-running the job after adding the label
+      # picks it up. Only people with triage access can add labels.
+      - name: Check for the skip-benchmark label
+        id: labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          labels="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.labels[].name')"
+          skip=false
+          if grep -qx skip-benchmark <<< "$labels"; then
+            skip=true
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+      - name: Count instructions
+        working-directory: head/packages/bench
+        env:
+          SKIP: ${{ steps.labels.outputs.skip }}
+        run: |
+          set -euo pipefail
+          gate=(--max-increase 3)
+          if [[ "$SKIP" == true ]]; then
+            gate=()
+            echo 'The pull request has the `skip-benchmark` label, so increases are reported but not enforced.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          pnpm instructions \
+            --base "$RUNNER_TEMP/harness/base" \
+            --head "$RUNNER_TEMP/harness/head" \
+            --markdown "$GITHUB_STEP_SUMMARY" \
+            "${gate[@]}"
+
   # We block merging unless this job passes. This is enforced by a "require status checks to pass"
   # rule on the main branch.
   # <https://github.com/vercel-labs/next-safe-image-optimization/settings/rules/26230958>
@@ -487,6 +577,7 @@ jobs:
       - test-musl
       - test-riscv64
       - test-wasm
+      - instructions
     if: always()
     runs-on: ubuntu-26.04
     name: thank you, next

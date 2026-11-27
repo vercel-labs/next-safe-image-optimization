@@ -36,10 +36,10 @@ function noise(width: number, height: number) {
 
 describe('pool', () => {
   test('options are validated', () => {
-    for (const concurrency of [0, 1.5, Infinity]) {
-      assert.throws(() => new Pool({ concurrency }), TypeError)
+    for (const maxWorkers of [0, 1.5, Infinity]) {
+      assert.throws(() => new Pool({ maxWorkers }), TypeError)
     }
-    new Pool({ concurrency: 2 ** 40 })
+    new Pool({ maxWorkers: 2 ** 40 })
     for (const idleTimeoutMs of [-1, NaN, '10']) {
       assert.throws(() => new Pool({ idleTimeoutMs: idleTimeoutMs as never }), TypeError)
     }
@@ -123,7 +123,7 @@ describe('pool', () => {
   })
 
   test('requests queue for a free worker', async () => {
-    const pool = new Pool({ concurrency: 1 })
+    const pool = new Pool({ maxWorkers: 1 })
     assert.equal(pool.backend, backend)
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     const results = await Promise.all(
@@ -140,7 +140,7 @@ describe('pool', () => {
   test('workers can be reused', async () => {
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     for (const maxImagesPerWorker of [0, 1, 2]) {
-      const pool = new Pool({ concurrency: 2, maxImagesPerWorker })
+      const pool = new Pool({ maxWorkers: 2, maxImagesPerWorker })
       const results = await Promise.all(
         Array.from({ length: 5 }, (_, i) =>
           pool
@@ -154,7 +154,7 @@ describe('pool', () => {
   })
 
   test('timeouts kill the worker, and the pool replaces it', async () => {
-    const pool = new Pool({ concurrency: 1 })
+    const pool = new Pool({ maxWorkers: 1 })
     const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
     const start = performance.now()
     await assertRejectsWithCode(
@@ -176,7 +176,7 @@ describe('pool', () => {
   })
 
   test('decode timeouts kill the worker, and the pool replaces it', async () => {
-    const pool = new Pool({ concurrency: 1 })
+    const pool = new Pool({ maxWorkers: 1 })
     const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
     const start = performance.now()
     await assert.rejects(
@@ -224,7 +224,7 @@ describe('pool', () => {
     'limitProcessMemoryBytes is enforced, and the worker is replaced',
     { skip: !enforcesProcessMemory },
     async () => {
-      const pool = new Pool({ concurrency: 1, limitProcessMemoryBytes: 48 * 1024 * 1024 })
+      const pool = new Pool({ maxWorkers: 1, limitProcessMemoryBytes: 48 * 1024 * 1024 })
       // 75 MB of pixels. `limitAllocatorMemoryBytes` allows it, so the allocator doesn't stop it first.
       const large = await fromRaw(pattern(5000, 5000)).png().toBuffer()
       await assertRejectsWithCode(
@@ -255,7 +255,7 @@ describe('shutdown', () => {
   const small = () => fromRaw(pattern(64, 64)).png().toBuffer()
 
   test('close() finishes submitted images, then rejects new ones', async () => {
-    const pool = new Pool({ concurrency: 1 })
+    const pool = new Pool({ maxWorkers: 1 })
     const input = await small()
     // The second one is queued.
     const submitted = [
@@ -269,7 +269,7 @@ describe('shutdown', () => {
   })
 
   test('destroy() rejects submitted images', async () => {
-    const pool = new Pool({ concurrency: 1 })
+    const pool = new Pool({ maxWorkers: 1 })
     const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
     const submitted = [
       pool.prepare(input).png().toBuffer(),
@@ -280,7 +280,7 @@ describe('shutdown', () => {
   })
 
   test('destroy() after close() stops waiting', async () => {
-    const pool = new Pool({ concurrency: 1 })
+    const pool = new Pool({ maxWorkers: 1 })
     const input = await fromRaw(noise(2000, 2000)).png({ compressionLevel: 0 }).toBuffer()
     const submitted = assertRejectsWithCode(pool.prepare(input).png().toBuffer(), 'ERR_POOL_CLOSED')
     const closed = pool.close()
@@ -332,7 +332,7 @@ describe('abort', () => {
   })
 
   test('aborting kills the worker processing the image, and the pool replaces it', async () => {
-    const pool = new Pool({ concurrency: 1 })
+    const pool = new Pool({ maxWorkers: 1 })
     const controller = new AbortController()
     const aborted = assert.rejects(
       pool
@@ -350,7 +350,7 @@ describe('abort', () => {
   })
 
   test('aborting removes a queued image', async () => {
-    const pool = new Pool({ concurrency: 1 })
+    const pool = new Pool({ maxWorkers: 1 })
     const input = await small()
     const controller = new AbortController()
     const first = pool.prepare(input).png().toBuffer()
@@ -481,7 +481,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
 
   test('workers are forked from a fork server', async () => {
     const before = new Set(servers().map(({ pid }) => pid))
-    const pool = new Pool({ concurrency: 2, maxImagesPerWorker: 0 })
+    const pool = new Pool({ maxWorkers: 2, maxImagesPerWorker: 0 })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     await Promise.all([pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()])
     const all = processes()
@@ -501,7 +501,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
 
   test('the pool replaces a fork server that exits', async () => {
     const before = new Set(servers().map(({ pid }) => pid))
-    const pool = new Pool({ concurrency: 1, maxImagesPerWorker: 0 })
+    const pool = new Pool({ maxWorkers: 1, maxImagesPerWorker: 0 })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     await pool.prepare(input).png().toBuffer()
     const [server] = servers().filter(({ pid }) => !before.has(pid))
@@ -522,7 +522,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
 
   test('close() stops the workers and the fork server', async () => {
     const before = new Set(servers().map(({ pid }) => pid))
-    const pool = new Pool({ concurrency: 2, maxImagesPerWorker: 0 })
+    const pool = new Pool({ maxWorkers: 2, maxImagesPerWorker: 0 })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     await Promise.all([pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()])
     const [server] = servers().filter(({ pid }) => !before.has(pid))
@@ -538,7 +538,7 @@ describe('fork server', { skip: backend !== 'native' || process.platform === 'wi
         ({ ppid, args }) => ppid === process.pid && args.includes('safe-image-optimization-worker'),
       )
     const before = new Set(spawned().map(({ pid }) => pid))
-    const pool = new Pool({ concurrency: 2, forkServer: false, maxImagesPerWorker: 0 })
+    const pool = new Pool({ maxWorkers: 2, forkServer: false, maxImagesPerWorker: 0 })
     const input = await fromRaw(pattern(64, 64)).png().toBuffer()
     await Promise.all([pool.prepare(input).png().toBuffer(), pool.prepare(input).png().toBuffer()])
     const added = spawned().filter(({ pid }) => !before.has(pid))

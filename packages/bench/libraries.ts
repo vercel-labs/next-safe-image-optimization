@@ -132,8 +132,8 @@ async function bunEncodesAvif(Image: BunImageConstructor): Promise<boolean> {
  * worker after every image, so a bug in a decoder can't leak one image into the next. Both
  * settings are measured, because the difference is the price of that guarantee.
  */
-function nsioLibrary(concurrency: number, maxImagesPerWorker: number): Library {
-  const pool = new Pool({ concurrency, maxImagesPerWorker })
+function nsioLibrary(maxWorkers: number, maxImagesPerWorker: number): Library {
+  const pool = new Pool({ maxWorkers, maxImagesPerWorker })
   return {
     name:
       maxImagesPerWorker === 1

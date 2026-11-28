@@ -30,66 +30,77 @@ export type Input = ArrayBufferView | ArrayBuffer | SharedArrayBuffer
 
 export type BackendName = 'native' | 'wasm'
 
+// These doc comments may be shown by the TypeScript LSP. Keep these doc comments in sync with the
+// repo's `README.md`.
 export interface PoolOptions {
-  /** The maximum number of workers at once. Default: `os.availableParallelism()`. */
-  concurrency?: number
   /**
-   * Milliseconds before an idle worker exits. 0 means no limit: idle workers never exit. Idle
-   * workers don't keep the process alive either way. Default: 10000.
+   * How many processes (or WASM instances) can be used to process requests in parallel. Workers are
+   * created lazily. Each worker processes a single image at a time.
    *
-   * Workers are only idle if they're reused, so this has no effect with `maxImagesPerWorker: 1`
-   * (the default, except on Windows).
+   * In future versions of this library, some codecs may use their own thread pools to process parts
+   * of the same image in parallel, so this is not a hard cap on total parallelism or CPU usage.
+   *
+   * Default: `os.availableParallelism()`
    */
-  idleTimeoutMs?: number
+  maxWorkers?: number
   /**
-   * The maximum number of images a worker processes before it's killed and
+   * How many times the same process (or WASM instance) can be used before being terminated and
    * replaced.
    *
-   * If there is a vulnerability in an image codec, a malicious input image
-   * could corrupt memory in a worker, leaking information across requests. A
-   * limit of `1` ensures that memory is not shared across requests.
+   * If there is a vulnerability in an image codec, a malicious input image could corrupt memory in
+   * a worker, leaking information across requests. A limit of `1` ensures that memory is not shared
+   * across requests. A value of `0` means workers can be reused indefinitely (not recommended).
    *
-   * 0 means no limit: workers are reused until they're idle for `idleTimeoutMs`.
+   * Increasing this limit can improve performance on platforms where spawning a new process is
+   * expensive.
    *
-   * The latency overhead of `maxImagesPerWorker: 1` is roughly:
-   * - Linux native, with the fork server (default): ~0.5ms
-   * - Linux native, without the fork server: ~1-3ms
-   * - WASM: ~16ms
-   *
-   * Default: 1, except 64 for native workers on Windows, where the per-process
-   * overhead is higher.
+   * Default: 64 on Windows (without WASM), and 1 everywhere else
    */
   maxImagesPerWorker?: number
   /**
-   * The maximum memory of each worker process in bytes, enforced by the
-   * operating system or platform. This option is unsupported and ignored on
-   * native macOS and Windows builds.
+   * How long to keep an idle worker alive after processing an image. This has no effect if
+   * `maxImagesPerWorker` is 1. A value of 0 never cleans up idle processes.
+   *
+   * Default: `10_000` (10 seconds)
+   */
+  idleTimeoutMs?: number
+  /**
+   * Uses a lightweight fork server process and the `fork()` call to create new workers on macOS
+   * and Linux. This reduces the overhead of creating new processes compared to `posix_spawn()`.
+   *
+   * Forked workers share the same address space layout which can reduce the effectiveness of
+   * [ASLR]. For added security, you can turn this feature off.
+   *
+   * This depends on unsupported parts of [Node.js `'ipc'` channel API][ipc]. Bun and Deno are
+   * compatible with our implementation.
+   *
+   * Ignored on Windows and when using WASM.
+   *
+   * [ASLR]: https://en.wikipedia.org/wiki/Address_space_layout_randomization
+   * [ipc]: https://nodejs.org/api/child_process.html#optionsstdio
+   *
+   * Default: `true`
+   */
+  forkServer?: boolean
+  /**
+   * The maximum memory usage of each worker in bytes, enforced by the OS or platform. This option
+   * is only supported on Linux or when using WASM.
+   *
+   * This is a backstop for `limitAllocatorMemoryBytes()`, and should be set to a larger value. It
+   * covers non-Rust image codecs (libwebp and mozjpeg).
+   *
+   * 0 means no limit (not recommended).
    *
    * - On Linux, this is enforced using [`RLIMIT_DATA`].
-   * - On WASM, this enforced by configuring the maximum number of pages when
-   *   constructing [`WebAssembly.Memory`].
+   * - On WASM, this is enforced by configuring the maximum number of pages when constructing
+   *   [`WebAssembly.Memory`].
    *
    * [`RLIMIT_DATA`]: https://sourceware.org/glibc/manual/2.44/html_node/Limits-on-Resources.html#index-struct-rlimit64
    * [`WebAssembly.Memory`]: https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/JavaScript_interface/Memory
    *
-   * This is a backstop for `limitAllocatorMemoryBytes()`. It covers non-Rust
-   * image codecs (libwebp and mozjpeg). This should be larger than
-   * `limitAllocatorMemoryBytes()`.
-   *
-   * Exceeding it fails with `ERR_OUT_OF_MEMORY`, not `ERR_LIMIT_EXCEEDED`: to the worker, it's
-   * the same as the system running out of memory.
-   *
-   * 0 means no limit (not recommended). Default: 768 MiB.
+   * Default: 768 MiB
    */
   limitProcessMemoryBytes?: number
-  /**
-   * Fork native workers from a fork server (one per pool), instead of spawning each one, which
-   * makes starting a worker faster. Forked workers share the fork server's address space layout
-   * (ASLR), and the fork server passes their sockets to Node over its IPC channel, which Node
-   * doesn't officially support with a process that isn't Node (though Node, Bun, and Deno have used
-   * the same protocol for years). Ignored on Windows and for `'wasm'`. Default: `true`.
-   */
-  forkServer?: boolean
 }
 
 /**
@@ -305,7 +316,8 @@ export interface InternalRunOptions {
 }
 
 function createBackend(options: PoolOptions): Backend {
-  const concurrency = optional(options.concurrency, (v) => checkInteger('concurrency', v, 1))
+  const maxWorkers =
+    optional(options.maxWorkers, (v) => checkInteger('maxWorkers', v, 1)) ?? availableParallelism()
   const idleTimeoutMs =
     optional(options.idleTimeoutMs, (v) => checkMs('idleTimeoutMs', v)) ?? 10_000
   const memoryLimit =
@@ -323,7 +335,6 @@ function createBackend(options: PoolOptions): Backend {
   if (backend !== undefined) {
     checkOneOf(BACKEND_VARIABLE, backend, BACKENDS)
   }
-  const maxWorkers = concurrency ?? availableParallelism()
   const unavailable = (message: string) =>
     new SafeImageOptimizationError('ERR_BACKEND_UNAVAILABLE', message)
   const wasm = (context: string) => {

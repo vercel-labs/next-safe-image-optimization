@@ -52,17 +52,70 @@ const meta = await defaultPool().prepare(input).timeoutMs(5_000).metadata()
 
 ### Worker pools
 
-Images are processed in a pool of background workers, one image per worker at a time. Workers start on demand, and by default, each one is replaced after processing a single image (except on Windows; see `maxImagesPerWorker`). Workers are also replaced if they crash or time out. With `maxImagesPerWorker` above 1, they're reused, and exit after `idleTimeoutMs` without work.
-
-`defaultPool()` returns a shared pool sized to `os.availableParallelism()`. You can also create a pool with custom settings:
+Images are processed in a pool of background workers. `defaultPool()` returns a shared pool with default options. You can create a custom worker pool:
 
 ```js
 const { Pool } = require('@next/safe-image-optimization')
 
+// all of these settings are optional, the default settings are shown
 const pool = new Pool({
-  concurrency: 4,
-  maxImagesPerWorker: 16,
-  idleTimeoutMs: 30_000,
+  /**
+   * How many processes (or wasm instances) can be used to process requests in parallel. Workers are
+   * created lazily. Each worker processes a single image at a time.
+   *
+   * In future versions of this library, some codecs may use their own thread pools to process parts
+   * of the same image in parallel, so this is not a hard cap on total parallelism or CPU usage.
+   */
+  maxWorkers: os.availableParallelism(),
+  /**
+   * How many times the same worker can be used before being killed and replaced.
+   *
+   * If there is a vulnerability in an image codec, a malicious input image could corrupt memory in
+   * a worker, leaking information across requests. A limit of `1` ensures that memory is not shared
+   * across requests. A value of `0` means workers can be reused indefinitely (not recommended).
+   *
+   * Increasing this limit can improve performance on platforms where spawning a new process is
+   * expensive.
+   */
+  maxImagesPerWorker: process.platform === 'win32' ? 64 : 1,
+  /**
+   * How long to keep an idle worker alive after processing an image. This has no effect if
+   * `maxImagesPerWorker` is 1. A value of 0 never cleans up idle processes.
+   */
+  idleTimeoutMs: 10_000, // 10 seconds
+  /**
+   * Uses a lightweight fork server process and the `fork()` call to create new workers on macOS
+   * and Linux. This reduces the overhead of creating new processes compared to `posix_spawn()`.
+   *
+   * Forked workers share the same address space layout which can reduce the effectiveness of
+   * [ASLR]. For added security, you can turn this feature off.
+   *
+   * This depends on unsupported parts of [Node.js `'ipc'` channel API][ipc]. Bun and Deno are
+   * compatible with our implementation.
+   *
+   * Ignored on Windows and when using WASM.
+   *
+   * [ASLR]: https://en.wikipedia.org/wiki/Address_space_layout_randomization
+   * [ipc]: https://nodejs.org/api/child_process.html#optionsstdio
+   */
+  forkServer: true,
+  /**
+   * The maximum memory usage of each worker in bytes, enforced by the OS or platform. This option
+   * is only supported on Linux or when using WASM.
+   *
+   * This is a backstop for `limitAllocatorMemoryBytes()`, and should be set to a larger value. It
+   * covers non-Rust image codecs (libwebp and mozjpeg).
+   *
+   * 0 means no limit (not recommended).
+   *
+   * - On Linux, this is enforced using [`RLIMIT_DATA`].
+   * - On WASM, this is enforced by configuring the maximum number of pages when constructing
+   *   [`WebAssembly.Memory`].
+   *
+   * [`RLIMIT_DATA`]: https://sourceware.org/glibc/manual/2.44/html_node/Limits-on-Resources.html#index-struct-rlimit64
+   * [`WebAssembly.Memory`]: https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/JavaScript_interface/Memory
+   */
+  limitProcessMemoryBytes: 768 * 1024 * 1024, // 768 MiB
 })
 
 const output = await pool.prepare(input).timeoutMs(10_000).webp().toBuffer()

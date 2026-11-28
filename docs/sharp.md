@@ -10,6 +10,7 @@ Because of these different goals, `@next/safe-image-optimization` is not a drop-
 ## API and pipeline
 
 - **Pools instead of a default function:** Pipelines are created with `defaultPool().prepare(input)` or `pool.prepare(input)` instead of calling `sharp(input, options)`.
+- **Concurrency:** The pool's `maxWorkers` option sets how many images are processed in parallel (default: `os.availableParallelism()`). In sharp, that's the size of libuv's thread pool (`UV_THREADPOOL_SIZE`, 4 by default), which has no effect on this library. There's no equivalent of `sharp.concurrency()`, which sets how many threads libvips uses for a single image: each image is processed by one single-threaded worker.
 - **Limits are chained methods:** Instead of constructor options (like sharp's `limitInputPixels`), limits are set with `.limitInputPixels()`, `.limitAllocatorMemoryBytes()`, `.limitOutputBytes()`, `.allowInputFormats()`, `.animated()`, `.timeoutMs()`, and `.decodeTimeoutMs()`.
 - **Cancellation and shutdown:** `toBuffer()` and `metadata()` accept an `AbortSignal` (`{ signal }`), and pools can be shut down with `close()` or `destroy()`.
 - **In-memory input only:** Input must be a `Buffer`, `Uint8Array` (or another `ArrayBufferView`), `ArrayBuffer`, or `SharedArrayBuffer`. File paths and streams are not supported.
@@ -21,7 +22,7 @@ Because of these different goals, `@next/safe-image-optimization` is not a drop-
 
 ## Operations
 
-- **Resizing:** `resize()` always behaves like sharp's default `fit: 'cover'` with centered cropping (`position: 'centre'`). Other `fit` modes, crop positions, and background colors are not supported. Supported resampling `kernel` values are `nearest`, `linear`, `cubic`, and `lanczos3`. Because resizing uses Rust's `image` crate rather than libvips, output pixels differ slightly and resizing is slower.
+- **Resizing:** `resize()` always behaves like sharp's default `fit: 'cover'` with centered cropping (`position: 'centre'`). Other `fit` modes, crop positions, and background colors are not supported. Supported resampling `kernel` values are `nearest`, `linear`, `cubic`, and `lanczos3`. Because resizing uses the `fast_image_resize` crate rather than libvips, output pixels differ slightly and resizing is slower.
 - **Rotation:** `rotate(angle)` only supports multiples of 90°. Unlike sharp, `rotate()` without an angle throws a `TypeError` instead of auto-orienting; use `autoOrient()`, which always runs before `rotate(angle)`.
 - **Other operations:** Operations that Next.js does not use—such as `extract`, `flip`, `flop`, `blur`, `sharpen`, `composite`, `flatten`, and `trim`—are not included.
 
@@ -37,11 +38,12 @@ Because of these different goals, `@next/safe-image-optimization` is not a drop-
 
 ## Performance
 
-`@next/safe-image-optimization` is slower than sharp, and the gap depends on the image. Three things account for most of it:
+`@next/safe-image-optimization` is slower than sharp, and the gap depends on the image. Four things account for most of it:
 
 - **A worker process per image.** By default a worker handles one image and is then replaced, so every image pays for starting a worker (~0.5 ms on Linux with the fork server) and for copying the input and output through a pipe. `maxImagesPerWorker` trades that isolation for throughput.
 - **No shrink-on-load.** libvips decodes a JPEG at a reduced DCT scale when the result is about to be shrunk, so sharp decodes far fewer pixels when generating a thumbnail from a large JPEG. This library always decodes at full size.
-- **Resizing and encoding in Rust.** Resampling uses the `image` crate rather than libvips, and JPEG uses `jpeg-encoder` (or mozjpeg without assembly) rather than libjpeg-turbo.
+- **One thread per image.** libvips splits a single image across several threads, and this library doesn't, so the gap is widest when only one image is being processed at a time. Throughput here comes from processing several images at once, in separate workers.
+- **Resizing and encoding in Rust.** Resampling uses the `fast_image_resize` crate rather than libvips, and JPEG uses `jpeg-encoder` (or mozjpeg without assembly) rather than libjpeg-turbo.
 
 [`packages/bench`](../packages/bench/README.md) measures all of this against sharp, `@napi-rs/image`, and `Bun.Image`, and documents what the numbers don't cover.
 

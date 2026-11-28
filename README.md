@@ -1,6 +1,16 @@
 # @next/safe-image-optimization
 
-An image optimization library for Node.js, built for Next.js's image optimizer (`next/image`).
+[![Open on npmx.dev](https://npmx.dev/api/registry/badge/version/@next/safe-image-optimization)](https://npmx.dev/package/@next/safe-image-optimization) [![MIT Licensed](https://npmx.dev/api/registry/badge/license/@next/safe-image-optimization)](https://npmx.dev/package/@next/safe-image-optimization)
+
+A Node.js library built for [Next.js]'s image optimizer ([`next/image`]) with a small feature set, small binary size, and a focus on security.
+
+Untrusted images are processed using memory-safe decoders, process-level isolation, and Linux [seccomp] sandboxing.
+
+This library does not currently have a stable API. Features may be removed to reduce binary size.
+
+[Next.js]: https://nextjs.org/
+[`next/image`]: https://nextjs.org/docs/app/getting-started/images
+[seccomp]: https://en.wikipedia.org/wiki/Seccomp
 
 ## Usage
 
@@ -9,16 +19,16 @@ const { defaultPool } = require('@next/safe-image-optimization')
 
 const output = await defaultPool()
   .prepare(input)
-  .allowInputFormats(['jpeg', 'png', 'webp', 'avif'])
+  .allowInputFormats(['jpeg', 'png', 'webp', 'avif']) // 'svg' is disabled by default
   .limitInputPixels(268402689)
   .timeoutMs(10_000)
   .autoOrient() // using EXIF metadata
   .resize(640, null, { withoutEnlargement: true })
-  .webp({ quality: 75 })
+  .webp({ quality: 75 }) // also supports `.jpeg()`, `.png()`, and `.gif()`
   .toBuffer({ signal: request.signal }) // abort if the client disconnects
 ```
 
-To read an image's format and dimensions without decoding its pixels:
+You can read a file's format and dimensions without decoding the full image:
 
 ```js
 const meta = await defaultPool().prepare(input).timeoutMs(5_000).metadata()
@@ -33,26 +43,149 @@ const meta = await defaultPool().prepare(input).timeoutMs(5_000).metadata()
 // }
 ```
 
-### Supported formats and operations
+## Supported formats
 
-- **Input formats:** JPEG, PNG, WebP, GIF, TIFF, AVIF, and SVG (in-memory `Buffer`, typed array, or `ArrayBuffer` only). SVG must be allowed explicitly with `.allowInputFormats()`.
-- **Output formats:** JPEG (`.jpeg()`), PNG (`.png()`), WebP (`.webp()`), and GIF (`.gif()`). Output is always 8-bit sRGB with metadata stripped.
-- **Operations:**
-  - `.autoOrient()`: orient using EXIF metadata.
-  - `.rotate(angle)`: rotate by a multiple of 90° (after `.autoOrient()`, if it's also called).
-  - `.resize(width, height, options)`: resize while preserving aspect ratio (cropping from the center when both width and height are given), with `withoutEnlargement`, `withoutReduction`, and `kernel` options.
-- **Input restrictions and limits** (`0` removes a limit):
-  - `.allowInputFormats(formats)` restricts which formats are accepted (detected from the file contents).
-  - `.animated('reject')` rejects animated images with `ERR_ANIMATED` before decoding. With `.animated('first-frame')` (the default), only the first frame is decoded.
-  - `.limitInputPixels()`, `.limitAllocatorMemoryBytes()`, and `.limitOutputBytes()` bound image dimensions, memory use, and output size.
-  - `.timeoutMs(ms)` cancels processing if an image takes too long. There is no default timeout, so you should set one when handling untrusted images.
-  - `.decodeTimeoutMs(ms)` is a separate, usually much stricter, timeout for decoding the input. Once the image is decoded, only `.timeoutMs()` applies.
-- **Cancellation:** `.toBuffer({ signal })` and `.metadata({ signal })` accept an `AbortSignal`.
-- **Errors:** Processing errors throw a `SafeImageOptimizationError` with a stable `code` property (such as `ERR_UNSUPPORTED_FORMAT`, `ERR_LIMIT_EXCEEDED`, or `ERR_TIMEOUT`). Invalid options throw a `TypeError` with the code `ERR_INVALID_OPTIONS`.
+- **Input formats:** JPEG, PNG, WebP, GIF, TIFF, AVIF, and SVG (disabled by default).
+- **Output formats:** JPEG, PNG, WebP, and GIF. Output is always 8-bit sRGB with metadata stripped.
 
-### Worker pools
+Images must be passed into `.prepare()` as an in-memory `Buffer`, `ArrayBufferView`, `ArrayBuffer`, or `SharedArrayBuffer`.
 
-Images are processed in a pool of background workers. `defaultPool()` returns a shared pool with default options. You can create a custom worker pool:
+## Image operations
+
+Operations always run in the same order regardless of call order: `.autoOrient()`, then `.rotate()`, then `.resize()`.
+
+### `.autoOrient()`
+
+Rotates and flips the image using its EXIF orientation metadata, which is then stripped from the output along with all other metadata.
+
+### `.rotate(angle)`
+
+Rotates the image clockwise by `angle` degrees, which must be a multiple of 90 (negative angles rotate counterclockwise, from `-3600` to `3600`). Calling `.rotate()` again replaces the previous angle.
+
+Ignores EXIF orientation unless `.autoOrient()` is also called (which runs first).
+
+### `.resize(width, height, [options])`
+
+Resizes the image while preserving its aspect ratio. You can also pass a single options object (`.resize({ width, height, ... })`), or pass `null`/`undefined` for either dimension to compute it from the aspect ratio.
+
+If both `width` and `height` are given, the image is scaled to cover the target dimensions and cropped from the center. This is equivalent to [sharp's default `fit: 'cover'` and `position: 'centre'`][sharp-resize].
+
+- **`width`**: Target width in pixels (positive integer).
+- **`height`**: Target height in pixels (positive integer).
+- **`kernel`**: Resampling filter — `'nearest'`, `'linear'`, `'cubic'`, or `'lanczos3'` (default).
+- **`withoutEnlargement`**: Do not enlarge the image if it is already smaller than the target dimensions. Default: `false`.
+- **`withoutReduction`**: Do not shrink the image if it is already larger than the target dimensions. Default: `false`.
+
+[sharp-resize]: https://sharp.pixelplumbing.com/api-resize/#resize
+
+## Output format options
+
+If no output format method is called, `.toBuffer()` encodes using the input format (or PNG for SVG inputs). TIFF and AVIF inputs require choosing an output format explicitly. Calling another format method replaces the previous format and its options.
+
+Pass `.toBuffer({ resolveWithObject: true })` to receive `{ data, info }` (with `format`, `width`, `height`, and `channels`) instead of just a `Buffer`.
+
+### `.jpeg([options])`
+
+Encodes as JPEG using 4:2:0 chroma subsampling. Transparent pixels are composited onto black.
+
+- **`quality`**: Compression quality, `1`–`100`. Default: `80`.
+- **`mozjpeg`**: Encode with [mozjpeg] instead of the pure-Rust [`jpeg-encoder`]. Produces smaller files at the cost of slower encoding. Output is progressive when `true` and baseline when `false`. Default: `false`.
+
+[mozjpeg]: https://github.com/mozilla/mozjpeg
+[`jpeg-encoder`]: https://github.com/vstroebel/jpeg-encoder
+
+### `.png([options])`
+
+Encodes as lossless 8-bit truecolor PNG.
+
+- **`compressionLevel`**: zlib compression level, `0`–`9`. Default: `6`.
+- **`adaptiveFiltering`**: Use adaptive row filtering. Default: `true` (sharp defaults to `false`).
+
+### `.webp([options])`
+
+Encodes as WebP using [libwebp].
+
+- **`quality`**: Compression quality, `1`–`100`. When `nearLossless` is enabled, also controls the near-lossless preprocessing level. Default: `80`.
+- **`alphaQuality`**: Alpha channel compression quality, `0`–`100`. Default: `100`.
+- **`lossless`**: Use lossless compression. Default: `false`.
+- **`nearLossless`**: Use near-lossless compression. Default: `false`.
+- **`smartSubsample`**: Use high-quality chroma subsampling (`use_sharp_yuv`) for lossy encoding. Default: `false`.
+- **`effort`**: CPU effort, `0` (fastest) to `6` (slowest). Default: `4`.
+
+[libwebp]: https://chromium.googlesource.com/webm/libwebp
+
+### `.gif([options])`
+
+Encodes as a single-frame GIF.
+
+- **`effort`**: CPU effort for color quantization, `1` (fastest) to `10` (slowest). Default: `7`.
+
+## Restrictions and limits
+
+### `.allowInputFormats(formats)`
+
+Restricts which file formats are accepted as an array of strings.
+
+Valid formats are `'jpeg'`, `'png'`, `'webp'`, `'gif'`, `'tiff'`, `'avif'`, and `'svg'`. SVG is not enabled by default.
+
+### `.animated(mode)`
+
+Support for animated inputs (APNG, animated WebP, animated GIF, and AVIF sequences) is limited.
+
+- **`'first-frame'`** (default): Decode only the first frame.
+- **`'reject'`**: Reject animated inputs with `ERR_ANIMATED` before decoding any pixels.
+
+### `.limitInputPixels(pixels)`
+
+Rejects input images where `width * height` exceeds `pixels` with `ERR_LIMIT_EXCEEDED` before decoding.
+
+For SVGs (disabled by default), this applies to both the natural and rendered dimensions, but **not** to embedded raster images (`<image href="data:...">`).
+
+This limit acts as a sanity check, but should be used in combination with `.limitAllocatorMemoryBytes()`, the pool's `limitProcessMemoryBytes`, and `.timeoutMs()`, which provide much stronger guarantees against untrusted input.
+
+Default: `268_402_689` (`0x3FFF * 0x3FFF`). `0` disables this limit (not recommended).
+
+### `.limitAllocatorMemoryBytes(bytes)`
+
+Applies a best-effort limit to the total memory (in bytes) a worker's memory allocator may use while processing a single image. Multiple images processed in parallel can exceed this limit.
+
+Enforcement happens using a global Rust allocator shim. C/C++ dependencies (`libwebp` and `mozjpeg`) do not use this allocator shim, so estimated values are used instead.
+
+On Linux or when using WASM, `limitProcessMemoryBytes` provides much stronger security guarantees.
+
+Default: `512 * 1024 * 1024` (512 MiB). `0` disables this limit (not recommended).
+
+### `.limitOutputBytes(bytes)`
+
+Limits the encoded output image size in bytes. Does not apply to `.metadata()`, as that does not produce an output image.
+
+Default: `128 * 1024 * 1024` (128 MiB). `0` disables this limit (not recommended).
+
+### `.timeoutMs(ms)`
+
+Limits the total wall time of processing in milliseconds, _after_ a worker process gets the image from the queue. If the timer expires, the worker is killed.
+
+Default: `0` (no limit). Always set a timeout when handling untrusted images.
+
+### `.decodeTimeoutMs(ms)`
+
+A secondary wall-time limit in milliseconds for decoding the input. This should be used in combination with `.timeoutMs()`.
+
+Decoding is often much faster than encoding, but time complexity bugs in a decoder are more likely to be exploitable than those in the encoder. For this reason, `decodeTimeoutMs` should be set to a much smaller value than `timeoutMs` (e.g. 50% or less).
+
+When used with `.metadata()`, this applies to the entire request, and behaves the same as `.timeoutMs()`.
+
+Default: `0` (no limit).
+
+### Cancellation
+
+`.toBuffer({ signal })` and `.metadata({ signal })` accept an `AbortSignal`.
+
+When aborted, a queued request is removed from the queue or an in-progress worker is killed, and the promise rejects with `signal.reason`.
+
+## Worker pools
+
+Images are processed using a pool of processes (native) or threads (WASM only). `defaultPool()` returns a shared pool with default options. You can create a custom worker pool:
 
 ```js
 const { Pool } = require('@next/safe-image-optimization')
@@ -121,20 +254,62 @@ const pool = new Pool({
 const output = await pool.prepare(input).timeoutMs(10_000).webp().toBuffer()
 ```
 
-Idle workers don't keep the process alive, so pools don't need to be closed. To stop a pool's workers, `await pool.close()` finishes the images already submitted first, and `await pool.destroy()` stops them immediately. `await using pool = new Pool()` closes the pool at the end of the scope.
+Idle workers don't keep the process alive, so pools don't need to be closed. To stop a pool's workers, `await pool.close()` finishes the images already submitted first, and `await pool.destroy()` stops them immediately.
 
-## Purpose
+You can use the [`await using` syntax] to close the pool at the end of a scope.
 
-[sharp](https://sharp.pixelplumbing.com/) (built on libvips) is a fast, general-purpose image processing library with a broad set of features. `@next/safe-image-optimization` has a similar chainable API so it is familiar to use, but it is built around different goals:
+```js
+async function encodeManyWithNewPool(inputImages) {
+  await using pool = new Pool()
+  return await Promise.all(
+    inputImages.map((input) => pool.prepare(input).resize(640).webp().toBuffer()),
+  )
+  // pool is closed when it leaves the scope
+}
+```
 
-- **Focused scope:** It implements only the small set of operations needed for Next.js's [image optimizer](https://nextjs.org/docs/app/getting-started/images) and [ImageResponse](https://nextjs.org/docs/app/api-reference/functions/image-response).
-- **Designed for untrusted input:** Web servers often optimize images uploaded by users or fetched from remote URLs. This library decodes images using memory-safe Rust libraries inside separate, sandboxed worker processes (or WebAssembly worker threads) with per-image memory and time limits. If an image triggers a bug, exceeds its memory budget, or times out, only that worker stops—the main Node.js process continues running unaffected.
+[`await using` syntax]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/await_using
 
-Because of these goals, `@next/safe-image-optimization` has a much smaller feature set than sharp and trades some performance for isolation. [`packages/bench`](packages/bench/README.md) measures that trade, against sharp, [`@napi-rs/image`](https://github.com/Brooooooklyn/Image), and [`Bun.Image`](https://bun.com/docs/runtime/image).
+## Errors
 
-While this library is designed to protect against untrusted input, it may still have vulnerabilities. You should only fetch remote images from trusted sources or your own object storage. Use Next.js's [`images.remotePatterns` configuration](https://nextjs.org/docs/app/getting-started/images#remote-images) to restrict allowed image sources.
+Most processing errors are handled as `SafeImageOptimizationError` with a stable `code` property:
 
-### Documentation
+```js
+const { SafeImageOptimizationError } = require('@next/safe-image-optimization')
+
+try {
+  await defaultPool().prepare(input).timeoutMs(5_000).webp().toBuffer()
+} catch (err) {
+  if (err instanceof SafeImageOptimizationError) {
+    console.error(err.code, err.message)
+  } else {
+    throw err // e.g. a TypeError
+  }
+}
+```
+
+There are a couple of cases where `SafeImageOptimizationError` is not used:
+
+- Argument validation errors throw or reject using a `TypeError` with `code: 'ERR_INVALID_OPTIONS'`. Most pipeline option validation rejects the promise asynchronously, while some wrapper-checked arguments throw synchronously.
+- Aborting a request with `{ signal }` rejects with `signal.reason`.
+
+### Error codes
+
+- **`ERR_UNSUPPORTED_FORMAT`**: The input format is not in `.allowInputFormats()`, or the image uses format features that are unsupported (e.g. YCbCr or a tiled/grid AVIF).
+- **`ERR_ANIMATED`**: The input image is animated and `.animated('reject')` was set.
+- **`ERR_LIMIT_EXCEEDED`**: Processing exceeded `.limitInputPixels()`, `.limitAllocatorMemoryBytes()`, `.limitOutputBytes()`, or a format's maximum output dimensions.
+- **`ERR_DECODE_FAILED`**: The input image is malformed or could not be decoded.
+- **`ERR_ENCODE_FAILED`**: The output image could not be encoded.
+- **`ERR_TIMEOUT`**: Processing exceeded `.timeoutMs()`, or decoding exceeded `.decodeTimeoutMs()`.
+- **`ERR_OUT_OF_MEMORY`**: The worker ran out of memory, either because it exceeded the pool's `limitProcessMemoryBytes` or because the system ran out of memory. If the operating system's OOM killer terminates the worker process, you may see an `ERR_WORKER_CRASHED` instead.
+- **`ERR_WORKER_CRASHED`**: The worker crashed unexpectedly or sent a malformed response.
+- **`ERR_WORKER_SPAWN`**: A worker process or WebAssembly worker thread could not be started (for example, a missing binary, version mismatch, or Linux `seccomp` sandbox failure).
+- **`ERR_BACKEND_UNAVAILABLE`**: Thrown by `new Pool()` (and `defaultPool()`) when there is no native worker binary for the current platform and `@next/safe-image-optimization-wasm32` is not installed (or its version doesn't match).
+- **`ERR_POOL_CLOSED`**: The pool was closed with `.close()` before the request was submitted, or stopped with `.destroy()` while the request was queued or running.
+- **`ERR_INTERNAL`**: An unexpected internal error (a bug in the library).
+- **`ERR_INVALID_OPTIONS`**: Set on `TypeError` (not `SafeImageOptimizationError`) for invalid arguments, out-of-range values, or unknown option fields.
+
+## Additional documentation
 
 - **[Safety model](docs/safety.md)** — decoders, worker isolation, sandboxing, and resource limits
 - **[Differences from sharp](docs/sharp.md)** — API, operation, and format differences
